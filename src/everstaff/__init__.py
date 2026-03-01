@@ -1,4 +1,4 @@
-"""agent-os — A YAML-driven AI agent framework.
+"""everstaff — An open-source platform for autonomous AI agents.
 
 Public API:
     load_config(config_dir=None, *, skills_dirs=None, ...) -> FrameworkConfig

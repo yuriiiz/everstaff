@@ -43,7 +43,7 @@ def main() -> None:
     skills_list_parser.add_argument("--config", help="Path to framework config directory")
 
     # agent init
-    init_parser = subparsers.add_parser("init", help="Initialize a new Agent OS project in the current directory")
+    init_parser = subparsers.add_parser("init", help="Initialize a new Everstaff project in the current directory")
     init_parser.add_argument("--name", help="Project name (default: directory name)")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing files")
 

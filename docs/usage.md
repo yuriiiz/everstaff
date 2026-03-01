@@ -1,14 +1,14 @@
-# agent-os Usage Guide
+# Everstaff Usage Guide
 
 ## Installation
 
 ```bash
-pip install agent_os-0.1.0-py3-none-any.whl
+pip install everstaff-0.1.0-py3-none-any.whl
 
 # With optional extras:
-pip install "agent_os-0.1.0-py3-none-any.whl[lark]"    # Lark channel support
-pip install "agent_os-0.1.0-py3-none-any.whl[otel]"    # OpenTelemetry tracing
-pip install "agent_os-0.1.0-py3-none-any.whl[all]"     # Everything
+pip install "everstaff-0.1.0-py3-none-any.whl[lark]"    # Lark channel support
+pip install "everstaff-0.1.0-py3-none-any.whl[otel]"    # OpenTelemetry tracing
+pip install "everstaff-0.1.0-py3-none-any.whl[all]"     # Everything
 ```
 
 ---
@@ -111,7 +111,7 @@ instructions: |
   You are a helpful assistant. You can read files, run commands,
   and help users with technical tasks. Always be concise and accurate.
 
-# Built-in tools from agent_os.builtin_tools:
+# Built-in tools from everstaff.builtin_tools:
 #   Bash, Read, Write, Edit, Glob, Grep
 tools:
   - Bash
@@ -205,10 +205,10 @@ agent info agents/my_agent.yaml --config config/
 Create a `main.py`:
 
 ```python
-import agent_os
+import everstaff
 import uvicorn
 
-app = agent_os.create_app(config_dir="./config")
+app = everstaff.create_app(config_dir="./config")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

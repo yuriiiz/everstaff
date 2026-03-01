@@ -11,13 +11,13 @@ version = "0.1.0"
 description = ""
 requires-python = ">=3.11"
 dependencies = [
-    "agent-os>=0.1.0",
+    "everstaff>=0.1.0",
     "python-dotenv>=1.0.0",
 ]
 """,
     ".agent/config.yaml": """\
 # =============================================================================
-# Agent OS Framework Configuration
+# Everstaff Framework Configuration
 # All available keys listed. Commented-out sections are disabled features.
 # Supports ${{ENV_VAR}} substitution in string values.
 # =============================================================================
@@ -256,7 +256,7 @@ build/
 .env
 .venv/
 
-# Agent OS runtime data
+# Everstaff runtime data
 .agent/sessions/
 .agent/memory/
 output/
@@ -275,7 +275,7 @@ output/
     "README.md": """\
 # {project_name}
 
-Built with [Agent OS](https://github.com/anthropics/agent-os).
+Built with [Everstaff](https://github.com/yuriiiz/everstaff).
 
 ## Quick Start
 

@@ -1,4 +1,4 @@
-"""Unified logging setup for agent-os.
+"""Unified logging setup for everstaff.
 
 Call setup_logging() once at process startup (in cli.py or server.py).
 All modules use standard `logging.getLogger(__name__)` — no changes needed there.
