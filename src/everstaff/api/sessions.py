@@ -63,6 +63,14 @@ async def _resume_session_task(
         return
 
     if not agent_path.exists():
+        # Fall back to builtin agents
+        from everstaff.core.config import _builtin_agents_path
+        builtin_p = _builtin_agents_path()
+        if builtin_p:
+            builtin_candidate = (Path(builtin_p) / f"{agent_name}.yaml").resolve()
+            if builtin_candidate.is_relative_to(Path(builtin_p)) and builtin_candidate.exists():
+                agent_path = builtin_candidate
+    if not agent_path.exists():
         logger.error("Resume: agent spec not found for %s", agent_name)
         return
 
@@ -176,27 +184,37 @@ def make_router(config) -> APIRouter:
         agents_dir_path = Path(config.agents_dir).expanduser().resolve()
         agent_name = body.agent_name
 
+        from everstaff.core.config import _builtin_agents_path as _bap
+        builtin_agents_dir = Path(_bap()) if _bap() else None
+
         if not agent_name and body.agent_uuid:
-            # Check well-known builtin UUIDs first (no YAML file needed)
-            agent_name = _BUILTIN_UUID_TO_NAME.get(body.agent_uuid)
-            if not agent_name:
-                # Resolve UUID to agent_name by scanning YAML files
-                for f in agents_dir_path.glob("*.yaml"):
+            # Resolve UUID to agent_name by scanning user agents then builtins
+            from everstaff.utils.yaml_loader import load_yaml
+            for scan_dir in [agents_dir_path, builtin_agents_dir]:
+                if not scan_dir or not scan_dir.exists():
+                    continue
+                for f in scan_dir.glob("*.yaml"):
                     try:
-                        from everstaff.utils.yaml_loader import load_yaml
                         spec = load_yaml(str(f))
                         if spec.get("uuid") == body.agent_uuid:
                             agent_name = spec.get("agent_name")
                             break
                     except Exception:
                         continue
+                if agent_name:
+                    break
 
         if not agent_name:
             raise HTTPException(status_code=400, detail="agent_name or valid agent_uuid is required")
 
+        # Resolve agent path: user agents_dir takes precedence, then builtin
         agent_path = (agents_dir_path / f"{agent_name}.yaml").resolve()
         if not agent_path.is_relative_to(agents_dir_path):
             raise HTTPException(status_code=400, detail="Invalid agent name")
+        if not agent_path.exists() and builtin_agents_dir:
+            builtin_candidate = (builtin_agents_dir / f"{agent_name}.yaml").resolve()
+            if builtin_candidate.is_relative_to(builtin_agents_dir) and builtin_candidate.exists():
+                agent_path = builtin_candidate
         if not agent_path.exists():
             raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
         session_id = str(uuid4())

@@ -222,7 +222,7 @@ def test_real_tools_load(tmp_path):
     """Glob, Grep, and Read tool files must import without errors."""
     import importlib.util
     from pathlib import Path
-    tools_root = Path(__file__).parents[2] / "tools"
+    tools_root = Path(__file__).parents[2] / "src" / "everstaff" / "builtin_tools"
     for name in ("glob_tool", "grep_tool", "read"):
         py = tools_root / f"{name}.py"
         assert py.exists(), f"Expected tool file not found: {py}"

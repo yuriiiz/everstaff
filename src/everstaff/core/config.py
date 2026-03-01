@@ -155,18 +155,47 @@ def _builtin_skills_path() -> str:
         return str(Path(__file__).parent.parent.parent.parent / "skills")
 
 
+def _builtin_tools_path() -> str | None:
+    """Return the path to the bundled builtin_tools directory, or None if absent."""
+    try:
+        ref = _pkg_resources.files("everstaff") / "builtin_tools"
+        p = str(ref)
+        if Path(p).exists():
+            return p
+    except Exception:
+        pass
+    return None
+
+
+def _builtin_agents_path() -> str | None:
+    """Return the path to the bundled builtin_agents directory, or None if absent."""
+    try:
+        ref = _pkg_resources.files("everstaff") / "builtin_agents"
+        p = str(ref)
+        if Path(p).exists():
+            return p
+    except Exception:
+        pass
+    return None
+
+
 def _user_config_path() -> Path:
     """Return path to .agent/config.yaml in the current working directory."""
     return Path.cwd() / ".agent" / "config.yaml"
 
 
 def _builtin_defaults() -> FrameworkConfig:
-    """Layer 1: built-in defaults with builtin_skills injected."""
+    """Layer 1: built-in defaults with builtin_skills/tools injected."""
     mappings = _apply_env_model_overrides({})
     cfg = FrameworkConfig(model_mappings=mappings)
-    builtin = _builtin_skills_path()
-    if builtin not in cfg.skills_dirs:
-        cfg = cfg.model_copy(update={"skills_dirs": [builtin] + cfg.skills_dirs})
+    # Prepend builtin skills (always available, user dirs take precedence)
+    builtin_skills = _builtin_skills_path()
+    if builtin_skills not in cfg.skills_dirs:
+        cfg = cfg.model_copy(update={"skills_dirs": [builtin_skills] + cfg.skills_dirs})
+    # Append builtin tools (user tools_dirs take precedence via last-wins in ToolLoader)
+    builtin_tools = _builtin_tools_path()
+    if builtin_tools and builtin_tools not in cfg.tools_dirs:
+        cfg = cfg.model_copy(update={"tools_dirs": cfg.tools_dirs + [builtin_tools]})
     return cfg
 
 

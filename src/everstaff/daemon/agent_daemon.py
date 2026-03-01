@@ -105,31 +105,40 @@ class AgentDaemon:
     # ------------------------------------------------------------------
 
     def _discover_autonomous_agents(self) -> dict[str, Any]:
-        """Scan agents_dir and return ``{name: AgentSpec}`` for autonomous agents.
+        """Scan agents_dir (and builtin_agents) for autonomous agents.
 
         Only agents whose ``autonomy.enabled`` is True are included.
+        Builtin agents are scanned first; user agents override by name.
         """
         from everstaff.utils.yaml_loader import load_yaml
         from everstaff.schema.agent_spec import AgentSpec
+        from everstaff.core.config import _builtin_agents_path
 
-        logger.debug("Scanning agents_dir=%s", self._agents_dir)
         result: dict[str, Any] = {}
-        if not self._agents_dir.exists():
-            logger.warning("agents_dir does not exist: %s", self._agents_dir)
-            return result
 
-        for yaml_file in sorted(self._agents_dir.glob("*.yaml")):
-            try:
-                yaml_data = load_yaml(yaml_file)
-                # Support both 'name' and 'agent_name' keys in YAML
-                agent_name = yaml_data.pop("name", None) or yaml_data.pop("agent_name", None) or yaml_file.stem
-                spec = AgentSpec(agent_name=agent_name, **yaml_data)
-                if spec.autonomy.enabled:
-                    result[spec.agent_name] = spec
-                    logger.debug("Discovered autonomous agent: %s (level=%s, triggers=%d)",
-                                 spec.agent_name, spec.autonomy.level, len(spec.autonomy.triggers))
-            except Exception as exc:
-                logger.warning("Failed to load agent '%s': %s", yaml_file.name, exc)
+        scan_dirs = []
+        builtin_p = _builtin_agents_path()
+        if builtin_p:
+            scan_dirs.append(Path(builtin_p))
+        scan_dirs.append(self._agents_dir)
+
+        for scan_dir in scan_dirs:
+            if not scan_dir.exists():
+                if scan_dir == self._agents_dir:
+                    logger.warning("agents_dir does not exist: %s", scan_dir)
+                continue
+            logger.debug("Scanning agents dir=%s", scan_dir)
+            for yaml_file in sorted(scan_dir.glob("*.yaml")):
+                try:
+                    yaml_data = load_yaml(yaml_file)
+                    agent_name = yaml_data.pop("name", None) or yaml_data.pop("agent_name", None) or yaml_file.stem
+                    spec = AgentSpec(agent_name=agent_name, **yaml_data)
+                    if spec.autonomy.enabled:
+                        result[spec.agent_name] = spec
+                        logger.debug("Discovered autonomous agent: %s (level=%s, triggers=%d)",
+                                     spec.agent_name, spec.autonomy.level, len(spec.autonomy.triggers))
+                except Exception as exc:
+                    logger.warning("Failed to load agent '%s': %s", yaml_file.name, exc)
 
         logger.info("Discovery complete: %d autonomous agent(s) found: %s",
                      len(result), list(result.keys()))
