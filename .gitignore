@@ -1,0 +1,15 @@
+.venv/*
+**/node_modules/*
+**/__pycache__/*
+..pytest_cache/*
+
+.sessions/*
+.agent/*
+.claude/*
+.worktrees/
+.worktrees/*
+
+.env
+.env.local
+*.log
+src/agent_os/web_static/

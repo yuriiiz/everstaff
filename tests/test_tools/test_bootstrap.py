@@ -1,0 +1,153 @@
+import pytest
+import yaml
+from unittest.mock import AsyncMock
+from pathlib import Path
+
+
+@pytest.mark.asyncio
+async def test_create_agent_creates_yaml_and_returns_name(tmp_path):
+    """create_agent writes YAML and returns the agent name."""
+    from everstaff.tools.bootstrap import CreateAgentTool
+    from everstaff.core.context import AgentContext
+    from everstaff.nulls import NullTracer, AllowAllChecker
+    from everstaff.tools.pipeline import ToolCallPipeline
+    from everstaff.tools.stages import ExecutionStage, PermissionStage
+    from everstaff.tools.default_registry import DefaultToolRegistry
+    from everstaff.agents.sub_agent_provider import DefaultSubAgentProvider
+    from everstaff.protocols import LLMResponse
+
+    registry = DefaultToolRegistry()
+    pipeline = ToolCallPipeline([PermissionStage(AllowAllChecker()), ExecutionStage(registry)])
+    memory = AsyncMock()
+    memory.load = AsyncMock(return_value=[])
+    memory.save = AsyncMock()
+
+    from unittest.mock import MagicMock
+    provider = DefaultSubAgentProvider([], env=MagicMock())
+    ctx = AgentContext(
+        tool_registry=registry,
+        memory=memory,
+        tool_pipeline=pipeline,
+        agent_name="coordinator",
+        session_id="sess-bootstrap",
+        tracer=NullTracer(),
+        sessions_dir=str(tmp_path),
+    )
+    ctx.sub_agent_provider = provider
+
+    mock_yaml = yaml.dump({
+        "name": "sql_expert",
+        "description": "SQL query optimization expert",
+        "instructions": "You are an expert in SQL optimization.",
+        "adviced_model_kind": "smart",
+        "tools": [],
+        "skills": [],
+    })
+
+    llm = AsyncMock()
+    llm.complete = AsyncMock(return_value=LLMResponse(content=mock_yaml, tool_calls=[]))
+
+    tool = CreateAgentTool(ctx=ctx, llm=llm)
+    result = await tool.execute({"name": "sql_expert", "domain": "SQL query optimization"})
+
+    assert result.is_error is False
+    assert result.content == "sql_expert"
+
+    yaml_path = tmp_path / "sess-bootstrap" / "agents" / "sql_expert.yaml"
+    assert yaml_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_create_agent_uses_cache_on_second_call(tmp_path):
+    """Second call with same name returns immediately without LLM call."""
+    from everstaff.tools.bootstrap import CreateAgentTool
+    from everstaff.core.context import AgentContext
+    from everstaff.nulls import NullTracer, AllowAllChecker
+    from everstaff.tools.pipeline import ToolCallPipeline
+    from everstaff.tools.stages import ExecutionStage, PermissionStage
+    from everstaff.tools.default_registry import DefaultToolRegistry
+    from everstaff.agents.sub_agent_provider import DefaultSubAgentProvider
+
+    from unittest.mock import MagicMock
+    registry = DefaultToolRegistry()
+    pipeline = ToolCallPipeline([PermissionStage(AllowAllChecker()), ExecutionStage(registry)])
+    memory = AsyncMock()
+    provider = DefaultSubAgentProvider([], env=MagicMock())
+    ctx = AgentContext(
+        tool_registry=registry, memory=memory, tool_pipeline=pipeline,
+        agent_name="coordinator", session_id="sess-cache",
+        tracer=NullTracer(), sessions_dir=str(tmp_path),
+    )
+    ctx.sub_agent_provider = provider
+
+    # Pre-create the YAML file (simulate cache hit)
+    agent_dir = tmp_path / "sess-cache" / "agents"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "sql_expert.yaml").write_text("name: sql_expert\ndescription: cached\n")
+
+    llm = AsyncMock()
+    llm.complete = AsyncMock()
+
+    tool = CreateAgentTool(ctx=ctx, llm=llm)
+    result = await tool.execute({"name": "sql_expert", "domain": "SQL"})
+    assert result.content == "sql_expert"
+    llm.complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_agent_registers_into_provider(tmp_path):
+    """After successful generation, the agent is registered in the SubAgentProvider."""
+    from unittest.mock import AsyncMock, MagicMock
+    from everstaff.tools.bootstrap import CreateAgentTool
+    from everstaff.core.context import AgentContext
+    from everstaff.nulls import NullTracer, AllowAllChecker
+    from everstaff.tools.pipeline import ToolCallPipeline
+    from everstaff.tools.stages import ExecutionStage, PermissionStage
+    from everstaff.tools.default_registry import DefaultToolRegistry
+    from everstaff.agents.sub_agent_provider import DefaultSubAgentProvider
+    from everstaff.protocols import LLMResponse
+    from everstaff.builder.environment import CLIEnvironment
+
+    registry = DefaultToolRegistry()
+    pipeline = ToolCallPipeline([PermissionStage(AllowAllChecker()), ExecutionStage(registry)])
+    memory = AsyncMock()
+    memory.load = AsyncMock(return_value=[])
+    memory.save = AsyncMock()
+    from everstaff.core.config import FrameworkConfig
+    env = CLIEnvironment(sessions_dir=str(tmp_path), config=FrameworkConfig(tracers=[]))
+    provider = DefaultSubAgentProvider([], env=env)
+
+    ctx = AgentContext(
+        tool_registry=registry,
+        memory=memory,
+        tool_pipeline=pipeline,
+        agent_name="coordinator",
+        session_id="sess-reg",
+        tracer=NullTracer(),
+        sessions_dir=str(tmp_path),
+    )
+    ctx.sub_agent_provider = provider
+
+    # Provide a real-ish environment so _register_agent can register the sub-agent
+    ctx._env = env
+
+    mock_yaml = yaml.dump({
+        "name": "data_expert",
+        "description": "Data analysis expert",
+        "instructions": "You analyze data.",
+        "adviced_model_kind": "smart",
+        "tools": [],
+        "skills": [],
+    })
+
+    llm = AsyncMock()
+    llm.complete = AsyncMock(return_value=LLMResponse(content=mock_yaml, tool_calls=[]))
+
+    tool = CreateAgentTool(ctx=ctx, llm=llm)
+    result = await tool.execute({"name": "data_expert", "domain": "data analysis"})
+
+    assert result.is_error is False
+    assert result.content == "data_expert"
+    # Provider should now have the new agent registered in the DelegateTaskTool registry
+    assert provider._tool is not None
+    assert "data_expert" in provider._tool._registry

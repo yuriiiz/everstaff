@@ -1,0 +1,262 @@
+"""AgentDaemon -- top-level orchestrator for autonomous agent loops.
+
+On start, scans ``agents_dir`` for YAML files whose ``autonomy.enabled``
+flag is *True*.  For each autonomous agent it wires up:
+
+* An EventBus subscription
+* SchedulerSensor instances (for cron/interval triggers)
+* A ThinkEngine (for LLM-based decision making)
+* An AgentLoop (the wake -> think -> act -> reflect cycle)
+
+All sensors and loops are managed through SensorManager and LoopManager
+respectively.  The daemon supports **hot reload**: calling ``reload()``
+re-scans the agents directory and starts/stops loops to match the current
+set of enabled autonomous agents.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from everstaff.protocols import MemoryStore, TracingBackend
+
+logger = logging.getLogger(__name__)
+
+
+class AgentDaemon:
+    """Top-level orchestrator that discovers and manages autonomous agents.
+
+    Parameters
+    ----------
+    agents_dir:
+        Filesystem directory containing agent YAML definitions.
+    memory:
+        Object satisfying the ``MemoryStore`` protocol.
+    tracer:
+        Object satisfying the ``TracingBackend`` protocol.
+    llm_factory:
+        Callable that returns an LLM client.  Called with keyword arguments
+        including ``model_kind``.
+    runtime_factory:
+        Callable that returns a runtime for executing agent tasks.  Called
+        with keyword arguments including ``session_id`` and
+        ``parent_session_id``.
+    channel_manager:
+        Optional channel manager for HITL communication.
+    """
+
+    def __init__(
+        self,
+        agents_dir: str | Path,
+        memory: "MemoryStore",
+        tracer: "TracingBackend",
+        llm_factory: Callable[..., Any],
+        runtime_factory: Callable[..., Any],
+        channel_manager: Any = None,
+        channel_registry: dict[str, Any] | None = None,
+        sessions_dir: str | Path | None = None,
+    ) -> None:
+        self._agents_dir = Path(agents_dir)
+        self._memory = memory
+        self._tracer = tracer
+        self._llm_factory = llm_factory
+        self._runtime_factory = runtime_factory
+        self._channel_manager = channel_manager
+        self._channel_registry = channel_registry or {}
+        self._sessions_dir = sessions_dir
+        self._running = False
+
+        from everstaff.daemon.event_bus import EventBus
+        from everstaff.daemon.sensor_manager import SensorManager
+        from everstaff.daemon.loop_manager import LoopManager
+
+        self._event_bus = EventBus()
+        self._sensor_manager = SensorManager(self._event_bus)
+        self._loop_manager = LoopManager()
+
+    # ------------------------------------------------------------------
+    # Public properties
+    # ------------------------------------------------------------------
+
+    @property
+    def event_bus(self) -> Any:
+        """The shared EventBus instance."""
+        return self._event_bus
+
+    @property
+    def sensor_manager(self) -> Any:
+        """The SensorManager instance."""
+        return self._sensor_manager
+
+    @property
+    def loop_manager(self) -> Any:
+        """The LoopManager instance."""
+        return self._loop_manager
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the daemon is currently running."""
+        return self._running
+
+    # ------------------------------------------------------------------
+    # Agent discovery
+    # ------------------------------------------------------------------
+
+    def _discover_autonomous_agents(self) -> dict[str, Any]:
+        """Scan agents_dir and return ``{name: AgentSpec}`` for autonomous agents.
+
+        Only agents whose ``autonomy.enabled`` is True are included.
+        """
+        from everstaff.utils.yaml_loader import load_yaml
+        from everstaff.schema.agent_spec import AgentSpec
+
+        logger.debug("Scanning agents_dir=%s", self._agents_dir)
+        result: dict[str, Any] = {}
+        if not self._agents_dir.exists():
+            logger.warning("agents_dir does not exist: %s", self._agents_dir)
+            return result
+
+        for yaml_file in sorted(self._agents_dir.glob("*.yaml")):
+            try:
+                yaml_data = load_yaml(yaml_file)
+                # Support both 'name' and 'agent_name' keys in YAML
+                agent_name = yaml_data.pop("name", None) or yaml_data.pop("agent_name", None) or yaml_file.stem
+                spec = AgentSpec(agent_name=agent_name, **yaml_data)
+                if spec.autonomy.enabled:
+                    result[spec.agent_name] = spec
+                    logger.debug("Discovered autonomous agent: %s (level=%s, triggers=%d)",
+                                 spec.agent_name, spec.autonomy.level, len(spec.autonomy.triggers))
+            except Exception as exc:
+                logger.warning("Failed to load agent '%s': %s", yaml_file.name, exc)
+
+        logger.info("Discovery complete: %d autonomous agent(s) found: %s",
+                     len(result), list(result.keys()))
+        return result
+
+    # ------------------------------------------------------------------
+    # Per-agent lifecycle
+    # ------------------------------------------------------------------
+
+    async def _start_agent(self, name: str, spec: Any) -> None:
+        """Wire up and start all components for a single autonomous agent."""
+        from everstaff.daemon.think_engine import ThinkEngine
+        from everstaff.daemon.sensors.scheduler import SchedulerSensor
+        from everstaff.daemon.agent_loop import AgentLoop
+
+        logger.info("Starting agent '%s' — level=%s, think_model=%s, act_model=%s",
+                     name, spec.autonomy.level, spec.autonomy.think_model, spec.autonomy.act_model)
+
+        # Subscribe to EventBus
+        self._event_bus.subscribe(name)
+
+        # Create and register sensors for this agent's triggers
+        cron_triggers = [
+            t for t in spec.autonomy.triggers
+            if t.type in ("cron", "interval")
+        ]
+        if cron_triggers:
+            logger.info("Agent '%s': registering %d cron/interval trigger(s)", name, len(cron_triggers))
+            sensor = SchedulerSensor(triggers=cron_triggers, agent_name=name)
+            self._sensor_manager.register(sensor, agent_name=name)
+            await sensor.start(self._event_bus)
+
+        # Create ThinkEngine
+        think_llm = self._llm_factory(model_kind=spec.autonomy.think_model)
+        think_engine = ThinkEngine(
+            llm_client=think_llm,
+            memory=self._memory,
+            tracer=self._tracer,
+            sessions_dir=self._sessions_dir,
+        )
+
+        # Create per-agent runtime factory (closure captures agent spec)
+        base_factory = self._runtime_factory
+
+        def agent_runtime_factory(**kw):
+            return base_factory(agent_spec=spec, **kw)
+
+        # Create AgentLoop
+        loop = AgentLoop(
+            agent_name=name,
+            event_bus=self._event_bus,
+            think_engine=think_engine,
+            runtime_factory=agent_runtime_factory,
+            memory=self._memory,
+            tracer=self._tracer,
+            autonomy_level=spec.autonomy.level,
+            goals=spec.autonomy.goals,
+            tick_interval=spec.autonomy.tick_interval,
+            channel_manager=self._channel_manager,
+            sessions_dir=self._sessions_dir,
+            triggers=spec.autonomy.triggers,
+            agent_hitl_channels=spec.hitl_channels,
+            channel_registry=self._channel_registry,
+        )
+
+        await self._loop_manager.start(loop)
+
+    async def _stop_agent(self, name: str) -> None:
+        """Stop all components for a single agent."""
+        logger.info("Stopping agent '%s'", name)
+        await self._loop_manager.stop(name)
+        await self._sensor_manager.unregister_for(name)
+        self._event_bus.unsubscribe(name)
+        logger.info("Agent '%s' stopped", name)
+
+    # ------------------------------------------------------------------
+    # Daemon lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Discover and start all autonomous agents."""
+        logger.info("====== AgentDaemon starting ======")
+        logger.info("agents_dir=%s", self._agents_dir)
+        self._running = True
+        agents = self._discover_autonomous_agents()
+        for name, spec in agents.items():
+            try:
+                await self._start_agent(name, spec)
+                logger.info("✓ Agent '%s' started (level=%s)", name, spec.autonomy.level)
+            except Exception as exc:
+                logger.error("✗ Failed to start agent '%s': %s", name, exc)
+        logger.info("====== AgentDaemon ready — %d agent(s) running ======", len(agents))
+
+    async def stop(self) -> None:
+        """Stop all running agents and sensors."""
+        logger.info("====== AgentDaemon shutting down ======")
+        await self._loop_manager.stop_all()
+        await self._sensor_manager.stop_all()
+        self._running = False
+        logger.info("====== AgentDaemon stopped ======")
+
+    async def reload(self) -> None:
+        """Hot reload: re-scan agents directory and reconcile running loops.
+
+        * Agents whose YAML was removed or whose ``autonomy.enabled`` became
+          False are stopped.
+        * Newly added autonomous agents are started.
+        * Agents already running with unchanged config are left untouched.
+        """
+        logger.info("====== Hot reload triggered ======")
+        current_agents = self._discover_autonomous_agents()
+        current_names = set(current_agents.keys())
+        running_names = set(self._loop_manager._loops.keys())
+
+        to_stop = running_names - current_names
+        to_start = current_names - running_names
+        logger.info("Reload: to_stop=%s, to_start=%s, unchanged=%s",
+                     list(to_stop), list(to_start), list(running_names & current_names))
+
+        # Stop agents no longer present or no longer autonomous
+        for name in to_stop:
+            await self._stop_agent(name)
+
+        # Start newly discovered agents
+        for name in to_start:
+            try:
+                await self._start_agent(name, current_agents[name])
+            except Exception as exc:
+                logger.error("Failed to start agent '%s' during reload: %s", name, exc)
+        logger.info("====== Hot reload complete ======")

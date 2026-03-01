@@ -1,0 +1,367 @@
+"""Skill manager — CRUD + first-directory-wins discovery + runtime integration."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import shutil
+import urllib.request
+from pathlib import Path
+
+from everstaff.schema.tool_spec import ToolDefinition, ToolParameter
+from everstaff.skills.loader import SkillLoader
+from everstaff.skills.models import SkillContent, SkillMetadata
+from everstaff.tools.native import NativeTool
+
+logger = logging.getLogger(__name__)
+
+
+class SkillManager:
+    """Manages skill files: discovery, CRUD, store install, and runtime integration."""
+
+    def __init__(
+        self,
+        skills_dirs: list[str],
+        active_skill_names: list[str] | None = None,
+        install_dirs: list[str] | None = None,
+    ) -> None:
+        self._loader = SkillLoader(skills_dirs)
+        self._dirs: list[Path] = self._loader._skills_dirs
+        # Dirs to install into — defaults to all dirs when not specified.
+        # Set this to the user-writable subset to exclude read-only package dirs.
+        if install_dirs is not None:
+            self._install_dirs: list[Path] = [Path(d).expanduser().resolve() for d in install_dirs]
+        else:
+            self._install_dirs = self._dirs
+        self._index: dict[str, SkillMetadata] | None = None
+
+        # Runtime: active skills for this agent instance
+        all_meta = self.discover()
+        if active_skill_names is not None:
+            active_set = set(active_skill_names)
+            self._active_metadata = [m for m in all_meta if m.name in active_set]
+        else:
+            self._active_metadata = []
+
+        self._activated: dict[str, str] = {}  # name -> cached instructions
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
+    def discover(self) -> list[SkillMetadata]:
+        """Scan all dirs with first-dir-wins dedup. Returns deduplicated list."""
+        if self._index is not None:
+            return list(self._index.values())
+        self._index = {}
+        for d in self._dirs:
+            for meta in self._loader.scan_dir(d):
+                if meta.name in self._index:
+                    logger.warning(
+                        "Duplicate skill '%s' — %s ignored, keeping %s",
+                        meta.name, meta.path, self._index[meta.name].path,
+                    )
+                    continue
+                self._index[meta.name] = meta
+        return list(self._index.values())
+
+    def list(self) -> list[SkillMetadata]:
+        return self.discover()
+
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
+
+    def get(self, name: str) -> SkillContent:
+        self.discover()
+        meta = (self._index or {}).get(name)
+        if meta is None:
+            raise FileNotFoundError(f"Skill '{name}' not found")
+        return self._loader.load_content(meta.path)
+
+    def create(self, name: str, content: str) -> Path:
+        primary = self.primary_dir()
+        if primary is None:
+            raise RuntimeError("No skills directories configured")
+        target_dir = primary / name
+        if target_dir.exists():
+            raise FileExistsError(f"Skill '{name}' already exists")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        skill_md = target_dir / "SKILL.md"
+        skill_md.write_text(content, encoding="utf-8")
+        self._invalidate()
+        return skill_md
+
+    def update(self, name: str, content: str) -> None:
+        self.discover()
+        meta = (self._index or {}).get(name)
+        if meta is None:
+            raise FileNotFoundError(f"Skill '{name}' not found")
+        meta.path.write_text(content, encoding="utf-8")
+        self._invalidate()
+
+    def delete(self, name: str) -> None:
+        self.discover()
+        meta = (self._index or {}).get(name)
+        if meta is None:
+            raise FileNotFoundError(f"Skill '{name}' not found")
+        shutil.rmtree(meta.path.parent)
+        self._invalidate()
+
+    def primary_dir(self) -> Path | None:
+        """First writable install dir, or first discovery dir as fallback."""
+        return self._install_dirs[0] if self._install_dirs else (self._dirs[0] if self._dirs else None)
+
+    def _invalidate(self) -> None:
+        self._index = None
+
+    # ------------------------------------------------------------------
+    # Store
+    # ------------------------------------------------------------------
+
+    async def install(self, skill_package: str) -> list[Path]:
+        """Install a skill via npx into all configured skills_dirs.
+
+        Returns the list of paths where skill directories were created.
+        Read-only dirs (e.g. package builtin) are silently skipped.
+        """
+        import tempfile
+
+        if not self._dirs:
+            raise RuntimeError("No skills directories configured for install")
+
+        npx_path = shutil.which("npx")
+        if not npx_path:
+            raise RuntimeError("npx not found. Please install Node.js/npm.")
+
+        env = os.environ.copy()
+        env["CI"] = "true"
+        env["npm_config_yes"] = "true"
+
+        installed: list[Path] = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            process = await asyncio.create_subprocess_exec(
+                npx_path, "--yes", "skills", "add", skill_package, "-y",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=tmp_dir,
+            )
+            try:
+                _, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=90.0
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise RuntimeError(f"Skill installation timed out: {skill_package}")
+
+            if process.returncode != 0:
+                raise RuntimeError(
+                    f"Skill installation failed: {stderr_bytes.decode(errors='replace')}"
+                )
+
+            skill_folders = [sm.parent for sm in Path(tmp_dir).rglob("SKILL.md")]
+            for skill_folder in skill_folders:
+                for target_base in self._install_dirs:
+                    try:
+                        target_base.mkdir(parents=True, exist_ok=True)
+                        target_path = target_base / skill_folder.name
+                        if target_path.exists():
+                            shutil.rmtree(target_path)
+                        shutil.copytree(skill_folder, target_path)
+                        logger.info("Installed skill '%s' to %s", skill_folder.name, target_path)
+                        installed.append(target_path)
+                    except PermissionError:
+                        logger.debug("Skipping read-only dir %s for skill install", target_base)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to install skill '%s' to %s: %s",
+                            skill_folder.name, target_base, exc,
+                        )
+
+        self._invalidate()
+        return installed
+
+    async def search_store(self, query: str) -> list[dict]:
+        if not query:
+            return await self._fetch_awesome_skills()
+        return await self._search_npx(query)
+
+    async def _fetch_awesome_skills(self) -> list[dict]:
+        url = "https://raw.githubusercontent.com/ComposioHQ/awesome-claude-skills/refs/heads/master/README.md"
+        try:
+            loop = asyncio.get_event_loop()
+            content = await loop.run_in_executor(
+                None, lambda: urllib.request.urlopen(url, timeout=10).read().decode("utf-8")
+            )
+            skills = []
+            for line in content.splitlines():
+                line = line.strip()
+                if not line.startswith("- ["):
+                    continue
+                match = re.search(
+                    r"^- \[(.*?)\]\((.*?)\) - (.*?)(?:\. \*By \[@(.*?)\].*?\*)?$", line
+                )
+                if not match:
+                    match = re.search(r"^- \[(.*?)\]\((.*?)\) - (.*?)$", line)
+                if match:
+                    groups = match.groups()
+                    name, link, desc = groups[0].strip(), groups[1].strip(), groups[2].strip()
+                    author = groups[3].strip() if len(groups) > 3 and groups[3] else "Unknown"
+                    if author == "Unknown" and " *By [" in desc:
+                        parts = desc.split(" *By [")
+                        desc = parts[0].strip()
+                        auth_match = re.search(r"@(.*?)\b", parts[1])
+                        if auth_match:
+                            author = auth_match.group(1)
+                    full_name = ""
+                    if link.startswith("./"):
+                        skill_id = link.lstrip("./").rstrip("/")
+                        full_name = f"ComposioHQ/awesome-claude-skills@{skill_id}"
+                        link = f"https://github.com/ComposioHQ/awesome-claude-skills/tree/master/{skill_id}"
+                    elif "github.com" in link:
+                        parts = link.rstrip("/").split("/")
+                        if len(parts) >= 5:
+                            full_name = f"{parts[3]}/{parts[4]}@{parts[-1]}"
+                    skills.append({
+                        "name": name,
+                        "full_name": full_name or name,
+                        "author": author,
+                        "url": link,
+                        "description": desc,
+                    })
+            return skills[:30]
+        except Exception as e:
+            logger.error("Failed to fetch awesome skills: %s", e)
+            return []
+
+    async def _search_npx(self, query: str) -> list[dict]:
+        npx_path = shutil.which("npx")
+        if not npx_path:
+            raise RuntimeError("npx not found.")
+        env = os.environ.copy()
+        env["CI"] = "true"
+        env["npm_config_yes"] = "true"
+        process = await asyncio.create_subprocess_exec(
+            npx_path, "--yes", "skills", "find", query,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=20.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return []
+        if process.returncode != 0:
+            return []
+
+        ansi_re = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        output = ansi_re.sub("", stdout.decode())
+        results = []
+        lines = output.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line or line.startswith("██") or line.startswith("Install with"):
+                i += 1
+                continue
+            if "@" in line and "/" in line.split("@")[0]:
+                try:
+                    full_name_raw = line.split(" ")[0]
+                    repo, skill_raw = full_name_raw.split("@")
+                    url = ""
+                    if i + 1 < len(lines) and "https://" in lines[i + 1]:
+                        url = lines[i + 1].split("└")[-1].strip()
+                        i += 1
+                    results.append({
+                        "name": skill_raw.strip(),
+                        "full_name": full_name_raw,
+                        "author": repo.split("/")[0],
+                        "url": url,
+                        "description": "",
+                    })
+                except Exception:
+                    pass
+            i += 1
+            if len(results) >= 50:
+                break
+        return results
+
+    # ------------------------------------------------------------------
+    # Runtime integration (agent execution)
+    # ------------------------------------------------------------------
+
+    @property
+    def active_skills(self) -> list[SkillMetadata]:
+        return self._active_metadata
+
+    def get_prompt_injection(self) -> str:
+        if not self._active_metadata:
+            return ""
+        lines = [
+            "## Skills",
+            "",
+            "You have access to the following skills. "
+            "To use a skill, you MUST call the `use_skill` tool with the skill name. "
+            "The tool will return detailed instructions for that skill.",
+            "",
+        ]
+        for meta in self._active_metadata:
+            lines.append(f"- **{meta.name}**: {meta.description}")
+        return "\n".join(lines)
+
+    def get_tools(self) -> list[NativeTool]:
+        tool = self.create_use_skill_tool()
+        return [tool] if tool is not None else []
+
+    async def activate_skill(self, skill_name: str) -> str:
+        if skill_name in self._activated:
+            return self._activated[skill_name]
+        active_names = {m.name for m in self._active_metadata}
+        if skill_name not in active_names:
+            return f"Error: Skill '{skill_name}' not available. Available skills: {sorted(active_names)}"
+        try:
+            content = self.get(skill_name)
+            instructions = content.instructions
+            if content.resource_files:
+                resource_list = "\n".join(f"  - {f}" for f in content.resource_files)
+                instructions += f"\n\n## Bundled Resources\n{resource_list}"
+            self._activated[skill_name] = instructions
+            return instructions
+        except Exception as e:
+            return f"Error loading skill '{skill_name}': {e}"
+
+    def create_use_skill_tool(self) -> NativeTool | None:
+        if not self._active_metadata:
+            return None
+        manager = self
+
+        async def use_skill(skill_name: str) -> str:
+            return await manager.activate_skill(skill_name)
+
+        skills_detail = "\n".join(
+            f'  - "{m.name}": {m.description}' for m in self._active_metadata
+        )
+        defn = ToolDefinition(
+            name="use_skill",
+            description=(
+                "Activate a skill to load its detailed instructions and follow them. "
+                "You MUST call this tool before attempting any skill-related task.\n\n"
+                f"Available skills:\n{skills_detail}"
+            ),
+            parameters=[
+                ToolParameter(
+                    name="skill_name",
+                    type="string",
+                    description=f"One of: {', '.join(repr(m.name) for m in self._active_metadata)}",
+                    required=True,
+                )
+            ],
+            source="builtin",
+        )
+        return NativeTool(func=use_skill, definition_=defn)
