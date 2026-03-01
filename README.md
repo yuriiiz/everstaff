@@ -36,7 +36,7 @@ Everstaff is an open-source platform for running AI agents that work around the 
 - **Knowledge base** — attach document directories for context injection
 - **MCP servers** — connect any Model Context Protocol server
 
-### Production Ready
+### Self-Hosted
 - OIDC authentication with email whitelist
 - OpenTelemetry and Langfuse tracing
 - S3 or local storage for session data
@@ -46,16 +46,31 @@ Everstaff is an open-source platform for running AI agents that work around the 
 
 ## Quick Start
 
-### Install
-
 ```bash
 pip install everstaff
+
+mkdir my-agents && cd my-agents
+everstaff init          # scaffold config, agent dirs, Dockerfile, .env.example
 ```
 
-### Run the server
+`init` creates:
+
+```
+.agent/config.yaml    # LLM models, storage, auth, HITL channels
+agents/               # drop agent definitions here
+skills/               # custom skills
+tools/                # custom Python tools
+main.py               # server entry point
+.env.example          # API key template
+```
+
+Set your API key and start:
 
 ```bash
-everstaff serve
+cp .env.example .env
+# edit .env: ANTHROPIC_API_KEY=sk-...
+
+python main.py
 ```
 
 Open [http://localhost:8000](http://localhost:8000) — the web UI is bundled.
