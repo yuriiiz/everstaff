@@ -108,6 +108,13 @@ def build_channel(cfg: "ChannelConfig", file_store: "FileStore") -> "HitlChannel
             domain=cfg.domain,
         )
     elif isinstance(cfg, LarkWsChannelConfig):
+        try:
+            import lark_oapi  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "lark-oapi is required for LarkWsChannel. "
+                "Install it with: pip install 'everstaff[lark]'"
+            ) from None
         from everstaff.channels.lark_ws import LarkWsChannel
         return LarkWsChannel(
             app_id=cfg.app_id,
