@@ -46,7 +46,6 @@ permissions:
 skills:
 - find-skills
 - skill-creator
-- web-search
 source: builtin
 tools:
 - Bash

@@ -208,8 +208,12 @@ export default function Dashboard() {
                             System Pulse Alpha
                         </div>
                         <h1 style={{ fontSize: '32px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em', marginBottom: '4px' }}>
-                            {greeting}, {user ? (user.name || user.email || 'Commander') : 'Commander'}
+                            {greeting}, {user ? (user.name || user.email || 'Commander') : 'Commander'}.
                         </h1>
+                        <p style={{ fontSize: '16px', color: '#64748b', marginBottom: '16px', maxWidth: '600px', lineHeight: '1.5' }}>
+                            Manage your autonomous AI agents that work around the clock, pausing only for your critical decisions.
+                            <strong> Autonomous by default, human-supervised when it counts.</strong>
+                        </p>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                             <div style={{ fontSize: '14px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <Clock size={14} />

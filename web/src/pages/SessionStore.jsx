@@ -280,27 +280,16 @@ export default function SessionStore() {
                     if (agent) displayAgentName = agent.agent_name;
                 }
 
-                let initialContent = `Hello! I am ${displayAgentName || 'the Agent'}. How can I help you today?`;
-                if (agentUuidParam === 'builtin_agent_creator') {
-                    initialContent = `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`;
-                } else if (agentUuidParam === 'builtin_skill_creator') {
-                    initialContent = `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`;
-                }
-
                 const pendingSession = {
                     agent_name: displayAgentName || 'Agent',
                     agent_uuid: agentUuidParam,
                     isNew: true,
                     session_id: null,
-                    messages: [{
-                        role: 'assistant',
-                        content: initialContent,
-                        timestamp: Date.now()
-                    }],
+                    messages: [],
                     metadata: { title: `New Chat with ${displayAgentName || 'Agent'}` }
                 };
                 setSelectedSession(pendingSession);
-                setMessages(pendingSession.messages);
+                setMessages([]);
                 setIsConnected(false);
             }
             return;
@@ -344,7 +333,7 @@ export default function SessionStore() {
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'hitl_requested') {
+                if (data.type === 'hitl_request') {
                     // Update pending HITL list
                     fetch('/api/hitl')
                         .then(res => res.json())
@@ -492,7 +481,7 @@ export default function SessionStore() {
                 } else if (data.type === 'status') {
                     setIsProcessing(data.status === 'busy');
                     if (data.content !== undefined) setStatusContent(data.content);
-                } else if (data.type === 'hitl_requested' || data.type === 'hitl_resolved') {
+                } else if (data.type === 'hitl_request' || data.type === 'hitl_resolved') {
                     // Refresh HITL requests and session status (so UI shows buttons immediately)
                     fetch('/api/hitl')
                         .then(res => res.json())
@@ -590,16 +579,33 @@ export default function SessionStore() {
         selectedSession?.agent_uuid?.startsWith('builtin_') ||
         (selectedSession?.agent_name ? availableAgents.some(a => a?.agent_name && a.agent_name.toLowerCase() === (selectedSession.agent_name || '').toLowerCase()) : false);
 
+    const isNearBottom = () => {
+        const el = scrollRef.current;
+        if (!el) return true;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+    };
+
+    const prevMsgCountRef = useRef(0);
     useEffect(() => {
-        scrollToBottom();
+        const prevCount = prevMsgCountRef.current;
+        const curCount = messages.length;
+        prevMsgCountRef.current = curCount;
+
+        // Always scroll on first load or when new messages are appended
+        if (prevCount === 0 || curCount > prevCount) {
+            scrollToBottom();
+        } else if (isNearBottom()) {
+            // Only scroll on replace/re-render if user was already near bottom
+            scrollToBottom();
+        }
     }, [messages, isProcessing]);
 
-
-
     const scrollToBottom = () => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
+        requestAnimationFrame(() => {
+            if (scrollRef.current) {
+                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }
+        });
     };
 
     const fetchSessions = () => {
@@ -641,7 +647,11 @@ export default function SessionStore() {
                     setMessages(data.messages || []);
                 }
 
-                setSelectedSession(data);
+                // Preserve agent_uuid from previous state if backend hasn't written it yet
+                setSelectedSession(prev => ({
+                    ...data,
+                    agent_uuid: data.agent_uuid ?? prev?.agent_uuid,
+                }));
 
                 // Manually calculate total token usage
                 let sum = 0;
@@ -790,20 +800,20 @@ export default function SessionStore() {
     const getRenderableMessages = () => {
         const rendered = [];
 
-        // Ensure creators greeting is always present so it doesn't disappear when messages refresh
-        if (selectedSession && (selectedSession.agent_uuid === 'builtin_agent_creator' || selectedSession.agent_uuid === 'builtin_skill_creator')) {
-            const isAgentCreator = selectedSession.agent_uuid === 'builtin_agent_creator';
-            const initialContent = isAgentCreator
-                ? `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`
-                : `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`;
-
-            const hasInitial = messages.length > 0 && messages[0].content && typeof messages[0].content === 'string' && messages[0].content.includes(initialContent.split('\n')[0]);
-            if (!hasInitial) {
+        // Hardcoded greeting — always prepended at render time, never stored in messages state
+        if (selectedSession) {
+            const greetings = {
+                'Agent Creator': `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`,
+                'Skill Creator': `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`,
+            };
+            const greeting = greetings[selectedSession.agent_name]
+                || (selectedSession.agent_name ? `Hello! I am **${selectedSession.agent_name}**. How can I help you today?` : null);
+            if (greeting) {
                 rendered.push({
                     role: 'assistant',
-                    content: initialContent,
+                    content: greeting,
                     timestamp: selectedSession.created_at ? new Date(selectedSession.created_at).getTime() - 1000 : 0,
-                    _isFakeGreeting: true
+                    _isFakeGreeting: true,
                 });
             }
         }
@@ -1114,7 +1124,7 @@ export default function SessionStore() {
                         </div>
 
                         {/* Messages List */}
-                        <div key={selectedSession.session_id || 'new'} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }} ref={scrollRef}>
+                        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }} ref={scrollRef}>
                             {/* System Prompt (Folded) */}
                             {selectedSession.metadata?.system_prompt && (
                                 <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', background: '#f9fafb' }}>

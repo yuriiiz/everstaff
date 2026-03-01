@@ -39,5 +39,11 @@ skills: []
 source: builtin
 tools:
 - system_reconcile
+- Bash
+- Read
+- Write
+- Edit
+- Glob
+- Grep
 uuid: builtin_system_reconcile
 version: 0.1.0

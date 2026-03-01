@@ -14,3 +14,4 @@
 *.log
 src/everstaff/web_static/*
 !src/everstaff/web_static/.gitkeep
+docs/plans/*

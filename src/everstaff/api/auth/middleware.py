@@ -7,6 +7,7 @@ import logging
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
 
 from everstaff.api.auth.models import AuthConfig, UserIdentity
 from everstaff.api.auth.providers import AuthProvider
@@ -34,6 +35,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._allowed_emails: set[str] = {
             e.lower() for e in auth_config.allowed_emails
         }
+        # Detect whether an OIDC Code Flow provider is configured so
+        # browser navigations can be redirected to /auth/login instead
+        # of receiving a raw 401 JSON response.
+        from everstaff.api.auth.models import OIDCCodeFlowProviderConfig
+
+        self._has_oidc_code_flow = any(
+            isinstance(p, OIDCCodeFlowProviderConfig)
+            for p in auth_config.providers
+        )
 
     @staticmethod
     def _build_providers(provider_configs: list) -> list[AuthProvider]:
@@ -111,7 +121,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
                 continue
 
-        # All providers returned None
+        # All providers returned None.
+        # If OIDC Code Flow is configured and the request is a browser
+        # navigation (Accept: text/html), redirect to the login page so
+        # the user enters the OAuth flow instead of seeing a raw 401.
+        if self._has_oidc_code_flow:
+            accept = request.headers.get("accept", "")
+            if "text/html" in accept:
+                return RedirectResponse("/auth/login")
+
         return JSONResponse(
             status_code=401,
             content={

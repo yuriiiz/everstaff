@@ -6,6 +6,7 @@ import Select from 'react-select';
 import CreatableSelect from 'react-select/creatable';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import LoadingView from '../components/LoadingView';
+import EmptyState from '../components/EmptyState';
 
 const Toggle = ({ checked, onChange, label }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={() => onChange(!checked)}>
@@ -481,8 +482,8 @@ export default function AgentStore() {
             const currentTabAgents = agents.filter(a => (a.source || 'custom') === currentTab);
             if (currentTabAgents.length > 0) {
                 agentToSelect = currentTabAgents[0];
-            } else if (agents.length > 0) {
-                // If the targeted tab has no agents, fallback to ANY first available agent
+            } else if (agents.length > 0 && !tabParam) {
+                // Only fallback to another tab on initial load, not when user explicitly selected a tab
                 agentToSelect = agents[0];
                 currentTab = agentToSelect.source || 'custom';
                 setSourceTab(currentTab);
@@ -705,7 +706,21 @@ export default function AgentStore() {
                 <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
                     {filteredAgents.length === 0 ? (
                         <div style={{ padding: '40px 24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                            No agents found in this category.
+                            {sourceTab === 'custom' ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ color: '#cbd5e1' }}><Bot size={28} /></div>
+                                    <div>No custom agents yet</div>
+                                    <button
+                                        className="btn"
+                                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', fontSize: '12px', fontWeight: 600 }}
+                                        onClick={handleCreate}
+                                    >
+                                        <Plus size={14} /> Create
+                                    </button>
+                                </div>
+                            ) : (
+                                'No agents found in this category.'
+                            )}
                         </div>
                     ) : (
                         filteredAgents.map(agent => (
@@ -1624,9 +1639,26 @@ export default function AgentStore() {
                         />
                     </div>
                 ) : (
-                    <div className="flex-center" style={{ flex: 1, color: '#9ca3af', flexDirection: 'column', gap: '16px' }}>
-                        <div style={{ opacity: 0.1 }}><Layout size={84} /></div>
-                        <div style={{ fontSize: '14px', fontWeight: 500 }}>Select an agent to configure</div>
+                    <div style={{ flex: 1, display: 'flex' }}>
+                        {filteredAgents.length === 0 ? (
+                            <EmptyState
+                                icon={Bot}
+                                title={sourceTab === 'custom' ? "No custom agents yet" : "No agents found"}
+                                description={
+                                    sourceTab === 'custom'
+                                        ? "Create your first agent to get started. Use the Agent Architect to design and build custom agents tailored to your workflow."
+                                        : "There are no built-in agents available in this category. Check other tabs or try refreshing the page."
+                                }
+                                actionLabel={sourceTab === 'custom' ? "Create Agent" : null}
+                                onAction={sourceTab === 'custom' ? handleCreate : null}
+                            />
+                        ) : (
+                            <EmptyState
+                                icon={Layout}
+                                title="Select an Agent"
+                                description="Choose an agent from the list on the left to view its configuration, manage its skills, and monitor its activity."
+                            />
+                        )}
                     </div>
                 )}
             </div>

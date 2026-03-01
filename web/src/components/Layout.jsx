@@ -98,7 +98,12 @@ export default function Layout({ children }) {
                     <div style={{ minWidth: '32px', height: '32px', background: '#111827', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         <Bot color="white" size={20} />
                     </div>
-                    {!isCollapsed && <span style={{ fontWeight: 700, fontSize: '18px', letterSpacing: '-0.5px', whiteSpace: 'nowrap' }}>EVERSTAFF</span>}
+                    {!isCollapsed && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ fontWeight: 800, fontSize: '18px', letterSpacing: '-0.5px', whiteSpace: 'nowrap', lineHeight: 1 }}>EVERSTAFF</span>
+                            <span style={{ fontSize: '10px', color: '#6b7280', fontWeight: 600, letterSpacing: '0.05em', marginTop: '2px' }}>AI AGENT OS</span>
+                        </div>
+                    )}
                 </div>
 
                 <nav style={{ flex: 1, padding: '0 12px' }}>

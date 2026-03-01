@@ -149,11 +149,15 @@ permissions:
 skills:
 - find-skills
 - skill-creator
-- web-search
 source: builtin
 uuid: builtin_agent_creator
 tools:
 - Bash
+- Read
+- Write
+- Edit
+- Glob
+- Grep
 version: 0.1.0
 workflow:
   enable: true

@@ -218,6 +218,18 @@ def main():
 if __name__ == "__main__":
     main()
 """,
+    "Makefile": """\
+.PHONY: install dev run
+
+install:
+	uv sync
+
+dev:
+	uv run python main.py --reload
+
+run:
+	uv run python main.py
+""",
     "Dockerfile": """\
 FROM python:3.13-slim
 
@@ -227,7 +239,8 @@ WORKDIR /app
 RUN pip install uv
 
 # Copy dependency files first for layer caching
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
+COPY uv.lock* ./
 
 # Copy project files
 COPY .agent/ .agent/

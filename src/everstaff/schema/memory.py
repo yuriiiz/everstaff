@@ -12,6 +12,7 @@ class Session(BaseModel):
     session_id: str
     parent_session_id: str | None = None
     agent_name: str = ""
+    agent_uuid: str | None = None
     created_at: str
     updated_at: str
     status: str = "running"

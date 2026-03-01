@@ -1,4 +1,4 @@
-.PHONY: setup venv install install-dev install-ui install-all clean build-web build build-api
+.PHONY: setup venv install install-dev install-ui install-all clean build-web build build-api dev
 
 venv:
 	uv venv
@@ -22,10 +22,15 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "*.egg-info" -exec rm -rf {} +
 
+dev:
+	@echo "Starting backend + frontend dev servers..."
+	cd web && npm run dev &
+	uv run uvicorn everstaff.api:create_app --factory --port 8000 --reload
+
 build-web:
 	cd web && npm run build
-	rm -rf src/agent_os/web_static
-	cp -r web/dist src/agent_os/web_static
+	rm -rf src/everstaff/web_static
+	cp -r web/dist src/everstaff/web_static
 
 build: build-web
 	uv build --wheel

@@ -28,11 +28,18 @@ class LarkWsChannel:
     HITL channel for Lark/Feishu using long connection (WebSocket) mode.
 
     Outbound: POST interactive cards to a Lark chat (same HTTP API as webhook mode).
-    Inbound:  lark-oapi WSClient receives card_action events over WebSocket.
+    Inbound:  lark-oapi WSClient receives card_action events over WebSocket
+              via ``register_p2_card_action_trigger``.
 
-    The lark-oapi SDK (as of v1.5.3) silently drops CARD frames in its
-    ``_handle_data_frame`` method.  We replace that method entirely after
-    constructing the client so both EVENT and CARD frames are processed.
+    The installed lark-oapi SDK silently drops CARD frames in its
+    ``_handle_data_frame`` (``elif MessageType.CARD: return``).
+    We patch that method so CARD frames are routed through the same
+    ``EventDispatcherHandler`` as EVENT frames.
+
+    Note: ``sync_card_handler`` returns a **plain dict** instead of
+    ``P2CardActionTriggerResponse`` because the SDK's ``CallBackCard``
+    model only has ``{type, data}`` fields (for template cards) and
+    silently drops raw card JSON (``{config, header, elements}``).
     """
 
     def __init__(
@@ -76,12 +83,14 @@ class LarkWsChannel:
         url = f"{self._api_base}/im/v1/messages?receive_id_type=chat_id"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         body = {"receive_id": self._chat_id, "msg_type": "interactive", "content": json.dumps(card)}
+        logger.info("[LARK-OUT] POST %s\n  body=%s", url, json.dumps(body, ensure_ascii=False))
         async with aiohttp.ClientSession() as s:
             async with s.post(url, headers=headers, json=body) as r:
                 data = await r.json()
+                logger.info("[LARK-OUT] POST response status=%s\n  resp=%s", r.status, json.dumps(data, ensure_ascii=False))
                 mid = data.get("data", {}).get("message_id", "")
                 if not mid:
-                    logger.error("LarkWsChannel: send failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                    logger.error("[LARK-OUT] send failed code=%s msg=%s", data.get("code"), data.get("msg"))
                 return mid
 
     async def _update_card(self, token: str, message_id: str, card: dict) -> None:
@@ -89,10 +98,12 @@ class LarkWsChannel:
 
         url = f"{self._api_base}/im/v1/messages/{message_id}"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"msg_type": "interactive", "content": json.dumps(card)}
+        logger.info("[LARK-OUT] PATCH %s\n  body=%s", url, json.dumps(body, ensure_ascii=False))
         async with aiohttp.ClientSession() as s:
-            async with s.patch(url, headers=headers, json={"msg_type": "interactive", "content": json.dumps(card)}) as r:
-                if r.status >= 400:
-                    logger.warning("LarkWsChannel: update card %s failed HTTP %s", message_id, r.status)
+            async with s.patch(url, headers=headers, json=body) as r:
+                resp_data = await r.json()
+                logger.info("[LARK-OUT] PATCH response status=%s\n  resp=%s", r.status, json.dumps(resp_data, ensure_ascii=False))
 
     # ── Card builders ────────────────────────────────────────────
 
@@ -130,8 +141,32 @@ class LarkWsChannel:
             elements.append({"tag": "action", "actions": actions})
 
         return {
-            "config": {"wide_screen_mode": True},
+            "config": {"wide_screen_mode": True, "update_multi": True},
             "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Human Input Required"}, "template": "orange"},
+            "elements": elements,
+        }
+
+    def _build_resolved_card(
+        self,
+        decision: str,
+        resolved_by: str,
+        request: "HitlRequest | None" = None,
+    ) -> dict:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        elements: list[dict] = []
+        if request:
+            elements.append({"tag": "div", "text": {"tag": "plain_text", "content": request.prompt}})
+            if request.context:
+                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Context: {request.context}"}})
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "plain_text", "content": (
+            f"Decision: {decision}\n"
+            f"Resolved by: {resolved_by}\n"
+            f"Resolved At: {now}"
+        )}})
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Resolved"}, "template": "green"},
             "elements": elements,
         }
 
@@ -178,32 +213,31 @@ class LarkWsChannel:
             logger.error("LarkWsChannel.send_request failed %s: %s", request.hitl_id, exc)
 
     async def on_resolved(self, hitl_id: str, resolution: "HitlResolution") -> None:
+        logger.info("LarkWsChannel.on_resolved: hitl_id=%s decision=%s", hitl_id, resolution.decision)
+
+        # Look up the message_id for this HITL card
+        message_id = None
         if self._file_store is not None:
             try:
                 raw = await self._file_store.read(f"hitl-lark-ws/{hitl_id}.json")
                 message_id = json.loads(raw.decode()).get("message_id")
-            except Exception:
-                message_id = None
+                logger.info("LarkWsChannel.on_resolved: found mid=%s from file_store", message_id)
+            except Exception as exc:
+                logger.warning("LarkWsChannel.on_resolved: file_store read failed for %s: %s", hitl_id, exc)
         else:
             message_id = self._hitl_message_ids.get(hitl_id)
+            logger.info("LarkWsChannel.on_resolved: found mid=%s from memory", message_id)
 
         if not message_id:
+            logger.warning("LarkWsChannel.on_resolved: no message_id for %s, cannot update card", hitl_id)
             return
 
         try:
             token = await self._get_access_token()
-            card = {
-                "config": {"wide_screen_mode": True},
-                "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Resolved"}, "template": "green"},
-                "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": (
-                    f"Decision: {resolution.decision}\n"
-                    f"Resolved by: {resolution.resolved_by}\n"
-                    f"At: {resolution.resolved_at.strftime('%Y-%m-%d %H:%M UTC')}"
-                )}}],
-            }
+            card = self._build_resolved_card(resolution.decision, resolution.resolved_by, self._hitl_requests.get(hitl_id))
             await self._update_card(token, message_id, card)
         except Exception as exc:
-            logger.error("LarkWsChannel.on_resolved failed %s: %s", hitl_id, exc)
+            logger.error("LarkWsChannel.on_resolved: update card failed %s: %s", hitl_id, exc)
         finally:
             if self._file_store is not None:
                 try:
@@ -215,60 +249,90 @@ class LarkWsChannel:
 
     # ── Card action handler ──────────────────────────────────────
 
-    async def _handle_card_action(self, data: Any) -> None:
-        """Parse a card button click and call channel_manager.resolve()."""
-        logger.info("LarkWsChannel: card_action event received")
-        try:
-            event = getattr(data, "event", data)
-            action = getattr(event, "action", None)
-            if action is None:
-                logger.warning("LarkWsChannel: no action field, skipping")
-                return
+    @staticmethod
+    def _parse_card_action(data: Any) -> tuple[str, str, str]:
+        """Extract (hitl_id, decision, resolved_by) from a card action event.
 
-            raw_value = getattr(action, "value", None)
-            if isinstance(raw_value, str):
+        Returns ("", "", "") if the payload cannot be parsed.
+        """
+        event = getattr(data, "event", data)
+        action = getattr(event, "action", None)
+        if action is None:
+            logger.warning("[LARK-CB] _parse: no action field in event")
+            return "", "", ""
+
+        # Log raw fields for debugging
+        raw_value = getattr(action, "value", None)
+        raw_form = getattr(action, "form_value", None)
+        logger.info("[LARK-CB] _parse: action.value=%s action.form_value=%s", raw_value, raw_form)
+
+        if isinstance(raw_value, str):
+            try:
+                value = json.loads(raw_value)
+            except (json.JSONDecodeError, TypeError):
+                value = {}
+        elif isinstance(raw_value, dict):
+            value = raw_value
+        else:
+            value = {}
+
+        hitl_id = value.get("hitl_id", "")
+        decision = value.get("decision", "")
+        if not hitl_id or not decision:
+            logger.warning("[LARK-CB] _parse: missing hitl_id=%s or decision=%s in value=%s", hitl_id, decision, value)
+            return "", "", ""
+
+        if decision == "__input__":
+            if isinstance(raw_form, str):
                 try:
-                    value = json.loads(raw_value)
+                    form_dict = json.loads(raw_form)
                 except (json.JSONDecodeError, TypeError):
-                    value = {}
+                    form_dict = {}
+            elif isinstance(raw_form, dict):
+                form_dict = raw_form
             else:
-                value = raw_value or {}
+                form_dict = {}
+            decision = form_dict.get("user_input", "")
+            logger.info("[LARK-CB] _parse: form input resolved decision=%r", decision)
 
-            hitl_id = value.get("hitl_id")
-            decision = value.get("decision")
-            if not hitl_id or not decision:
-                return
+        operator = getattr(event, "operator", None)
+        resolved_by = getattr(operator, "open_id", "lark_user") if operator else "lark_user"
+        resolved_by = resolved_by or "lark_user"
+        logger.info("[LARK-CB] _parse: hitl_id=%s decision=%r resolved_by=%s", hitl_id, decision, resolved_by)
+        return hitl_id, decision, resolved_by
 
-            if decision == "__input__":
-                raw_form = getattr(action, "form_value", {}) or {}
-                if isinstance(raw_form, str):
-                    try:
-                        raw_form = json.loads(raw_form)
-                    except (json.JSONDecodeError, TypeError):
-                        raw_form = {}
-                decision = raw_form.get("user_input", "")
-
-            operator = getattr(event, "operator", None)
-            resolved_by = getattr(operator, "open_id", "lark_user") if operator else "lark_user"
-            resolved_by = resolved_by or "lark_user"
-
+    async def _handle_card_action(self, hitl_id: str, decision: str, resolved_by: str) -> None:
+        """Resolve HITL via channel_manager (broadcasts + persists)."""
+        logger.info("LarkWsChannel._handle_card_action: hitl_id=%s decision=%r by=%s", hitl_id, decision, resolved_by)
+        try:
             from everstaff.protocols import HitlResolution
             resolution = HitlResolution(
                 decision=decision,
                 resolved_at=datetime.now(timezone.utc),
                 resolved_by=resolved_by,
             )
-
             if self._channel_manager is not None:
-                await self._channel_manager.resolve(hitl_id, resolution)
-                logger.info("LarkWsChannel: resolved %s decision=%s", hitl_id, decision)
+                result = await self._channel_manager.resolve(hitl_id, resolution)
+                logger.info("LarkWsChannel._handle_card_action: channel_manager.resolve returned %s", result)
+            else:
+                logger.warning("LarkWsChannel._handle_card_action: no channel_manager set")
         except Exception as exc:
             logger.error("LarkWsChannel._handle_card_action failed: %s", exc, exc_info=True)
 
     # ── WS client setup ─────────────────────────────────────────
 
     def _build_ws_client(self, loop: asyncio.AbstractEventLoop):
-        """Build lark-oapi WSClient with replaced frame handler."""
+        """Build lark-oapi WSClient with card action callback registered.
+
+        The SDK's ``_handle_data_frame`` silently drops CARD frames::
+
+            elif message_type == MessageType.CARD:
+                return          # ← does nothing
+
+        We patch it so both EVENT and CARD frames go through
+        ``_event_handler.do_without_validation``, which already routes
+        CARD payloads to ``register_p2_card_action_trigger``.
+        """
         import lark_oapi as lark
         from lark_oapi.event.callback.model.p2_card_action_trigger import (
             P2CardActionTrigger,
@@ -282,13 +346,28 @@ class LarkWsChannel:
         from lark_oapi.ws.model import Response as WsResp
         from lark_oapi.core.const import UTF_8
 
-        def sync_card_handler(data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
-            """Dispatch card action to the app's event loop."""
+        def sync_card_handler(data: P2CardActionTrigger):
+            """Parse card action and dispatch resolution to the app event loop.
+
+            Card update is handled uniformly by on_resolved() via broadcast.
+            """
+            logger.info("[LARK-CB] sync_card_handler ENTERED")
+            hitl_id, decision, resolved_by = self._parse_card_action(data)
+            if not hitl_id:
+                logger.warning("[LARK-CB] parse failed, returning empty response")
+                return P2CardActionTriggerResponse({})
+
+            # Dispatch backend processing (persist + resume) to app event loop
             if self._app_loop is not None and self._app_loop.is_running():
-                asyncio.run_coroutine_threadsafe(self._handle_card_action(data), self._app_loop)
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_card_action(hitl_id, decision, resolved_by),
+                    self._app_loop,
+                )
+                logger.info("[LARK-CB] dispatched _handle_card_action to app loop")
             else:
-                logger.warning("LarkWsChannel: app loop unavailable, card action dropped")
-            return P2CardActionTriggerResponse({"toast": {"type": "info", "content": "Processing..."}})
+                logger.error("[LARK-CB] app loop unavailable, action dropped!")
+
+            return P2CardActionTriggerResponse({})
 
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
@@ -301,11 +380,12 @@ class LarkWsChannel:
             self._app_id,
             self._app_secret,
             event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=lark.LogLevel.DEBUG,
             domain=domain,
         )
 
-        # ── Replace _handle_data_frame to support both EVENT and CARD ──
+        # ── Patch _handle_data_frame: route CARD frames like EVENT ──
+
         def _hdr(headers, key: str) -> str:
             for h in headers:
                 if h.key == key:
@@ -318,10 +398,11 @@ class LarkWsChannel:
             msg_type = MessageType(type_)
 
             if msg_type not in (MessageType.EVENT, MessageType.CARD):
+                logger.debug("LarkWsChannel: ignoring frame type=%s", type_)
                 return
 
             msg_id = _hdr(hs, HEADER_MESSAGE_ID)
-            logger.info("LarkWsChannel: %s frame msg_id=%s", msg_type.value, msg_id)
+            trace_id = _hdr(hs, HEADER_TRACE_ID)
 
             pl = frame.payload
             sum_ = _hdr(hs, HEADER_SUM)
@@ -330,6 +411,13 @@ class LarkWsChannel:
                 pl = client._combine(msg_id, int(sum_), int(seq), pl)
                 if pl is None:
                     return
+
+            # ── Log incoming event/callback ──
+            try:
+                payload_str = pl.decode(UTF_8)
+                logger.info("[LARK-IN] %s msg_id=%s trace_id=%s\n  payload=%s", msg_type.value, msg_id, trace_id, payload_str)
+            except Exception:
+                logger.info("[LARK-IN] %s msg_id=%s trace_id=%s (payload decode failed)", msg_type.value, msg_id, trace_id)
 
             resp = WsResp(code=http.HTTPStatus.OK)
             try:
@@ -340,17 +428,20 @@ class LarkWsChannel:
                 header.key = HEADER_BIZ_RT
                 header.value = str(elapsed)
                 if result is not None:
-                    resp.data = base64.b64encode(lark.JSON.marshal(result).encode(UTF_8))
-                logger.info("LarkWsChannel: %s handled msg_id=%s rt=%dms", msg_type.value, msg_id, elapsed)
+                    marshaled = lark.JSON.marshal(result)
+                    logger.info("[LARK-IN] %s response type=%s rt=%dms\n  body=%s", msg_type.value, type(result).__name__, elapsed, marshaled)
+                    resp.data = base64.b64encode(marshaled.encode(UTF_8))
+                else:
+                    logger.info("[LARK-IN] %s handler returned None rt=%dms", msg_type.value, elapsed)
             except Exception as exc:
-                logger.error("LarkWsChannel: %s handler error msg_id=%s: %s", msg_type.value, msg_id, exc, exc_info=True)
+                logger.error("[LARK-IN] %s handler error msg_id=%s: %s", msg_type.value, msg_id, exc, exc_info=True)
                 resp = WsResp(code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
 
             frame.payload = lark.JSON.marshal(resp).encode(UTF_8)
             await client._write_message(frame.SerializeToString())
 
         client._handle_data_frame = _handle_data_frame
-        logger.info("LarkWsChannel: replaced _handle_data_frame for EVENT+CARD")
+        logger.info("LarkWsChannel: patched _handle_data_frame for EVENT+CARD")
         return client
 
     # ── Lifecycle ────────────────────────────────────────────────
@@ -363,11 +454,25 @@ class LarkWsChannel:
         self._app_loop = loop
 
         def _run_ws():
+            # Create a dedicated event loop for the WS thread.
+            # The lark-oapi SDK stores a module-level `loop` that it grabs at
+            # import time via asyncio.get_event_loop().  When uvloop is the
+            # running policy this returns the *already-running* main loop,
+            # causing `loop.run_until_complete()` inside `client.start()` to
+            # fail with "this event loop is already running".
+            # Patching the module-level variable lets the SDK use our fresh loop.
+            import lark_oapi.ws.client as _ws_mod
+
+            ws_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(ws_loop)
+            _ws_mod.loop = ws_loop
+
             try:
                 client = self._build_ws_client(loop)
+                logger.info("LarkWsChannel: WS client built, calling start()...")
                 client.start()
             except Exception as exc:
-                logger.error("LarkWsChannel WS thread failed: %s", exc)
+                logger.error("LarkWsChannel WS thread failed: %s", exc, exc_info=True)
 
         self._ws_thread = threading.Thread(target=_run_ws, daemon=True)
         self._ws_thread.start()

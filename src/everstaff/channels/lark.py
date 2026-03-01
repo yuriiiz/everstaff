@@ -114,7 +114,7 @@ class LarkChannel:
             elements.append({"tag": "action", "actions": actions})
 
         return {
-            "config": {"wide_screen_mode": True},
+            "config": {"wide_screen_mode": True, "update_multi": True},
             "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Human Input Required"}, "template": "orange"},
             "elements": elements,
         }
@@ -179,7 +179,7 @@ class LarkChannel:
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": (
                     f"Decision: {resolution.decision}\n"
                     f"Resolved by: {resolution.resolved_by}\n"
-                    f"At: {resolution.resolved_at.strftime('%Y-%m-%d %H:%M UTC')}"
+                    f"Resolved At: {resolution.resolved_at.strftime('%Y-%m-%d %H:%M UTC')}"
                 )}}],
             }
             await self._update_card(token, message_id, card)

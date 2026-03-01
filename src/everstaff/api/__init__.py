@@ -199,6 +199,14 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.state.channel_manager = channel_manager
     app.state.ws_connections = set()  # Tracks active WebSocket connections for broadcast
 
+    # Set resolve callback on ChannelManager so any channel resolution
+    # automatically persists to session.json and resumes the session.
+    async def _on_resolve(hitl_id: str, decision: str, comment=None):
+        from everstaff.api.hitl import _resolve_hitl_internal
+        await _resolve_hitl_internal(app, hitl_id, decision, comment)
+
+    channel_manager._on_resolve = _on_resolve
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"], allow_credentials=True,

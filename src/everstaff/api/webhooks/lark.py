@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Request
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +12,7 @@ router = APIRouter(tags=["webhooks"])
 
 
 @router.post("/webhooks/lark")
-async def lark_webhook(req: Request, background_tasks: BackgroundTasks) -> dict:
+async def lark_webhook(req: Request) -> dict:
     """Receive Lark interactive card callbacks and resolve HITL requests."""
     try:
         body = await req.json()
@@ -54,14 +54,5 @@ async def lark_webhook(req: Request, background_tasks: BackgroundTasks) -> dict:
         resolved_by=resolved_by,
     )
     await _channel_manager.resolve(hitl_id, resolution)
-
-    from everstaff.api.hitl import _resolve_hitl_internal
-    background_tasks.add_task(
-        _resolve_hitl_internal,
-        req.app,
-        hitl_id,
-        decision,
-        None,  # comment
-    )
 
     return {"msg": "ok"}
