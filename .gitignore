@@ -13,3 +13,5 @@
 .env.local
 *.log
 src/agent_os/web_static/
+src/everstaff/web_static/*
+!src/everstaff/web_static/.gitkeep
