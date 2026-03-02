@@ -340,6 +340,11 @@ class PermissionChecker(Protocol):
 
 
 @runtime_checkable
+class AgentDefinitionWriter(Protocol):
+    async def add_allow_permission(self, agent_name: str, pattern: str) -> None: ...
+
+
+@runtime_checkable
 class PromptInjector(Protocol):
     def get_prompt_injection(self) -> str: ...
 
