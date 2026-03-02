@@ -76,7 +76,7 @@ async def _save_session_json(store, session_id: str, session_data: dict) -> None
     await store.write(path, json.dumps(session_data, ensure_ascii=False, indent=2).encode())
 
 
-async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, broadcast_fn=None) -> None:
+async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, broadcast_fn=None) -> None:
     """Resolve a HITL request — shared by REST endpoint and WS handler."""
     store = app.state.file_store
     config = app.state.config
@@ -96,6 +96,7 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
             hitl_id=hitl_id,
             decision=decision,
             comment=comment,
+            grant_scope=grant_scope,
             file_store=store,
         )
     except Exception:
@@ -187,6 +188,7 @@ def make_router(config) -> APIRouter:
                 decision=decision.decision,
                 comment=decision.comment,
                 resolved_by=decision.resolved_by,
+                grant_scope=decision.grant_scope,
                 file_store=store,
             )
         except HitlNotFoundError:
