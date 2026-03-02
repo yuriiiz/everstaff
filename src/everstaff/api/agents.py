@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import uuid as _uuid
 import yaml as _yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ class AgentWriteRequest(BaseModel):
     model_config = {"extra": "allow"}
 
     agent_name: str = ""
+    uuid: str = ""
 
 
 def _get_builtin_agents_dir() -> Path | None:
@@ -23,6 +25,25 @@ def _get_builtin_agents_dir() -> Path | None:
         return Path(p) if p else None
     except Exception:
         return None
+
+def _find_agent_path(agents_dir: Path, uuid: str) -> tuple[Path | None, bool]:
+    from everstaff.utils.yaml_loader import load_yaml
+    if agents_dir.exists():
+        for f in agents_dir.glob("*.yaml"):
+            try:
+                if load_yaml(str(f)).get("uuid") == uuid:
+                    return f, False
+            except Exception:
+                pass
+    builtin_dir = _get_builtin_agents_dir()
+    if builtin_dir and builtin_dir.exists():
+        for f in builtin_dir.glob("*.yaml"):
+            try:
+                if load_yaml(str(f)).get("uuid") == uuid:
+                    return f, True
+            except Exception:
+                pass
+    return None, False
 
 
 def make_router(config) -> APIRouter:
@@ -76,6 +97,11 @@ def make_router(config) -> APIRouter:
         name = body.agent_name
         if not name:
             raise HTTPException(status_code=400, detail="agent_name is required")
+        
+        # generate uuid if not provided
+        if not body.uuid:
+            body.uuid = str(_uuid.uuid4())
+            
         path = (agents_dir / f"{name}.yaml").resolve()
         if not path.is_relative_to(agents_dir):
             raise HTTPException(status_code=400, detail="Invalid agent name")
@@ -83,27 +109,40 @@ def make_router(config) -> APIRouter:
             raise HTTPException(status_code=409, detail=f"Agent '{name}' already exists")
         agents_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(_yaml.dump(body.model_dump(exclude_none=True), allow_unicode=True), encoding="utf-8")
-        return {"name": name}
+        return {"name": name, "uuid": body.uuid}
 
-    @router.put("/agents/{name}")
-    async def update_agent(name: str, body: AgentWriteRequest) -> dict:
-        if body.agent_name != name:
-            raise HTTPException(status_code=400, detail="agent_name in body must match URL name")
-        path = (agents_dir / f"{name}.yaml").resolve()
-        if not path.is_relative_to(agents_dir):
+    @router.put("/agents/{uuid}")
+    async def update_agent(uuid: str, body: AgentWriteRequest) -> dict:
+        if not body.agent_name:
+            raise HTTPException(status_code=400, detail="agent_name is required")
+            
+        path, is_builtin = _find_agent_path(agents_dir, uuid)
+        if not path:
+            raise HTTPException(status_code=404, detail="Agent not found")
+            
+        new_path = (agents_dir / f"{body.agent_name}.yaml").resolve()
+        if not new_path.is_relative_to(agents_dir):
             raise HTTPException(status_code=400, detail="Invalid agent name")
-        if not path.exists():
-            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+            
+        if new_path != path and new_path.exists():
+            raise HTTPException(status_code=409, detail=f"Agent '{body.agent_name}' already exists")
+            
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        if new_path != path:
+            path.rename(new_path)
+            path = new_path
+            
         path.write_text(_yaml.dump(body.model_dump(exclude_none=True), allow_unicode=True), encoding="utf-8")
-        return {"name": name, "updated": True}
+        return {"uuid": uuid, "updated": True}
 
-    @router.delete("/agents/{name}", status_code=204)
-    async def delete_agent(name: str) -> None:
-        path = (agents_dir / f"{name}.yaml").resolve()
-        if not path.is_relative_to(agents_dir):
-            raise HTTPException(status_code=400, detail="Invalid agent name")
-        if not path.exists():
-            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    @router.delete("/agents/{uuid}", status_code=204)
+    async def delete_agent(uuid: str) -> None:
+        path, is_builtin = _find_agent_path(agents_dir, uuid)
+        if not path:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if is_builtin:
+            raise HTTPException(status_code=403, detail="Cannot delete built-in agents")
+            
         path.unlink()
 
     return router

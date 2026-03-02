@@ -12,6 +12,7 @@ import Tracing from './pages/Tracing';
 import MCP from './pages/MCP';
 import Knowledge from './pages/Knowledge';
 import Memory from './pages/Memory';
+import SkillEditor from './pages/SkillEditor';
 
 // Global fetch interceptor — redirects to /auth/login on 401.
 // Wraps the native fetch once so all API calls in the app are covered.
@@ -42,6 +43,7 @@ function App() {
           <Route path="/agents/:uuid" element={<AgentEditor />} />
           <Route path="/sessions/:sessionId?" element={<SessionStore />} />
           <Route path="/skills" element={<SkillStore />} />
+          <Route path="/skills/edit/:skillName" element={<SkillEditor />} />
           <Route path="/tools" element={<ToolStore />} />
           <Route path="/tools/edit/:toolName" element={<ToolEditor />} />
           <Route path="/settings" element={<Settings />} />

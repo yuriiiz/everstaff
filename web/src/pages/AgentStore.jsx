@@ -403,7 +403,7 @@ export default function AgentStore() {
     const [editorContent, setEditorContent] = useState('');
     const [saveModal, setSaveModal] = useState({ isOpen: false, result: { status: '', message: '' } });
     const [deleteModal, setDeleteModal] = useState({ isOpen: false, agent: null });
-    const [sourceTab, setSourceTab] = useState('builtin');
+    const [sourceTab, setSourceTab] = useState('custom');
     const [addSubAgentModal, setAddSubAgentModal] = useState({ isOpen: false });
 
     const [activeSubTab, setActiveSubTab] = useState('basic');
@@ -482,11 +482,15 @@ export default function AgentStore() {
             const currentTabAgents = agents.filter(a => (a.source || 'custom') === currentTab);
             if (currentTabAgents.length > 0) {
                 agentToSelect = currentTabAgents[0];
-            } else if (agents.length > 0 && !tabParam) {
-                // Only fallback to another tab on initial load, not when user explicitly selected a tab
-                agentToSelect = agents[0];
-                currentTab = agentToSelect.source || 'custom';
-                setSourceTab(currentTab);
+            } else if (!tabParam) {
+                // By default, try to select something from 'custom'. If there are none, DON'T fallback to builtin. 
+                // We want to show the empty 'custom' state instead of forcing them into the readonly builtin tab.
+                const customAgents = agents.filter(a => (a.source || 'custom') === 'custom');
+                if (customAgents.length > 0) {
+                    agentToSelect = customAgents[0];
+                }
+                setSourceTab('custom');
+                // Deliberately allow agentToSelect = null here so the empty state renders within 'custom' tab.
             }
         }
 
@@ -507,6 +511,11 @@ export default function AgentStore() {
             if (uuidParam !== agentId || tabParam !== agentSource) {
                 updateUrlParams({ uuid: agentId, tab: agentSource }, { replace: !uuidParam || uuidParam === 'undefined' });
             }
+        } else if (!tabParam || uuidParam) {
+            // Unset UUID from URL if no agent could be found, but strictly ensure tab equals our chosen currentTab
+            setSelectedAgent(null);
+            setEditorContent('');
+            updateUrlParams({ uuid: null, tab: currentTab }, { replace: true });
         }
     }, [loading, agents, searchParams]);
 
@@ -590,8 +599,8 @@ export default function AgentStore() {
                 return;
             }
 
-            const isNew = !agents.some(a => a.agent_name === spec.agent_name);
-            const url = isNew ? '/api/agents' : `/api/agents/${spec.agent_name}`;
+            const isNew = !selectedAgent.uuid;
+            const url = isNew ? '/api/agents' : `/api/agents/${selectedAgent.uuid}`;
             const method = isNew ? 'POST' : 'PUT';
 
             fetch(url, {
@@ -602,9 +611,10 @@ export default function AgentStore() {
                 const data = await res.json();
                 if (res.ok) {
                     const updatedSpec = { ...spec };
+                    if (!updatedSpec.uuid && data.uuid) updatedSpec.uuid = data.uuid;
                     setSaveModal({ isOpen: true, result: { status: 'success', message: `Agent '${spec.agent_name}' has been saved successfully.` } });
                     // Refresh current agent in list
-                    const newAgents = isNew ? [updatedSpec, ...agents.filter(a => a !== selectedAgent)] : agents.map(a => a.agent_name === spec.agent_name ? updatedSpec : a);
+                    const newAgents = isNew ? [updatedSpec, ...agents.filter(a => a !== selectedAgent)] : agents.map(a => a.uuid === selectedAgent.uuid ? updatedSpec : a);
                     setAgents(newAgents);
                     setSelectedAgent(updatedSpec);
                 } else {
@@ -640,7 +650,7 @@ export default function AgentStore() {
 
         // For saved agents, call the API
         try {
-            const res = await fetch(`/api/agents/${selectedAgent.agent_name}`, {
+            const res = await fetch(`/api/agents/${selectedAgent.uuid}`, {
                 method: 'DELETE'
             });
             if (res.ok) {

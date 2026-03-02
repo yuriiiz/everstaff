@@ -24,6 +24,14 @@ class InstallSkillRequest(BaseModel):
     name: str
 
 
+class UpdateSkillFileRequest(BaseModel):
+    content: str
+
+
+class CreateSkillFileRequest(BaseModel):
+    path: str
+
+
 def make_router(config) -> APIRouter:
     router = APIRouter(tags=["skills"], prefix="/skills")
 
@@ -128,5 +136,41 @@ def make_router(config) -> APIRouter:
         if not target.exists() or not target.is_file():
             raise HTTPException(404, "File not found")
         return {"name": target.name, "path": path, "content": target.read_text(encoding="utf-8")}
+
+    @router.put("/{name}/files/{path:path}")
+    async def update_skill_file(name: str, path: str, body: UpdateSkillFileRequest) -> dict:
+        try:
+            target = _mgr().write_file(name, path, body.content)
+            return {"name": name, "path": path, "updated": True, "full_path": str(target)}
+        except FileNotFoundError:
+            raise HTTPException(404, f"Skill '{name}' not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    @router.post("/{name}/files")
+    async def create_skill_file(name: str, body: CreateSkillFileRequest) -> dict:
+        try:
+            # Create an empty file
+            target = _mgr().write_file(name, body.path, "")
+            return {"name": name, "path": body.path, "created": True, "full_path": str(target)}
+        except FileNotFoundError:
+            raise HTTPException(404, f"Skill '{name}' not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    @router.delete("/{name}/files/{path:path}", status_code=204)
+    async def delete_skill_file(name: str, path: str) -> None:
+        try:
+            _mgr().delete_file(name, path)
+        except FileNotFoundError:
+            raise HTTPException(404, f"Skill '{name}' not found")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, str(e))
 
     return router

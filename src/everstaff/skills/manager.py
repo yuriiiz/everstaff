@@ -109,6 +109,58 @@ class SkillManager:
         shutil.rmtree(meta.path.parent)
         self._invalidate()
 
+    def write_file(self, name: str, rel_path: str, content: str) -> Path:
+        """Write content to a file within the skill directory."""
+        self.discover()
+        meta = (self._index or {}).get(name)
+        if meta is None:
+            raise FileNotFoundError(f"Skill '{name}' not found")
+        
+        skill_dir = meta.path.parent
+        target = (skill_dir / rel_path).resolve()
+        
+        # Security: Ensure target is within skill_dir
+        try:
+            target.relative_to(skill_dir)
+        except ValueError:
+            raise ValueError(f"Invalid path: {rel_path} is outside skill directory")
+            
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        logger.info("Updated skill file: %s (skill: %s)", target, name)
+        
+        # If writing to SKILL.md, we might need to invalidate index if metadata changed
+        if target == meta.path:
+            self._invalidate()
+            
+        return target
+
+    def delete_file(self, name: str, rel_path: str) -> None:
+        """Delete a file within the skill directory."""
+        self.discover()
+        meta = (self._index or {}).get(name)
+        if meta is None:
+            raise FileNotFoundError(f"Skill '{name}' not found")
+            
+        skill_dir = meta.path.parent
+        target = (skill_dir / rel_path).resolve()
+        
+        try:
+            target.relative_to(skill_dir)
+        except ValueError:
+            raise ValueError(f"Invalid path: {rel_path} is outside skill directory")
+            
+        if target == meta.path:
+            raise ValueError("Cannot delete SKILL.md via delete_file. Use delete() to remove the entire skill.")
+            
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+                logger.info("Deleted skill directory: %s (skill: %s)", target, name)
+            else:
+                target.unlink()
+                logger.info("Deleted skill file: %s (skill: %s)", target, name)
+
     def primary_dir(self) -> Path | None:
         """First writable install dir, or first discovery dir as fallback."""
         return self._install_dirs[0] if self._install_dirs else (self._dirs[0] if self._dirs else None)

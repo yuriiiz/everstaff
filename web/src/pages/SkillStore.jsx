@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Search, FileText, CheckCircle, ExternalLink, Package, File, Folder, ChevronRight, ChevronDown, List, Zap, Plus } from 'lucide-react';
+import { Download, Search, FileText, CheckCircle, ExternalLink, Package, File, Folder, ChevronRight, ChevronDown, List, Zap, Plus, Edit } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -337,9 +337,18 @@ export default function SkillStore() {
                                                     marginBottom: '40px',
                                                     boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
                                                 }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                                                        <Package size={16} color="#6b7280" />
-                                                        <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#6b7280' }}>Skill Specification</span>
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <Package size={16} color="#6b7280" />
+                                                            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#6b7280' }}>Skill Specification</span>
+                                                        </div>
+                                                        <button
+                                                            className="btn btn-secondary"
+                                                            style={{ height: '32px', padding: '0 12px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                                            onClick={(e) => { e.stopPropagation(); navigate(`/skills/edit/${selectedSkill?.name}`); }}
+                                                        >
+                                                            <Edit size={14} /> Edit Skill
+                                                        </button>
                                                     </div>
                                                     <h1 style={{ fontSize: '24px', fontWeight: 800, margin: '0 0 12px 0', letterSpacing: '-0.025em', color: '#111827' }}>
                                                         {metadata.name || selectedSkill?.name}
@@ -359,13 +368,16 @@ export default function SkillStore() {
                                                     h2: ({ node, ...props }) => <h2 style={{ fontSize: '24px', fontWeight: 700, margin: '32px 0 16px', borderBottom: '1px solid #e5e7eb', paddingBottom: '8px' }} {...props} />,
                                                     h3: ({ node, ...props }) => <h3 style={{ fontSize: '18px', fontWeight: 600, margin: '24px 0 12px' }} {...props} />,
                                                     p: ({ node, ...props }) => <p style={{ fontSize: '15px', lineHeight: '1.6', color: '#374151', marginBottom: '16px' }} {...props} />,
-                                                    code: ({ node, inline, ...props }) => (
-                                                        inline ?
-                                                            <code style={{ background: '#f1f5f9', padding: '2px 4px', borderRadius: '4px', fontSize: '13px', color: '#e11d48' }} {...props} /> :
-                                                            <pre style={{ background: '#1e293b', color: '#f8fafc', padding: '16px', borderRadius: '8px', fontSize: '13px', overflow: 'auto', margin: '16px 0' }}>
-                                                                <code {...props} />
-                                                            </pre>
-                                                    ),
+                                                    pre: ({ node, ...props }) => <pre style={{ background: '#1e293b', color: '#f8fafc', padding: '16px', borderRadius: '8px', fontSize: '13px', overflow: 'auto', margin: '16px 0', fontFamily: 'Menlo, Monaco, Consolas, monospace' }} {...props} />,
+                                                    code: ({ node, className, children, ...props }) => {
+                                                        const match = /language-(\w+)/.exec(className || '');
+                                                        const isBlock = match || String(children).includes('\n');
+                                                        return isBlock ? (
+                                                            <code className={className} {...props}>{children}</code>
+                                                        ) : (
+                                                            <code style={{ background: '#f1f5f9', padding: '2px 4px', borderRadius: '4px', fontSize: '13px', color: '#e11d48' }} className={className} {...props}>{children}</code>
+                                                        );
+                                                    },
                                                     ul: ({ node, ...props }) => <ul style={{ marginBottom: '16px', paddingLeft: '24px' }} {...props} />,
                                                     li: ({ node, ...props }) => <li style={{ marginBottom: '8px', fontSize: '15px', color: '#374151' }} {...props} />
                                                 }}
