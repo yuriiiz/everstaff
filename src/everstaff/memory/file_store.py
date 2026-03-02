@@ -119,6 +119,7 @@ class FileMemoryStore:
         initiated_by: str | None = None,
         trigger: "AgentEvent | None" = None,
         hitl_requests: list[dict] | None = None,
+        extra_permissions: list[str] | None = None,
     ) -> None:
         path = self._session_path(session_id)
         existing_meta: dict[str, Any] = {}
@@ -189,6 +190,7 @@ class FileMemoryStore:
             "metadata": metadata,
             "messages": [m.to_dict() for m in messages],
             "hitl_requests": hitl_requests if hitl_requests is not None else existing_meta.get("hitl_requests", []),
+            "extra_permissions": extra_permissions if extra_permissions is not None else existing_meta.get("extra_permissions", []),
         }
         await self._session_store.write(path, json.dumps(payload, ensure_ascii=False, indent=2).encode())
 

@@ -288,6 +288,7 @@ class MemoryStore(Protocol):
         initiated_by: str | None = None,
         trigger: "AgentEvent | None" = None,
         hitl_requests: list[dict] | None = None,
+        extra_permissions: list[str] | None = None,
     ) -> None: ...
 
     # Workflow persistence
