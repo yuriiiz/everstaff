@@ -111,3 +111,19 @@ def test_merge_preserves_strict_true():
     b = RuleBasedChecker(allow=["Glob"], deny=[])
     merged = RuleBasedChecker.merge([a, b])
     assert not merged.check("Bash", {}).allowed  # not in merged allow
+
+
+# ── matches_deny / matches_allow ─────────────────────────────────────────────
+
+def test_matches_deny_public():
+    checker = RuleBasedChecker(allow=["Read"], deny=["Bash*"])
+    assert checker.matches_deny("Bash", {}) is True
+    assert checker.matches_deny("Bash_exec", {}) is True
+    assert checker.matches_deny("Read", {}) is False
+
+
+def test_matches_allow_public():
+    checker = RuleBasedChecker(allow=["Read", "Glob*"], deny=[])
+    assert checker.matches_allow("Read", {}) is True
+    assert checker.matches_allow("Glob_find", {}) is True
+    assert checker.matches_allow("Bash", {}) is False

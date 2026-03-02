@@ -28,19 +28,31 @@ class RuleBasedChecker:
         self._deny = list(deny)
         self._strict = strict
 
-    def check(self, tool_name: str, args: dict[str, Any]) -> PermissionResult:
-        # 1. deny wins always
+    def matches_deny(self, tool_name: str, args: dict[str, Any]) -> bool:
+        """Return True if tool_name matches any deny pattern."""
         for pattern in self._deny:
             if fnmatch.fnmatch(tool_name, pattern):
-                return PermissionResult(
-                    allowed=False,
-                    reason=f"Matched deny rule '{pattern}'",
-                )
+                return True
+        return False
 
-        # 2. allow whitelist
+    def matches_allow(self, tool_name: str, args: dict[str, Any]) -> bool:
+        """Return True if tool_name matches any allow pattern."""
         for pattern in self._allow:
             if fnmatch.fnmatch(tool_name, pattern):
-                return PermissionResult(allowed=True)
+                return True
+        return False
+
+    def check(self, tool_name: str, args: dict[str, Any]) -> PermissionResult:
+        # 1. deny wins always
+        if self.matches_deny(tool_name, args):
+            return PermissionResult(
+                allowed=False,
+                reason=f"Matched deny rule for '{tool_name}'",
+            )
+
+        # 2. allow whitelist
+        if self.matches_allow(tool_name, args):
+            return PermissionResult(allowed=True)
 
         # 3. default: strict = deny, open = allow
         if self._strict:
