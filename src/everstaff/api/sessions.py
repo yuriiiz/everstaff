@@ -139,7 +139,10 @@ async def _resume_session_task(
                                         logger.warning("Failed to write permanent grant for %s: %s", tool_name, wr_err)
 
                         if extra_perms:
-                            await mem.save(session_id, messages, extra_permissions=extra_perms)
+                            # Merge with existing session grants (additive)
+                            existing = session_raw.get("extra_permissions", [])
+                            merged = list(dict.fromkeys(existing + extra_perms))  # deduplicate, preserve order
+                            await mem.save(session_id, messages, extra_permissions=merged)
                 except Exception as read_err:
                     logger.warning("[session] failed to read session.json for HITL resume  session=%s  err=%s",
                                    _sid, read_err)

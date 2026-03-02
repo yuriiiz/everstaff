@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import fnmatch
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from everstaff.protocols import PermissionResult
+
+if TYPE_CHECKING:
+    from everstaff.permissions.rule_checker import RuleBasedChecker
 
 
 class DynamicPermissionChecker:
@@ -20,8 +23,8 @@ class DynamicPermissionChecker:
 
     def __init__(
         self,
-        global_checker: Any | None,
-        agent_checker: Any,
+        global_checker: RuleBasedChecker | None,
+        agent_checker: RuleBasedChecker,
         session_grants: list[str],
         is_system_tool: Callable[[str], bool],
     ) -> None:
