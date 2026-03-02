@@ -2,13 +2,25 @@
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from everstaff.tools.pipeline import ToolCallContext
-from everstaff.protocols import PermissionChecker, ToolRegistry, ToolResult
+from everstaff.protocols import (
+    HitlRequest,
+    HumanApprovalRequired,
+    PermissionChecker,
+    ToolRegistry,
+    ToolResult,
+)
 
 
 class PermissionStage:
-    """Checks permissions before calling next. Blocks if denied."""
+    """Checks permissions before calling next.
+
+    - Denied → return error ToolResult
+    - Needs HITL → raise HumanApprovalRequired with tool_permission request
+    - Allowed → call next
+    """
 
     def __init__(self, checker: PermissionChecker) -> None:
         self._checker = checker
@@ -19,12 +31,26 @@ class PermissionStage:
         next: Callable[[ToolCallContext], Awaitable[ToolResult]],
     ) -> ToolResult:
         result = self._checker.check(ctx.tool_name, ctx.args)
-        if not result.allowed:
+
+        if not result.allowed and not result.needs_hitl:
             return ToolResult(
                 tool_call_id=ctx.tool_call_id,
                 content=f"Permission denied for '{ctx.tool_name}': {result.reason}",
                 is_error=True,
             )
+
+        if result.needs_hitl:
+            request = HitlRequest(
+                hitl_id=str(uuid4()),
+                type="tool_permission",
+                prompt=f"Agent wants to execute tool '{ctx.tool_name}'",
+                tool_name=ctx.tool_name,
+                tool_args=ctx.args,
+                tool_call_id=ctx.tool_call_id,
+                options=["reject", "approve_once", "approve_session", "approve_permanent"],
+            )
+            raise HumanApprovalRequired([request])
+
         return await next(ctx)
 
 
