@@ -142,10 +142,14 @@ instructions: 'You are Agent Creator, specialized in helping users define an AI 
 
   '
 permissions:
+  # allow: []          — empty means all tools trigger HITL approval on first use
+  # allow: ["*"]       — allow all tools without approval
+  # allow: ["Read"]    — only Read is pre-approved; others prompt HITL
+  # deny: ["Bash(rm:*)"] — always blocked, even with session grant
+  # Session grants are added at runtime when the user approves a tool via HITL.
   allow: []
   deny:
   - Bash(rm:*)
-  require_approval: []
 skills:
 - find-skills
 - skill-creator

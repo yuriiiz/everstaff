@@ -42,7 +42,6 @@ permissions:
   allow: []
   deny:
   - Bash(rm:*)
-  require_approval: []
 skills:
 - find-skills
 - skill-creator

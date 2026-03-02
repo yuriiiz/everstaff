@@ -34,7 +34,6 @@ permissions:
   allow: []
   deny:
   - Bash(rm:*)
-  require_approval: []
 skills: []
 source: builtin
 tools:
