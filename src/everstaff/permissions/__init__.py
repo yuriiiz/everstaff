@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class PermissionGrantScope(str, Enum):
+    """Grant scope for tool permission HITL approvals."""
+    ONCE = "once"
+    SESSION = "session"
+    PERMANENT = "permanent"
 
 
 class PermissionConfig(BaseModel):
@@ -20,4 +29,4 @@ class PermissionConfig(BaseModel):
     require_approval: list[str] = Field(default_factory=list)
 
 
-__all__ = ["PermissionConfig"]
+__all__ = ["PermissionConfig", "PermissionGrantScope"]

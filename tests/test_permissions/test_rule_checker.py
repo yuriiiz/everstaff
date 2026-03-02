@@ -12,6 +12,13 @@ def test_permission_result_has_needs_hitl_field():
     assert result2.needs_hitl is False
 
 
+def test_permission_grant_scope_enum():
+    from everstaff.permissions import PermissionGrantScope
+    assert PermissionGrantScope.ONCE == "once"
+    assert PermissionGrantScope.SESSION == "session"
+    assert PermissionGrantScope.PERMANENT == "permanent"
+
+
 # ── strict=True (default) ─────────────────────────────────────────────────────
 
 def test_strict_empty_allow_denies_everything():
