@@ -131,9 +131,9 @@ async def _resume_session_task(
                 except Exception as exc:
                     logger.debug("[session] broadcast failed  session=%s  event=%s  err=%s",
                                  _sid, type(event).__name__, exc)
-        logger.info("[session] end  agent=%s  session=%s", agent_name, _sid)
+        logger.info("[session] end agent=%s session=%s", agent_name, _sid)
     except Exception as e:
-        logger.error("[session] error  agent=%s  session=%s  err=%s", agent_name, _sid, e)
+        logger.error("[session] error agent=%s session=%s err=%s", agent_name, _sid, e)
     finally:
         await ctx.aclose()
 

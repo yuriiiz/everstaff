@@ -74,8 +74,9 @@ def make_grep_tool(workdir: Path):
 
             for line_num, line in enumerate(text.splitlines(), 1):
                 if regex.search(line):
-                    matches.append(f"{file_path}:{line_num}: {line.rstrip()}")
-                    files_with_matches.add(str(file_path))
+                    rel_f = file_path.relative_to(workdir.resolve())
+                    matches.append(f"{rel_f}:{line_num}: {line.rstrip()}")
+                    files_with_matches.add(str(rel_f))
                     if len(matches) >= _MAX_RESULTS:
                         break
 

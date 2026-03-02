@@ -41,7 +41,7 @@ class CreateAgentTool:
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="create_agent",
-            description="Dynamically generate a domain-expert sub-agent for the current session.",
+            description="Dynamically generate a domain-expert sub-agent. Set persist=true to save permanently.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -49,6 +49,7 @@ class CreateAgentTool:
                     "domain": {"type": "string", "description": "Domain description (e.g. 'SQL query optimization')"},
                     "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names to give the agent", "default": []},
                     "skills": {"type": "array", "items": {"type": "string"}, "description": "Skill names to give the agent", "default": []},
+                    "persist": {"type": "boolean", "description": "Save agent permanently to agents directory for cross-session reuse", "default": False},
                 },
                 "required": ["name", "domain"],
             },
@@ -63,11 +64,42 @@ class CreateAgentTool:
         sessions_dir = self._ctx.sessions_dir or ".agent/sessions"
         return Path(sessions_dir) / self._ctx.session_id / "agents" / f"{name}.yaml"
 
+    def _agents_dir_path(self) -> Path | None:
+        """Return the persistent agents directory from config, or None if unavailable."""
+        env = self._ctx._env
+        if env is None:
+            return None
+        return Path(env.config.agents_dir).expanduser().resolve()
+
+    def _persist_agent_yaml(self, name: str, spec_data: dict) -> None:
+        """Write agent spec to agents_dir for cross-session persistence."""
+        agents_dir = self._agents_dir_path()
+        if agents_dir is None:
+            logger.warning("create_agent: no _env — cannot persist agent '%s'", name)
+            return
+        spec_data["agent_name"] = name
+        spec_data["source"] = "custom"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        dest = agents_dir / f"{name}.yaml"
+        dest.write_text(yaml.dump(spec_data, allow_unicode=True, sort_keys=False))
+        logger.info("create_agent: persisted agent '%s' to %s", name, dest)
+
     async def execute(self, args: dict[str, Any]) -> ToolResult:
         name = args["name"]
         domain = args.get("domain", "")
         tools = args.get("tools", [])
         skills = args.get("skills", [])
+        persist = args.get("persist", False)
+
+        # Conflict check: if persist requested, ensure no existing agent in agents_dir
+        if persist:
+            agents_dir = self._agents_dir_path()
+            if agents_dir and (agents_dir / f"{name}.yaml").exists():
+                return ToolResult(
+                    tool_call_id="",
+                    content=f"Agent '{name}' already exists in agents directory, please use a different name",
+                    is_error=True,
+                )
 
         yaml_path = self._agent_yaml_path(name)
 
@@ -112,6 +144,13 @@ class CreateAgentTool:
         # Write YAML to session-scoped cache
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_path.write_text(raw_yaml)
+
+        # Persist to agents_dir if requested
+        if persist:
+            try:
+                self._persist_agent_yaml(name, spec_data)
+            except Exception as e:
+                logger.warning("create_agent: persistence failed for %s: %s", name, e)
 
         # Register into SubAgentProvider and ToolRegistry (best-effort)
         try:

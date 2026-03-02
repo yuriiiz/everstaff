@@ -27,7 +27,8 @@ def make_write_tool(workdir: Path):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
             size = len(content.encode("utf-8"))
-            return f"Successfully wrote {size} bytes to {file_path}"
+            rel_path = p.relative_to(workdir.resolve())
+            return f"Successfully wrote {size} bytes to {rel_path}"
         except PermissionError:
             return f"Error: Permission denied: {file_path}"
         except Exception as e:

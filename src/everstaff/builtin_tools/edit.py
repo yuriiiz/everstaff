@@ -71,7 +71,8 @@ def make_edit_tool(workdir: Path):
             return f"Error: Permission denied writing to {file_path}"
 
         replaced = count if replace_all else 1
-        return f"Successfully replaced {replaced} occurrence(s) in {file_path}"
+        rel_path = p.relative_to(workdir.resolve())
+        return f"Successfully replaced {replaced} occurrence(s) in {rel_path}"
 
     return edit
 

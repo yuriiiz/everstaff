@@ -46,7 +46,7 @@ def make_glob_tool(workdir: Path):
         if not files:
             return f"No files matching '{pattern}' in {path}"
 
-        lines = [str(f) for f in files[:_MAX_RESULTS]]
+        lines = [str(f.relative_to(workdir.resolve())) for f in files[:_MAX_RESULTS]]
         result = "\n".join(lines)
 
         if len(files) > _MAX_RESULTS:

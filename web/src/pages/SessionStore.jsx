@@ -802,9 +802,13 @@ export default function SessionStore() {
 
         // Hardcoded greeting — always prepended at render time, never stored in messages state
         if (selectedSession) {
+            const agentCreatorGreeting = `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`;
+            const skillCreatorGreeting = `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`;
             const greetings = {
-                'Agent Creator': `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`,
-                'Skill Creator': `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`,
+                'Agent Creator': agentCreatorGreeting,
+                'Agent Architect': agentCreatorGreeting,
+                'Skill Creator': skillCreatorGreeting,
+                'Skill Forge': skillCreatorGreeting,
             };
             const greeting = greetings[selectedSession.agent_name]
                 || (selectedSession.agent_name ? `Hello! I am **${selectedSession.agent_name}**. How can I help you today?` : null);

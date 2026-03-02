@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -222,7 +223,10 @@ class LiteLLMClient:
                 try:
                     args = json.loads(tc.function.arguments)
                 except (json.JSONDecodeError, TypeError):
-                    args = {}
+                    try:
+                        args = ast.literal_eval(tc.function.arguments)
+                    except Exception:
+                        args = {}
                 tool_calls.append(ToolCallRequest(
                     id=tc.id,
                     name=tc.function.name,
@@ -369,7 +373,10 @@ class LiteLLMClient:
             try:
                 args = json.loads(tc["args_str"])
             except (json.JSONDecodeError, ValueError):
-                args = {}
+                try:
+                    args = ast.literal_eval(tc["args_str"])
+                except Exception:
+                    args = {}
             tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], args=args))
 
         content = "".join(full_content) or None

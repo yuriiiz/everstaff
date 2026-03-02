@@ -66,7 +66,8 @@ def make_read_tool(workdir: Path):
         result = "\n".join(output_lines)
 
         if end < total:
-            result += f"\n\n... ({total - end} more lines not shown, total {total} lines)"
+            rel_path = p.relative_to(workdir.resolve())
+            result += f"\n\n... ({total - end} more lines not shown, total {total} lines in {rel_path})"
 
         return result
 

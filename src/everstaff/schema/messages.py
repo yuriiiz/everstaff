@@ -60,7 +60,11 @@ def dicts_to_messages(dicts: list[dict]) -> list[Message]:
                 try:
                     args = _json.loads(args_raw)
                 except _json.JSONDecodeError:
-                    args = {"raw": args_raw}
+                    import ast as _ast
+                    try:
+                        args = _ast.literal_eval(args_raw)
+                    except Exception:
+                        args = {"raw": args_raw}
             else:
                 args = args_raw
             tool_calls.append(ToolCallRequest(
