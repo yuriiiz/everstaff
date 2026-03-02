@@ -538,7 +538,7 @@ wheels = [
 
 [[package]]
 name = "everstaff"
-version = "0.0.3"
+version = "0.0.5.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
