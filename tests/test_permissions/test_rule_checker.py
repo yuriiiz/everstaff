@@ -2,6 +2,16 @@ from everstaff.protocols import PermissionResult
 from everstaff.permissions.rule_checker import RuleBasedChecker
 
 
+# ── PermissionResult ──────────────────────────────────────────────────────────
+
+def test_permission_result_has_needs_hitl_field():
+    from everstaff.protocols import PermissionResult
+    result = PermissionResult(allowed=False, needs_hitl=True)
+    assert result.needs_hitl is True
+    result2 = PermissionResult(allowed=True)
+    assert result2.needs_hitl is False
+
+
 # ── strict=True (default) ─────────────────────────────────────────────────────
 
 def test_strict_empty_allow_denies_everything():
