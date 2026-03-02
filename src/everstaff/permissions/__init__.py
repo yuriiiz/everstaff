@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PermissionGrantScope(str, Enum):
@@ -27,6 +28,18 @@ class PermissionConfig(BaseModel):
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)
     require_approval: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _deprecate_require_approval(self) -> "PermissionConfig":
+        if self.require_approval:
+            warnings.warn(
+                "PermissionConfig.require_approval is deprecated and will be removed. "
+                "Tools not in the allow list now automatically trigger HITL approval.",
+                DeprecationWarning,
+                stacklevel=4,
+            )
+            self.require_approval = []
+        return self
 
 
 __all__ = ["PermissionConfig", "PermissionGrantScope"]

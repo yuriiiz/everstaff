@@ -4,7 +4,6 @@ def test_framework_config_has_permissions_field():
     cfg = FrameworkConfig()
     assert isinstance(cfg.permissions, PermissionConfig)
     assert cfg.permissions.deny == []
-    assert cfg.permissions.require_approval == []
 
 
 def test_build_permissions_no_global_rules_returns_agent_checker():
@@ -19,7 +18,7 @@ def test_build_permissions_no_global_rules_returns_agent_checker():
 
     spec = AgentSpec(
         agent_name="TestAgent",
-        permissions=PermissionConfig(allow=["SafeTool"], deny=[], require_approval=[]),
+        permissions=PermissionConfig(allow=["SafeTool"], deny=[]),
     )
     cfg = FrameworkConfig(
         model_mappings={"smart": ModelMapping(model_id="fake/m")},
@@ -51,11 +50,11 @@ def test_build_permissions_global_deny_wins():
 
     spec = AgentSpec(
         agent_name="TestAgent",
-        permissions=PermissionConfig(allow=["BlockedGlobally", "SafeTool"], deny=[], require_approval=[]),
+        permissions=PermissionConfig(allow=["BlockedGlobally", "SafeTool"], deny=[]),
     )
     cfg = FrameworkConfig(
         model_mappings={"smart": ModelMapping(model_id="fake/m")},
-        permissions=PermissionConfig(deny=["BlockedGlobally"], require_approval=["Bash"]),
+        permissions=PermissionConfig(deny=["BlockedGlobally"]),
     )
     mock_env = MagicMock()
     mock_env.config = cfg
@@ -66,10 +65,6 @@ def test_build_permissions_global_deny_wins():
     # Global deny wins
     result = checker.check("BlockedGlobally", {})
     assert not result.allowed
-
-    # Global require_approval fires
-    result = checker.check("Bash", {})
-    assert result.require_approval
 
     # SafeTool still works (allowed by agent, not blocked globally)
     result = checker.check("SafeTool", {})

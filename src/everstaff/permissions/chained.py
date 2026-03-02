@@ -10,7 +10,7 @@ class ChainedPermissionChecker:
     """Evaluates permission checkers in order.
 
     The first checker to return allowed=False wins. This means a global
-    deny/require_approval always overrides per-agent allow rules.
+    deny always overrides per-agent allow rules.
     """
 
     def __init__(self, *checkers: PermissionChecker) -> None:

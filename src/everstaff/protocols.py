@@ -153,7 +153,6 @@ class CancellationEvent:
 class PermissionResult:
     allowed: bool
     reason: str | None = None
-    require_approval: bool = False
     needs_hitl: bool = False
 
 

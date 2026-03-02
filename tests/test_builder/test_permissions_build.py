@@ -2,11 +2,10 @@
 from unittest.mock import MagicMock
 
 
-def _make_env(global_deny=None, global_require_approval=None):
+def _make_env(global_deny=None):
     """Build a minimal RuntimeEnvironment mock."""
     cfg = MagicMock()
     cfg.permissions.deny = global_deny or []
-    cfg.permissions.require_approval = global_require_approval or []
     env = MagicMock()
     env.config = cfg
     return env
@@ -31,11 +30,10 @@ def _make_spec(
     return spec
 
 
-def _make_permissions(allow=None, deny=None, require_approval=None):
+def _make_permissions(allow=None, deny=None):
     p = MagicMock()
     p.allow = allow or []
     p.deny = deny or []
-    p.require_approval = require_approval or []
     return p
 
 
@@ -121,15 +119,6 @@ def test_global_deny_overrides_agent_allow():
     env = _make_env(global_deny=["Bash"])
     checker = _build(spec, env)
     assert not checker.check("Bash", {}).allowed
-
-
-def test_global_require_approval_overrides_agent_allow():
-    spec = _make_spec(permissions=_make_permissions(allow=["Bash"]), hitl_mode="never")
-    env = _make_env(global_require_approval=["Bash"])
-    checker = _build(spec, env)
-    result = checker.check("Bash", {})
-    assert not result.allowed
-    assert result.require_approval is True
 
 
 # ── agent-level deny overrides agent-level allow ───────────────────────────────

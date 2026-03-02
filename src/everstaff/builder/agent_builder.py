@@ -242,12 +242,11 @@ class AgentBuilder:
         from everstaff.permissions.chained import ChainedPermissionChecker
 
         global_cfg = self._env.config.permissions
-        # Global checker: strict=False — only deny/require_approval apply globally,
+        # Global checker: strict=False — only deny rules apply globally,
         # no whitelist restriction at this level.
         global_checker = RuleBasedChecker(
             allow=[],
             deny=global_cfg.deny,
-            require_approval=global_cfg.require_approval,
             strict=False,
         )
 
@@ -256,7 +255,6 @@ class AgentBuilder:
         agent_cfg = self._spec.permissions
         allow = list(agent_cfg.allow)
         deny = list(agent_cfg.deny)
-        require_approval = list(agent_cfg.require_approval)
 
         # Auto-inject spec.tools into allow — tools explicitly listed by the user are always permitted,
         # unless they are explicitly denied (deny wins over allow).
@@ -286,12 +284,11 @@ class AgentBuilder:
         agent_checker = RuleBasedChecker(
             allow=allow,
             deny=deny,
-            require_approval=require_approval,
             strict=True,
         )
 
         # If global has no rules, skip chaining for efficiency
-        if not global_cfg.deny and not global_cfg.require_approval:
+        if not global_cfg.deny:
             return agent_checker
 
         return ChainedPermissionChecker(global_checker, agent_checker)

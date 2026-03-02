@@ -1,3 +1,5 @@
+import warnings
+
 from everstaff.protocols import PermissionResult
 from everstaff.permissions.rule_checker import RuleBasedChecker
 
@@ -19,6 +21,27 @@ def test_permission_grant_scope_enum():
     assert PermissionGrantScope.PERMANENT == "permanent"
 
 
+# ── PermissionConfig deprecation ─────────────────────────────────────────────
+
+def test_permission_config_require_approval_deprecated():
+    from everstaff.permissions import PermissionConfig
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        cfg = PermissionConfig(allow=["Read"], deny=[], require_approval=["Bash"])
+        assert len(w) == 1
+        assert "deprecated" in str(w[0].message).lower()
+    assert cfg.require_approval == []
+
+
+def test_permission_config_no_warning_without_require_approval():
+    from everstaff.permissions import PermissionConfig
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        cfg = PermissionConfig(allow=["Read"], deny=[])
+        dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(dep_warnings) == 0
+
+
 # ── strict=True (default) ─────────────────────────────────────────────────────
 
 def test_strict_empty_allow_denies_everything():
@@ -38,37 +61,6 @@ def test_deny_wins_over_allow():
     checker = RuleBasedChecker(allow=["Bash"], deny=["Bash"])
     assert not checker.check("Bash", {}).allowed
     assert "deny" in checker.check("Bash", {}).reason.lower()
-
-
-def test_require_approval_wins_over_allow():
-    """require_approval fires even when the tool is also in allow."""
-    checker = RuleBasedChecker(
-        allow=["Bash"],
-        deny=[],
-        require_approval=["Bash"],
-    )
-    result = checker.check("Bash", {})
-    assert result.allowed is False
-    assert result.require_approval is True
-
-
-def test_deny_wins_over_require_approval():
-    checker = RuleBasedChecker(
-        allow=["Bash"],
-        deny=["Bash"],
-        require_approval=["Bash"],
-    )
-    result = checker.check("Bash", {})
-    assert result.allowed is False
-    assert result.require_approval is False  # deny, not approval
-
-
-def test_require_approval_with_strict_and_tool_not_in_allow():
-    """require_approval fires before the whitelist default-deny."""
-    checker = RuleBasedChecker(allow=[], deny=[], require_approval=["deploy*"])
-    result = checker.check("deploy-prod", {})
-    assert result.allowed is False
-    assert result.require_approval is True
 
 
 def test_wildcard_deny():
@@ -100,13 +92,6 @@ def test_non_strict_deny_still_blocks():
     assert checker.check("Read", {}).allowed
 
 
-def test_non_strict_require_approval_fires():
-    checker = RuleBasedChecker(allow=[], deny=[], require_approval=["deploy*"], strict=False)
-    result = checker.check("deploy-prod", {})
-    assert result.allowed is False
-    assert result.require_approval is True
-
-
 # ── merge ──────────────────────────────────────────────────────────────────────
 
 def test_merge_combines_allow_and_deny():
@@ -118,14 +103,6 @@ def test_merge_combines_allow_and_deny():
     assert merged.check("Read", {}).allowed
     assert merged.check("Glob", {}).allowed
     assert not merged.check("Edit", {}).allowed  # not in either allow list
-
-
-def test_merge_combines_require_approval():
-    c1 = RuleBasedChecker(allow=["send:*"], deny=[], require_approval=["send:*"])
-    c2 = RuleBasedChecker(allow=["delete:*"], deny=[], require_approval=["delete:*"])
-    merged = RuleBasedChecker.merge([c1, c2])
-    assert merged.check("send:email", {}).require_approval is True
-    assert merged.check("delete:file", {}).require_approval is True
 
 
 def test_merge_preserves_strict_true():
