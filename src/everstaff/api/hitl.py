@@ -22,6 +22,7 @@ class HitlDecision(BaseModel):
     decision: str                    # "approved" | "rejected" | option text | free text
     comment: Optional[str] = None
     resolved_by: str = "human"
+    grant_scope: Optional[str] = None
 
 
 def _is_expired(hitl_item: dict) -> bool:

@@ -34,6 +34,7 @@ class HitlResolution(BaseModel):
     comment: Optional[str] = None
     resolved_at: datetime
     resolved_by: str = "human"
+    grant_scope: Optional[str] = None  # "once" | "session" | "permanent"
 
 
 class ErrorResponse(BaseModel):
