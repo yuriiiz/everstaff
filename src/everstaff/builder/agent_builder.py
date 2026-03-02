@@ -124,8 +124,18 @@ class AgentBuilder:
         if getattr(self._spec, "enable_bootstrap", False):
             system_tool_names.update(("create_agent", "create_skill"))
 
+        # Resolve file_store BEFORE permissions (needed for session grants)
+        try:
+            file_store = self._env.build_file_store()
+        except NotImplementedError:
+            file_store = None
+
+        # Load session grants from session.json if resuming
+        session_grants = await self._load_session_grants(file_store)
+
         permissions = self._build_permissions(
             system_tool_names=system_tool_names,
+            session_grants=session_grants,
         )
 
         # 1b. Register tools from all providers into the shared registry
@@ -151,12 +161,6 @@ class AgentBuilder:
 
         # Resolve sessions_dir from environment (may be None for non-CLI envs)
         sessions_dir = self._env.sessions_dir() if callable(getattr(self._env, "sessions_dir", None)) else None
-
-        # Resolve file_store from environment (may raise NotImplementedError for non-CLI envs)
-        try:
-            file_store = self._env.build_file_store()
-        except NotImplementedError:
-            file_store = None
 
         # 3. Build context
         context = AgentContext(
@@ -284,6 +288,21 @@ class AgentBuilder:
             session_grants=session_grants or [],
             is_system_tool=lambda name: name in (system_tool_names or set()),
         )
+
+    async def _load_session_grants(self, file_store) -> list[str]:
+        """Load extra_permissions from session.json if resuming."""
+        if not self._session_id or file_store is None:
+            return []
+        try:
+            import json
+            path = f"{self._session_id}/session.json"
+            if not await file_store.exists(path):
+                return []
+            raw = await file_store.read(path)
+            data = json.loads(raw.decode())
+            return data.get("extra_permissions", [])
+        except Exception:
+            return []
 
     def _build_tool_registry(self, workdir: Path | None = None) -> DefaultToolRegistry:
         reg = DefaultToolRegistry()
