@@ -117,6 +117,29 @@ async def _resume_session_task(
                             tc_id = item.get("tool_call_id", "")
                             messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id))
                         await mem.save(session_id, messages)
+
+                        # Process grant_scope for tool_permission resolutions
+                        extra_perms = []
+                        for item in resolved_hitls:
+                            req = item.get("request", {})
+                            resp = item.get("response", {})
+                            if req.get("type") == "tool_permission" and resp.get("decision") == "approved":
+                                grant_scope = resp.get("grant_scope", "once")
+                                tool_name = req.get("tool_name", "")
+                                if not tool_name:
+                                    continue
+                                if grant_scope in ("session", "permanent"):
+                                    extra_perms.append(tool_name)
+                                if grant_scope == "permanent":
+                                    try:
+                                        from everstaff.permissions.definition_writer import YamlAgentDefinitionWriter
+                                        writer = YamlAgentDefinitionWriter(agents_dir=str(agents_dir))
+                                        await writer.add_allow_permission(agent_name, tool_name)
+                                    except Exception as wr_err:
+                                        logger.warning("Failed to write permanent grant for %s: %s", tool_name, wr_err)
+
+                        if extra_perms:
+                            await mem.save(session_id, messages, extra_permissions=extra_perms)
                 except Exception as read_err:
                     logger.warning("[session] failed to read session.json for HITL resume  session=%s  err=%s",
                                    _sid, read_err)
