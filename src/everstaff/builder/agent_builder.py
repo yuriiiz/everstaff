@@ -102,16 +102,31 @@ class AgentBuilder:
         sub_agent_provider = self._build_sub_agent_provider(model_id, workdir, session_id, cancellation)
         mcp_provider = await self._build_mcp_provider()
 
-        # Collect provider tool names so they can be auto-injected into the allow list.
+        # Collect system tool names (framework + provider)
         def _tool_name(t) -> str:
             return t.name if hasattr(t, "name") else t.definition.name
 
-        provider_tool_names = [
-            _tool_name(t)
-            for provider in (skill_provider, knowledge_provider, sub_agent_provider, mcp_provider)
-            for t in provider.get_tools()
-        ]
-        permissions = self._build_permissions(extra_allow=provider_tool_names)
+        system_tool_names: set[str] = set()
+
+        # Provider tools (skills, knowledge, sub-agent, MCP)
+        for provider in (skill_provider, knowledge_provider, sub_agent_provider, mcp_provider):
+            for t in provider.get_tools():
+                system_tool_names.add(_tool_name(t))
+
+        # Framework tools
+        hitl_mode = getattr(self._spec, "hitl_mode", "on_request")
+        if hitl_mode != "never":
+            system_tool_names.add("request_human_input")
+        if getattr(self._spec, "sub_agents", None):
+            system_tool_names.add("delegate_task_to_subagent")
+        if getattr(self._spec, "workflow", None):
+            system_tool_names.add("write_workflow_plan")
+        if getattr(self._spec, "enable_bootstrap", False):
+            system_tool_names.update(("create_agent", "create_skill"))
+
+        permissions = self._build_permissions(
+            system_tool_names=system_tool_names,
+        )
 
         # 1b. Register tools from all providers into the shared registry
         for tool in sub_agent_provider.get_tools():
@@ -237,61 +252,38 @@ class AgentBuilder:
     async def _build_tracer(self, session_id: str = ""):
         return self._env.build_tracer(session_id)
 
-    def _build_permissions(self, extra_allow: list[str] | None = None):
+    def _build_permissions(
+        self,
+        system_tool_names: set[str] | None = None,
+        session_grants: list[str] | None = None,
+    ):
         from everstaff.permissions.rule_checker import RuleBasedChecker
-        from everstaff.permissions.chained import ChainedPermissionChecker
+        from everstaff.permissions.dynamic_checker import DynamicPermissionChecker
 
         global_cfg = self._env.config.permissions
-        # Global checker: strict=False — only deny rules apply globally,
-        # no whitelist restriction at this level.
-        global_checker = RuleBasedChecker(
-            allow=[],
-            deny=global_cfg.deny,
-            strict=False,
-        )
 
-        # Agent checker: always strict=True (whitelist mode).
-        # AgentSpec.permissions always has a PermissionConfig default (never None).
+        # Global checker — only if global has any rules
+        global_checker = None
+        if global_cfg.allow or global_cfg.deny:
+            global_checker = RuleBasedChecker(
+                allow=global_cfg.allow,
+                deny=global_cfg.deny,
+            )
+
+        # Agent checker — explicit allow/deny from spec ONLY
+        # NO auto-injection of spec.tools
         agent_cfg = self._spec.permissions
-        allow = list(agent_cfg.allow)
-        deny = list(agent_cfg.deny)
-
-        # Auto-inject spec.tools into allow — tools explicitly listed by the user are always permitted,
-        # unless they are explicitly denied (deny wins over allow).
-        for t in (getattr(self._spec, "tools", None) or []):
-            if t not in allow and t not in deny:
-                allow.append(t)
-
-        # Auto-inject provider tools (use_skill, search_knowledge, MCP tools, etc.)
-        for t in (extra_allow or []):
-            if t not in allow and t not in deny:
-                allow.append(t)
-
-        # Unconditionally inject framework tools when their feature is enabled.
-        # Framework tools must always be reachable regardless of the allow list state.
-        hitl_mode = getattr(self._spec, "hitl_mode", "on_request")
-        if getattr(self._spec, "sub_agents", None) and "delegate_task_to_subagent" not in allow and "delegate_task_to_subagent" not in deny:
-            allow.append("delegate_task_to_subagent")
-        if hitl_mode != "never" and "request_human_input" not in allow and "request_human_input" not in deny:
-            allow.append("request_human_input")
-        if getattr(self._spec, "workflow", None) and "write_workflow_plan" not in allow and "write_workflow_plan" not in deny:
-            allow.append("write_workflow_plan")
-        if getattr(self._spec, "enable_bootstrap", False):
-            for tool_name in ("create_agent", "create_skill"):
-                if tool_name not in allow and tool_name not in deny:
-                    allow.append(tool_name)
-
         agent_checker = RuleBasedChecker(
-            allow=allow,
-            deny=deny,
-            strict=True,
+            allow=list(agent_cfg.allow),
+            deny=list(agent_cfg.deny),
         )
 
-        # If global has no rules, skip chaining for efficiency
-        if not global_cfg.deny:
-            return agent_checker
-
-        return ChainedPermissionChecker(global_checker, agent_checker)
+        return DynamicPermissionChecker(
+            global_checker=global_checker,
+            agent_checker=agent_checker,
+            session_grants=session_grants or [],
+            is_system_tool=lambda name: name in (system_tool_names or set()),
+        )
 
     def _build_tool_registry(self, workdir: Path | None = None) -> DefaultToolRegistry:
         reg = DefaultToolRegistry()

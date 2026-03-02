@@ -1,11 +1,19 @@
-"""Tests for AgentBuilder._build_permissions() under new strict semantics."""
+"""Tests for AgentBuilder._build_permissions() with DynamicPermissionChecker."""
 from unittest.mock import MagicMock
 
+from everstaff.permissions.dynamic_checker import DynamicPermissionChecker
 
-def _make_env(global_deny=None):
+
+def _make_env(global_deny=None, global_allow=None):
     """Build a minimal RuntimeEnvironment mock."""
-    cfg = MagicMock()
-    cfg.permissions.deny = global_deny or []
+    from everstaff.permissions import PermissionConfig
+    from everstaff.core.config import FrameworkConfig
+    from everstaff.schema.model_config import ModelMapping
+
+    cfg = FrameworkConfig(
+        model_mappings={"smart": ModelMapping(model_id="fake/m")},
+        permissions=PermissionConfig(allow=global_allow or [], deny=global_deny or []),
+    )
     env = MagicMock()
     env.config = cfg
     return env
@@ -18,110 +26,136 @@ def _make_spec(
     hitl_mode="on_request",
     workflow=None,
 ):
-    spec = MagicMock()
-    spec.configure_mock(**{
-        "tools": tools or [],
-        "sub_agents": sub_agents,
-        "hitl_mode": hitl_mode,
-        "workflow": workflow,
-    })
-    # AgentSpec.permissions is never None; default is PermissionConfig() which has empty lists.
-    spec.permissions = permissions if permissions is not None else _make_permissions(allow=[])
+    from everstaff.schema.agent_spec import AgentSpec
+    from everstaff.permissions import PermissionConfig
+
+    perm = permissions if permissions is not None else PermissionConfig()
+    spec = AgentSpec(
+        agent_name="TestAgent",
+        tools=tools or [],
+        hitl_mode=hitl_mode,
+        permissions=perm,
+    )
+    # sub_agents and workflow are set via model fields, but we override them
+    # directly here for convenience since they require complex objects.
+    if sub_agents is not None:
+        object.__setattr__(spec, "sub_agents", sub_agents)
+    if workflow is not None:
+        object.__setattr__(spec, "workflow", workflow)
     return spec
 
 
 def _make_permissions(allow=None, deny=None):
-    p = MagicMock()
-    p.allow = allow or []
-    p.deny = deny or []
-    return p
+    from everstaff.permissions import PermissionConfig
+    return PermissionConfig(allow=allow or [], deny=deny or [])
 
 
-def _build(spec, env):
+def _build(spec, env, system_tool_names=None):
     from everstaff.builder.agent_builder import AgentBuilder
     builder = AgentBuilder.__new__(AgentBuilder)
     builder._spec = spec
     builder._env = env
-    return builder._build_permissions()
+    return builder._build_permissions(system_tool_names=system_tool_names or set())
 
 
-# ── empty PermissionConfig (the real default AgentSpec produces) ───────────────
+# -- returns DynamicPermissionChecker ----------------------------------------
 
-def test_empty_permissions_denies_plain_tool():
-    """Empty allow list → strict whitelist → plain tools denied."""
+def test_returns_dynamic_checker():
+    """_build_permissions always returns DynamicPermissionChecker."""
     spec = _make_spec(permissions=_make_permissions(allow=[]), hitl_mode="never")
     checker = _build(spec, _make_env())
-    assert not checker.check("Bash", {}).allowed
+    assert isinstance(checker, DynamicPermissionChecker)
 
 
-def test_empty_permissions_allows_hitl_tool():
-    """Empty allow + hitl_mode=on_request → request_human_input auto-injected."""
-    spec = _make_spec(permissions=_make_permissions(allow=[]), hitl_mode="on_request")
+# -- empty PermissionConfig (the real default AgentSpec produces) ------------
+
+def test_empty_permissions_unknown_tool_triggers_hitl():
+    """Empty allow list -> unknown tools trigger needs_hitl (not hard deny)."""
+    spec = _make_spec(permissions=_make_permissions(allow=[]), hitl_mode="never")
     checker = _build(spec, _make_env())
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert result.needs_hitl
+
+
+def test_system_tool_allowed_via_is_system():
+    """System tools (e.g. request_human_input) are allowed via is_system_tool."""
+    spec = _make_spec(permissions=_make_permissions(allow=[]), hitl_mode="on_request")
+    checker = _build(spec, _make_env(), system_tool_names={"request_human_input"})
     assert checker.check("request_human_input", {}).allowed
 
 
-def test_empty_permissions_allows_delegate_when_sub_agents():
+def test_system_tool_delegate_allowed():
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         sub_agents={"worker": MagicMock()},
         hitl_mode="never",
     )
-    checker = _build(spec, _make_env())
+    checker = _build(spec, _make_env(), system_tool_names={"delegate_task_to_subagent"})
     assert checker.check("delegate_task_to_subagent", {}).allowed
 
 
-def test_empty_permissions_allows_workflow_when_enabled():
+def test_system_tool_workflow_allowed():
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         workflow=MagicMock(),
         hitl_mode="never",
     )
-    checker = _build(spec, _make_env())
+    checker = _build(spec, _make_env(), system_tool_names={"write_workflow_plan"})
     assert checker.check("write_workflow_plan", {}).allowed
 
 
-# ── permissions field present ──────────────────────────────────────────────────
+# -- permissions field present -----------------------------------------------
 
-def test_empty_allow_denies_plain_tool():
-    """permissions.allow=[] → strict → plain tool denied."""
+def test_empty_allow_triggers_hitl_for_plain_tool():
+    """permissions.allow=[] -> plain tool triggers HITL."""
     spec = _make_spec(permissions=_make_permissions(allow=[]), hitl_mode="never")
     checker = _build(spec, _make_env())
-    assert not checker.check("Bash", {}).allowed
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert result.needs_hitl
 
 
 def test_explicit_allow_permits_tool():
     spec = _make_spec(permissions=_make_permissions(allow=["Bash"]), hitl_mode="never")
     checker = _build(spec, _make_env())
     assert checker.check("Bash", {}).allowed
-    assert not checker.check("Read", {}).allowed
+    result = checker.check("Read", {})
+    assert not result.allowed
+    assert result.needs_hitl
 
 
-def test_framework_tools_injected_even_with_empty_allow():
-    """Framework tools are injected unconditionally when features are enabled."""
+def test_framework_tools_allowed_via_system_tool_names():
+    """Framework tools are allowed when passed as system_tool_names."""
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         hitl_mode="on_request",
         sub_agents={"w": MagicMock()},
         workflow=MagicMock(),
     )
-    checker = _build(spec, _make_env())
+    system_tools = {"request_human_input", "delegate_task_to_subagent", "write_workflow_plan"}
+    checker = _build(spec, _make_env(), system_tool_names=system_tools)
     assert checker.check("request_human_input", {}).allowed
     assert checker.check("delegate_task_to_subagent", {}).allowed
     assert checker.check("write_workflow_plan", {}).allowed
-    assert not checker.check("Bash", {}).allowed  # not a framework tool
+    # Non-system tool still triggers HITL
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert result.needs_hitl
 
 
-# ── global deny overrides agent allow ─────────────────────────────────────────
+# -- global deny overrides agent allow --------------------------------------
 
 def test_global_deny_overrides_agent_allow():
     spec = _make_spec(permissions=_make_permissions(allow=["Bash"]), hitl_mode="never")
     env = _make_env(global_deny=["Bash"])
     checker = _build(spec, env)
-    assert not checker.check("Bash", {}).allowed
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert not result.needs_hitl  # hard deny, not HITL
 
 
-# ── agent-level deny overrides agent-level allow ───────────────────────────────
+# -- agent-level deny overrides agent-level allow ---------------------------
 
 def test_agent_deny_overrides_agent_allow():
     """Agent-level deny wins over agent-level allow."""
@@ -131,69 +165,61 @@ def test_agent_deny_overrides_agent_allow():
     )
     checker = _build(spec, _make_env())
     assert checker.check("Bash", {}).allowed
-    assert not checker.check("Read", {}).allowed
+    result = checker.check("Read", {})
+    assert not result.allowed
+    assert not result.needs_hitl  # hard deny
 
 
-# ── spec.tools auto-inject ─────────────────────────────────────────────────────
+# -- spec.tools NO LONGER auto-injected ------------------------------------
 
-def test_spec_tools_auto_injected_into_allow():
-    """Tools listed in spec.tools are automatically permitted."""
+def test_spec_tools_not_auto_injected_into_allow():
+    """Tools listed in spec.tools are NOT automatically permitted (new behavior)."""
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         tools=["Bash", "Read"],
         hitl_mode="never",
     )
     checker = _build(spec, _make_env())
-    assert checker.check("Bash", {}).allowed
-    assert checker.check("Read", {}).allowed
-    assert not checker.check("Glob", {}).allowed
-
-
-def test_spec_tools_auto_injected_with_empty_permissions():
-    """spec.tools auto-injected even when permissions has empty allow list."""
-    spec = _make_spec(
-        permissions=_make_permissions(allow=[]),
-        tools=["Read"],
-        hitl_mode="never",
-    )
-    checker = _build(spec, _make_env())
-    assert checker.check("Read", {}).allowed
-    assert not checker.check("Bash", {}).allowed
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert result.needs_hitl  # triggers HITL, not hard deny
 
 
 def test_spec_tools_in_deny_still_blocked():
-    """spec.tools that are in deny list are NOT injected into allow (deny wins)."""
+    """spec.tools that are in deny list are denied (hard deny)."""
     spec = _make_spec(
         permissions=_make_permissions(allow=[], deny=["Bash"]),
         tools=["Bash", "Read"],
         hitl_mode="never",
     )
     checker = _build(spec, _make_env())
-    assert not checker.check("Bash", {}).allowed  # denied — not injected into allow
-    assert checker.check("Read", {}).allowed       # allowed via spec.tools
+    result = checker.check("Bash", {})
+    assert not result.allowed
+    assert not result.needs_hitl  # hard deny
 
 
-# ── bootstrap tools injection ──────────────────────────────────────────────────
+# -- bootstrap tools via system_tool_names ----------------------------------
 
-def test_bootstrap_tools_injected_when_enabled():
-    """enable_bootstrap=True auto-injects create_agent and create_skill into allow."""
+def test_bootstrap_tools_allowed_via_system_tools():
+    """enable_bootstrap tools are allowed when passed as system_tool_names."""
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         hitl_mode="never",
     )
     spec.enable_bootstrap = True
-    checker = _build(spec, _make_env())
+    checker = _build(spec, _make_env(), system_tool_names={"create_agent", "create_skill"})
     assert checker.check("create_agent", {}).allowed
     assert checker.check("create_skill", {}).allowed
 
 
-def test_bootstrap_tools_not_injected_when_disabled():
-    """enable_bootstrap=False does not inject bootstrap tools."""
+def test_bootstrap_tools_not_in_system_tools_trigger_hitl():
+    """Bootstrap tools not in system_tool_names trigger HITL."""
     spec = _make_spec(
         permissions=_make_permissions(allow=[]),
         hitl_mode="never",
     )
     spec.enable_bootstrap = False
     checker = _build(spec, _make_env())
-    assert not checker.check("create_agent", {}).allowed
-    assert not checker.check("create_skill", {}).allowed
+    result = checker.check("create_agent", {})
+    assert not result.allowed
+    assert result.needs_hitl
