@@ -997,12 +997,20 @@ export default function AgentStore() {
                                                     </div>
 
 
-                                                    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #f3f4f6' }}>
-                                                        <Toggle
-                                                            checked={!!selectedAgent.enable_bootstrap}
-                                                            onChange={val => updateField('enable_bootstrap', val)}
-                                                            label="On-demand Agent/Skills Provisioning"
-                                                        />
+                                                    <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#111827' }}>ON-DEMAND PROVISIONING</h4>
+                                                            <Toggle
+                                                                checked={!!selectedAgent.enable_bootstrap}
+                                                                onChange={val => updateField('enable_bootstrap', val)}
+                                                                label="ENABLE PROVISIONING"
+                                                            />
+                                                        </div>
+                                                        <div style={{ marginTop: '16px', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                                            <div style={{ fontSize: '12px', color: '#64748b', lineHeight: '1.5' }}>
+                                                                <strong>On-demand Agent/Skills Provisioning:</strong> When enabled, this agent can automatically create and equip necessary skills or sub-agents dynamically based on task requirements.
+                                                            </div>
+                                                        </div>
                                                     </div>
 
                                                     <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>

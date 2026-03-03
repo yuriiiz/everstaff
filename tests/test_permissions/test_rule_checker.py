@@ -1,5 +1,3 @@
-import warnings
-
 from everstaff.protocols import PermissionResult
 from everstaff.permissions.rule_checker import RuleBasedChecker
 
@@ -19,27 +17,6 @@ def test_permission_grant_scope_enum():
     assert PermissionGrantScope.ONCE == "once"
     assert PermissionGrantScope.SESSION == "session"
     assert PermissionGrantScope.PERMANENT == "permanent"
-
-
-# ── PermissionConfig deprecation ─────────────────────────────────────────────
-
-def test_permission_config_require_approval_deprecated():
-    from everstaff.permissions import PermissionConfig
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        cfg = PermissionConfig(allow=["Read"], deny=[], require_approval=["Bash"])
-        assert len(w) == 1
-        assert "deprecated" in str(w[0].message).lower()
-    assert cfg.require_approval == []
-
-
-def test_permission_config_no_warning_without_require_approval():
-    from everstaff.permissions import PermissionConfig
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        cfg = PermissionConfig(allow=["Read"], deny=[])
-        dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(dep_warnings) == 0
 
 
 # ── strict=True (default) ─────────────────────────────────────────────────────

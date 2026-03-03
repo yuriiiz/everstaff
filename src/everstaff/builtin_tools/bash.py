@@ -10,10 +10,20 @@ from everstaff.tools.native import tool
 logger = logging.getLogger(__name__)
 
 
+def _bash_permission_hint(args):
+    from everstaff.protocols import PermissionHint
+    cmd = args.get("command", "").strip()
+    if not cmd:
+        return PermissionHint("command", "*")
+    prefix = cmd.split()[0]
+    return PermissionHint("command", f"{prefix} *")
+
+
 def make_bash_tool(workdir: Path):
     """Return a Bash NativeTool scoped to *workdir*."""
 
-    @tool(name="Bash", description="Execute a shell command and return stdout + stderr.")
+    @tool(name="Bash", description="Execute a shell command and return stdout + stderr.",
+          permission_hint=_bash_permission_hint)
     async def bash(command: str) -> str:
         """Execute a terminal command and return the combined output."""
         try:

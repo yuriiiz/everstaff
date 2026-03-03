@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal, Cpu, Bot, UserCheck, Check, Search, X, Sparkles, Zap, Filter } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -265,33 +265,43 @@ export default function SessionStore() {
 
         // Case 2: New agent chat requested
         if (agentNameParam || agentUuidParam) {
+            // Resolve display name if we only have UUID or it's a built-in
+            let displayAgentName = agentNameParam;
+            if (agentUuidParam === 'builtin_agent_creator') displayAgentName = 'Agent Architect';
+            else if (agentUuidParam === 'builtin_skill_creator') displayAgentName = 'Skill Forge';
+            else if (!displayAgentName && agentUuidParam && availableAgents.length > 0) {
+                const agent = availableAgents.find(a => a.uuid === agentUuidParam);
+                if (agent) displayAgentName = agent.agent_name;
+            }
+
             const existingMatch = selectedSession && selectedSession.isNew &&
                 (agentNameParam ? selectedSession.agent_name === agentNameParam : selectedSession.agent_uuid === agentUuidParam);
 
-            if (!existingMatch) {
-                console.log(`[debug] Preparing pending session for agent: ${agentNameParam || agentUuidParam}`);
-
-                // Resolve display name if we only have UUID or it's a built-in
-                let displayAgentName = agentNameParam;
-                if (agentUuidParam === 'builtin_agent_creator') displayAgentName = 'Agent Architect';
-                else if (agentUuidParam === 'builtin_skill_creator') displayAgentName = 'Skill Forge';
-                else if (!displayAgentName && agentUuidParam && availableAgents.length > 0) {
-                    const agent = availableAgents.find(a => a.uuid === agentUuidParam);
-                    if (agent) displayAgentName = agent.agent_name;
+            if (existingMatch) {
+                // Re-resolve display name if agents loaded after initial creation
+                if (displayAgentName && selectedSession.agent_name === 'Agent' && displayAgentName !== 'Agent') {
+                    setSelectedSession(prev => ({
+                        ...prev,
+                        agent_name: displayAgentName,
+                        metadata: { ...prev.metadata, title: `New Chat with ${displayAgentName}` }
+                    }));
                 }
-
-                const pendingSession = {
-                    agent_name: displayAgentName || 'Agent',
-                    agent_uuid: agentUuidParam,
-                    isNew: true,
-                    session_id: null,
-                    messages: [],
-                    metadata: { title: `New Chat with ${displayAgentName || 'Agent'}` }
-                };
-                setSelectedSession(pendingSession);
-                setMessages([]);
-                setIsConnected(false);
+                return;
             }
+
+            console.log(`[debug] Preparing pending session for agent: ${agentNameParam || agentUuidParam}`);
+
+            const pendingSession = {
+                agent_name: displayAgentName || 'Agent',
+                agent_uuid: agentUuidParam,
+                isNew: true,
+                session_id: null,
+                messages: [],
+                metadata: { title: `New Chat with ${displayAgentName || 'Agent'}` }
+            };
+            setSelectedSession(pendingSession);
+            setMessages([]);
+            setIsConnected(false);
             return;
         }
 
@@ -334,10 +344,30 @@ export default function SessionStore() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'hitl_request') {
-                    // Update pending HITL list
-                    fetch('/api/hitl')
-                        .then(res => res.json())
-                        .then(data => setHitlRequests(data));
+                    // Directly populate from WS event (avoids race with /api/hitl fetch)
+                    setHitlRequests(prev => {
+                        if (prev.some(r => r.hitl_id === data.hitl_id)) return prev;
+                        return [...prev, {
+                            hitl_id: data.hitl_id,
+                            session_id: data.session_id,
+                            tool_call_id: data.tool_call_id || '',
+                            status: 'pending',
+                            prompt: data.prompt,
+                            hitl_type: data.hitl_type,
+                            options: data.options || [],
+                            context: data.context || '',
+                            tool_name: data.tool_name,
+                            tool_args: data.tool_args,
+                            request: {
+                                type: data.hitl_type,
+                                prompt: data.prompt,
+                                options: data.options || [],
+                                context: data.context || '',
+                                tool_name: data.tool_name,
+                                tool_args: data.tool_args,
+                            },
+                        }];
+                    });
                 }
                 if (data.type === 'session_end') {
                     // Debounced session list refresh (picks up new sub-sessions)
@@ -481,8 +511,38 @@ export default function SessionStore() {
                 } else if (data.type === 'status') {
                     setIsProcessing(data.status === 'busy');
                     if (data.content !== undefined) setStatusContent(data.content);
-                } else if (data.type === 'hitl_request' || data.type === 'hitl_resolved') {
-                    // Refresh HITL requests and session status (so UI shows buttons immediately)
+                } else if (data.type === 'hitl_request') {
+                    // Directly populate from WS event (avoids race with /api/hitl fetch)
+                    setHitlRequests(prev => {
+                        if (prev.some(r => r.hitl_id === data.hitl_id)) return prev;
+                        return [...prev, {
+                            hitl_id: data.hitl_id,
+                            session_id: data.session_id || sessionId,
+                            tool_call_id: data.tool_call_id || '',
+                            status: 'pending',
+                            prompt: data.prompt,
+                            hitl_type: data.hitl_type,
+                            options: data.options || [],
+                            context: data.context || '',
+                            tool_name: data.tool_name,
+                            tool_args: data.tool_args,
+                            tool_permission_options: data.tool_permission_options || [],
+                            request: {
+                                type: data.hitl_type,
+                                prompt: data.prompt,
+                                options: data.options || [],
+                                context: data.context || '',
+                                tool_name: data.tool_name,
+                                tool_args: data.tool_args,
+                                tool_permission_options: data.tool_permission_options || [],
+                            },
+                        }];
+                    });
+                    // Agent is paused for HITL — stop processing indicator
+                    setIsProcessing(false);
+                } else if (data.type === 'hitl_resolved') {
+                    // Remove resolved item and refresh from server
+                    setHitlRequests(prev => prev.filter(r => r.hitl_id !== data.hitl_id));
                     fetch('/api/hitl')
                         .then(res => res.json())
                         .then(data => setHitlRequests(data));
@@ -553,7 +613,10 @@ export default function SessionStore() {
     // Any pending HITL request means chat input should resolve it (not send a new user_message)
     const isWaitingForInput = !!currentHitlRequest;
 
-    const handleHitlResolve = async (hitlId, resolution) => {
+    const selectedSessionIdRef = useRef(selectedSession?.session_id);
+    selectedSessionIdRef.current = selectedSession?.session_id;
+
+    const handleHitlResolve = useCallback(async (hitlId, resolution) => {
         setIsProcessing(true);
         try {
             await fetch(`/api/hitl/${hitlId}/resolve`, {
@@ -563,8 +626,8 @@ export default function SessionStore() {
             });
             setHitlRequests(prev => prev.filter(r => r.hitl_id !== hitlId));
             // Refetch messages and sessions to reflect resolved state
-            if (selectedSession?.session_id) {
-                fetchMessages(selectedSession.session_id);
+            if (selectedSessionIdRef.current) {
+                fetchMessages(selectedSessionIdRef.current);
             }
             fetchSessions();
         } catch (error) {
@@ -572,12 +635,15 @@ export default function SessionStore() {
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, []);
 
     // Relaxed isAgentOnline: if availableAgents is empty, assume online (avoids flicker/stuck during load)
     const isAgentOnline = (availableAgents.length === 0 && !loadingAgents) ||
         selectedSession?.agent_uuid?.startsWith('builtin_') ||
-        (selectedSession?.agent_name ? availableAgents.some(a => a?.agent_name && a.agent_name.toLowerCase() === (selectedSession.agent_name || '').toLowerCase()) : false);
+        availableAgents.some(a =>
+            (a?.uuid && a.uuid === selectedSession?.agent_uuid) ||
+            (a?.agent_name && a.agent_name.toLowerCase() === (selectedSession?.agent_name || '').toLowerCase())
+        );
 
     const isNearBottom = () => {
         const el = scrollRef.current;
@@ -796,31 +862,33 @@ export default function SessionStore() {
         return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
 
+    // Stable greeting message object — only changes when selectedSession changes
+    const greetingMessage = useMemo(() => {
+        if (!selectedSession) return null;
+        const agentCreatorGreeting = `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`;
+        const skillCreatorGreeting = `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`;
+        const greetings = {
+            'Agent Creator': agentCreatorGreeting,
+            'Agent Architect': agentCreatorGreeting,
+            'Skill Creator': skillCreatorGreeting,
+            'Skill Forge': skillCreatorGreeting,
+        };
+        const greeting = greetings[selectedSession.agent_name]
+            || (selectedSession.agent_name ? `Hello! I am **${selectedSession.agent_name}**. How can I help you today?` : null);
+        if (!greeting) return null;
+        return {
+            role: 'assistant',
+            content: greeting,
+            timestamp: selectedSession.created_at ? new Date(selectedSession.created_at).getTime() - 1000 : 0,
+            _isFakeGreeting: true,
+        };
+    }, [selectedSession?.session_id, selectedSession?.agent_name, selectedSession?.created_at]);
+
     // Helper to merge assistant tool calls with subsequent tool outputs for rendering
-    const getRenderableMessages = () => {
+    const renderMessages = useMemo(() => {
         const rendered = [];
 
-        // Hardcoded greeting — always prepended at render time, never stored in messages state
-        if (selectedSession) {
-            const agentCreatorGreeting = `Welcome to **Agent Architect**! I'm here to help you bring your AI vision to life.\n\nWhat kind of agent would you like to build? You can describe a role, a set of duties, or a specific workflow.\n\n![Agent Workflow](/agent_workflow_v3.png)`;
-            const skillCreatorGreeting = `I am the **Skill Forge**, ready to implement custom logic for your agents.\n\nTell me about the capability you want to create. What input should it take, and what should it do?\n\n![Skill Workflow](/agent_workflow_v3.png)`;
-            const greetings = {
-                'Agent Creator': agentCreatorGreeting,
-                'Agent Architect': agentCreatorGreeting,
-                'Skill Creator': skillCreatorGreeting,
-                'Skill Forge': skillCreatorGreeting,
-            };
-            const greeting = greetings[selectedSession.agent_name]
-                || (selectedSession.agent_name ? `Hello! I am **${selectedSession.agent_name}**. How can I help you today?` : null);
-            if (greeting) {
-                rendered.push({
-                    role: 'assistant',
-                    content: greeting,
-                    timestamp: selectedSession.created_at ? new Date(selectedSession.created_at).getTime() - 1000 : 0,
-                    _isFakeGreeting: true,
-                });
-            }
-        }
+        if (greetingMessage) rendered.push(greetingMessage);
 
         let i = 0;
         while (i < messages.length) {
@@ -848,9 +916,7 @@ export default function SessionStore() {
             }
         }
         return rendered;
-    };
-
-    const renderMessages = getRenderableMessages();
+    }, [greetingMessage, messages]);
 
     // Group sessions by parent_session_id
     const buildSessionTree = () => {
@@ -1169,12 +1235,44 @@ export default function SessionStore() {
                                     key={idx}
                                     message={m}
                                     agentName={selectedSession.agent_name}
-                                    hitlRequests={hitlRequests}
+                                    hitlRequests={[...hitlRequests, ...(selectedSession?.hitl_requests || [])]}
                                     onResolve={handleHitlResolve}
                                     sessionId={selectedSession.session_id}
                                     sessionStatus={selectedSession.status}
                                 />
                             ))}
+
+                            {/* Inline tool permission HITL cards */}
+                            {hitlRequests
+                                .filter(r => r.session_id === selectedSession.session_id && r.status === 'pending' && (r.hitl_type === 'tool_permission' || r.request?.type === 'tool_permission'))
+                                .map(r => (
+                                    <div key={r.hitl_id} style={{ display: 'flex', gap: '12px', padding: '8px 0' }}>
+                                        <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#eff6ff', color: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px', marginTop: '0px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                                            <Bot size={16} />
+                                        </div>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <HitlHistoryCard
+                                                args={{
+                                                    prompt: r.request?.prompt || r.prompt,
+                                                    type: 'tool_permission',
+                                                    options: r.request?.options || r.options || [],
+                                                    context: r.request?.context || r.context || '',
+                                                    hitl_id: r.hitl_id,
+                                                    tool_name: r.request?.tool_name || r.tool_name,
+                                                    tool_args: r.request?.tool_args || r.tool_args,
+                                                    tool_permission_options: r.request?.tool_permission_options || r.tool_permission_options || [],
+                                                }}
+                                                output={null}
+                                                hitlRequests={hitlRequests}
+                                                onResolve={handleHitlResolve}
+                                                sessionId={selectedSession.session_id}
+                                                sessionStatus={selectedSession.status}
+                                                toolCallId={r.tool_call_id}
+                                            />
+                                        </div>
+                                    </div>
+                                ))
+                            }
                         </div>
 
                         {/* Input Area */}
@@ -1816,7 +1914,7 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
     }
 
     let pendingRequest = hitlRequests?.find(r => {
-        if (r.session_id !== sessionId || r.status !== 'pending') return false;
+        if (r.session_id !== sessionId || (r.status !== 'pending' && r.status !== 'expired')) return false;
 
         // 1. Match by tool_call_id (most reliable)
         if (toolCallId && r.tool_call_id === toolCallId) return true;
@@ -1861,9 +1959,10 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
         }
     }
 
-    const isPending = !!pendingRequest && !output;
+    const isPending = !!pendingRequest && pendingRequest.status === 'pending' && !output;
+    const isExpired = !!pendingRequest && pendingRequest.status === 'expired' && !output;
 
-    const handleAction = async (decision, comment = "") => {
+    const handleAction = async (decision, comment = "", extraFields = {}) => {
         if (!isPending) return;
         setIsSubmitting(true);
         try {
@@ -1895,7 +1994,8 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
 
             await onResolve(hitlIdToResolve, {
                 decision: decision,
-                comment: comment
+                comment: comment,
+                ...extraFields,
             });
         } catch (error) {
             console.error("Failed to resolve HITL:", error);
@@ -1909,8 +2009,8 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
 
     return (
         <div style={{
-            background: isPending ? '#ffffff' : '#f8fafc',
-            border: isPending ? '1px solid #3b82f6' : '1px solid #e2e8f0',
+            background: isPending ? '#ffffff' : (isExpired ? '#fff1f2' : '#f8fafc'),
+            border: isPending ? '1px solid #3b82f6' : (isExpired ? '1px solid #fecdd3' : '1px solid #e2e8f0'),
             borderRadius: '12px',
             padding: '16px',
             width: '100%',
@@ -1928,7 +2028,7 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    color: isPending ? '#2563eb' : '#64748b'
+                    color: isPending ? '#2563eb' : (isExpired ? '#e11d48' : '#64748b')
                 }}>
                     <UserCheck size={16} strokeWidth={2.5} />
                     <span style={{
@@ -1937,7 +2037,7 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
                         textTransform: 'uppercase',
                         letterSpacing: '0.06em'
                     }}>
-                        {isPending ? 'Human Input Required' : 'Interaction Resolved'}
+                        {isPending ? (type === 'tool_permission' ? 'Tool Permission Required' : 'Human Input Required') : (isExpired || output?.content === 'expired' ? 'Interaction Expired' : 'Interaction Resolved')}
                     </span>
                 </div>
                 {isPending && (
@@ -1971,8 +2071,26 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
                 </div>
             )}
 
+            {/* Tool Permission Prompt */}
+            {type === 'tool_permission' && prompt && (
+                <div style={{
+                    fontSize: '13px',
+                    color: '#1e293b',
+                    lineHeight: '1.6',
+                    background: isPending ? '#fffbeb' : '#f8fafc',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: isPending ? '1px solid #fde68a' : '1px solid #e2e8f0',
+                    fontFamily: 'monospace',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                }}>
+                    {prompt}
+                </div>
+            )}
+
             {/* Prompt Content */}
-            {type !== 'notify' && type !== 'provide_input' && prompt && (
+            {type !== 'notify' && type !== 'provide_input' && type !== 'tool_permission' && prompt && (
                 <div style={{
                     fontSize: '14px',
                     color: '#1e293b',
@@ -1990,6 +2108,73 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
             {isPending ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     {/* Interaction Types */}
+                    {type === 'tool_permission' && (() => {
+                        const structuredOpts = parsedArgs?.tool_permission_options
+                            || pendingRequest?.tool_permission_options
+                            || pendingRequest?.request?.tool_permission_options
+                            || [];
+                        const colorMap = {
+                            'reject': '#ef4444',
+                            'approve_once': '#10b981',
+                            'approve_session_narrow': '#3b82f6',
+                            'approve_session': '#3b82f6',
+                            'approve_permanent_narrow': '#6366f1',
+                            'approve_permanent': '#6366f1',
+                        };
+                        const buttons = structuredOpts.length > 0
+                            ? structuredOpts.map(opt => ({
+                                key: opt.id,
+                                label: opt.label,
+                                color: colorMap[opt.id] || '#3b82f6',
+                                primary: opt.id === 'approve_once',
+                                scope: opt.scope,
+                                pattern: opt.pattern,
+                            }))
+                            : [
+                                { key: 'approve_once', label: 'Allow Once', color: '#10b981', primary: true },
+                                { key: 'approve_session', label: 'Allow for Session', color: '#3b82f6', primary: false },
+                                { key: 'approve_permanent', label: 'Always Allow', color: '#6366f1', primary: false },
+                                { key: 'reject', label: 'Reject', color: '#ef4444', primary: false },
+                            ];
+                        return (
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                {buttons.map(btn => (
+                                    <button
+                                        key={btn.key}
+                                        disabled={isSubmitting}
+                                        onClick={() => handleAction(btn.key, "", {
+                                            grant_scope: btn.scope || undefined,
+                                            permission_pattern: btn.pattern || undefined,
+                                        })}
+                                        style={{
+                                            padding: '10px 16px',
+                                            background: isSubmitting ? '#f8fafc' : btn.primary ? btn.color : '#ffffff',
+                                            color: isSubmitting ? '#94a3b8' : btn.primary ? 'white' : btn.color,
+                                            border: btn.primary ? 'none' : `1px solid ${btn.color}30`,
+                                            borderRadius: '10px',
+                                            fontSize: '13px',
+                                            fontWeight: 700,
+                                            cursor: isSubmitting ? 'default' : 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '8px',
+                                            boxShadow: btn.primary && !isSubmitting ? `0 2px 4px ${btn.color}33` : 'none',
+                                            transition: 'all 0.2s'
+                                        }}
+                                        onMouseEnter={e => { if (!isSubmitting) { e.currentTarget.style.opacity = '0.85'; } }}
+                                        onMouseLeave={e => { if (!isSubmitting) { e.currentTarget.style.opacity = '1'; } }}
+                                    >
+                                        {isSubmitting ? (
+                                            <div style={{ width: '14px', height: '14px', border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                                        ) : btn.key === 'reject' ? <X size={14} /> : <Check size={14} />}
+                                        {isSubmitting ? '...' : btn.label}
+                                    </button>
+                                ))}
+                            </div>
+                        );
+                    })()}
+
                     {type === 'approve_reject' && (
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button

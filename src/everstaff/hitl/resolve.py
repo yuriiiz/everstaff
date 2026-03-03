@@ -45,6 +45,7 @@ async def resolve_hitl(
     comment: str | None = None,
     resolved_by: str = "human",
     grant_scope: str | None = None,
+    permission_pattern: str | None = None,
     *,
     file_store: "FileStore",
 ) -> "HitlResolution":
@@ -80,6 +81,7 @@ async def resolve_hitl(
         resolved_at=datetime.now(timezone.utc),
         resolved_by=resolved_by,
         grant_scope=grant_scope,
+        permission_pattern=permission_pattern,
     )
     target["status"] = "resolved"
     target["response"] = resolution.model_dump(mode="json")

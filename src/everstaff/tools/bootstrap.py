@@ -85,9 +85,10 @@ class CreateAgentTool:
             import uuid as _uuid
             persist_data["uuid"] = str(_uuid.uuid4())
         agents_dir.mkdir(parents=True, exist_ok=True)
-        dest = agents_dir / f"{name}.yaml"
+        # Use {uuid}.yaml as filename
+        dest = agents_dir / f"{persist_data['uuid']}.yaml"
         dest.write_text(yaml.dump(persist_data, allow_unicode=True, sort_keys=False))
-        logger.info("create_agent: persisted agent '%s' to %s", name, dest)
+        logger.info("create_agent: persisted agent '%s' (uuid=%s) to %s", name, persist_data['uuid'], dest)
 
     async def execute(self, args: dict[str, Any]) -> ToolResult:
         name = args["name"]
@@ -96,15 +97,7 @@ class CreateAgentTool:
         skills = args.get("skills", [])
         persist = args.get("persist", False)
 
-        # Conflict check: if persist requested, ensure no existing agent in agents_dir
-        if persist:
-            agents_dir = self._agents_dir_path()
-            if agents_dir and (agents_dir / f"{name}.yaml").exists():
-                return ToolResult(
-                    tool_call_id="",
-                    content=f"Agent '{name}' already exists in agents directory, please use a different name",
-                    is_error=True,
-                )
+        # Conflict check removed: UUID-based filenames are unique by definition
 
         yaml_path = self._agent_yaml_path(name)
 

@@ -206,17 +206,20 @@ async def test_create_agent_persist_writes_to_agents_dir(tmp_path):
     assert result.is_error is False
     assert result.content == "sql_expert"
 
-    # Check persistent file exists with correct fields
-    persistent_path = agents_dir / "sql_expert.yaml"
-    assert persistent_path.exists()
+    # Check persistent file exists with UUID-based filename
+    yaml_files = list(agents_dir.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    persistent_path = yaml_files[0]
     data = yaml.safe_load(persistent_path.read_text())
     assert data["agent_name"] == "sql_expert"
     assert data["source"] == "custom"
+    assert "uuid" in data
+    assert persistent_path.stem == data["uuid"]  # filename is {uuid}.yaml
 
 
 @pytest.mark.asyncio
-async def test_create_agent_persist_conflict_returns_error(tmp_path):
-    """persist=True with existing agent in agents_dir returns error."""
+async def test_create_agent_persist_allows_duplicate_names(tmp_path):
+    """persist=True with same agent_name uses UUID-based filenames, so no conflict."""
     from everstaff.tools.bootstrap import CreateAgentTool
     from everstaff.core.context import AgentContext
     from everstaff.nulls import NullTracer, AllowAllChecker
@@ -224,12 +227,14 @@ async def test_create_agent_persist_conflict_returns_error(tmp_path):
     from everstaff.tools.stages import ExecutionStage, PermissionStage
     from everstaff.tools.default_registry import DefaultToolRegistry
     from everstaff.agents.sub_agent_provider import DefaultSubAgentProvider
+    from everstaff.protocols import LLMResponse
     from everstaff.builder.environment import CLIEnvironment
     from everstaff.core.config import FrameworkConfig
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    (agents_dir / "sql_expert.yaml").write_text("agent_name: sql_expert\n")
+    # Pre-existing agent with same name but different uuid
+    (agents_dir / "existing-uuid.yaml").write_text("agent_name: sql_expert\nuuid: existing-uuid\n")
 
     sessions_dir = tmp_path / "sessions"
     config = FrameworkConfig(tracers=[], agents_dir=str(agents_dir))
@@ -242,19 +247,32 @@ async def test_create_agent_persist_conflict_returns_error(tmp_path):
 
     ctx = AgentContext(
         tool_registry=registry, memory=memory, tool_pipeline=pipeline,
-        agent_name="coordinator", session_id="sess-conflict",
+        agent_name="coordinator", session_id="sess-noconflict",
         tracer=NullTracer(), sessions_dir=str(sessions_dir),
         sub_agent_provider=provider,
     )
     ctx._env = env
 
+    mock_yaml = yaml.dump({
+        "name": "sql_expert",
+        "description": "SQL expert",
+        "instructions": "Help with SQL",
+        "adviced_model_kind": "smart",
+        "tools": [],
+        "skills": [],
+    })
+
     llm = AsyncMock()
+    llm.complete = AsyncMock(return_value=LLMResponse(content=mock_yaml, tool_calls=[]))
     tool = CreateAgentTool(ctx=ctx, llm=llm)
     result = await tool.execute({"name": "sql_expert", "domain": "SQL", "persist": True})
 
-    assert result.is_error is True
-    assert "already exists" in result.content
-    llm.complete.assert_not_called()
+    # Should succeed — UUID-based filenames don't conflict on agent_name
+    assert result.is_error is False
+    assert result.content == "sql_expert"
+    # Should now have 2 yaml files (existing + new)
+    yaml_files = list(agents_dir.glob("*.yaml"))
+    assert len(yaml_files) == 2
 
 
 @pytest.mark.asyncio

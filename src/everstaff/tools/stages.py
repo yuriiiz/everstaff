@@ -37,6 +37,68 @@ def _format_tool_prompt(tool_name: str, args: dict) -> str:
     return f"Agent wants to execute: {tool_name}({', '.join(parts)})"
 
 
+def _build_tool_permission_options(tool_name: str, args: dict, tool_registry) -> list[dict[str, str]]:
+    """Build structured permission options with pattern granularity.
+
+    Returns a list of dicts with keys: id, label, scope, pattern.
+    """
+    # Try to get a permission hint from the tool
+    hint = None
+    try:
+        tool_instance = tool_registry._tools.get(tool_name) if tool_registry else None
+        if tool_instance and hasattr(tool_instance, "permission_hint"):
+            hint = tool_instance.permission_hint(args)
+    except Exception:
+        pass
+
+    options: list[dict[str, str]] = []
+
+    # Reject
+    options.append({"id": "reject", "label": "Reject", "scope": "", "pattern": ""})
+
+    # Allow Once (no pattern stored, just this specific invocation)
+    options.append({"id": "approve_once", "label": "Allow Once", "scope": "once", "pattern": ""})
+
+    if hint and hint.suggested_pattern and hint.suggested_pattern != "*":
+        # Narrow pattern: e.g. Bash(ls *)
+        narrow_pat = f"{tool_name}({hint.suggested_pattern})"
+        narrow_label_short = f"{tool_name}({hint.suggested_pattern})"
+        options.append({
+            "id": "approve_session_narrow",
+            "label": f"Allow {narrow_label_short} for Session",
+            "scope": "session",
+            "pattern": narrow_pat,
+        })
+
+    # Broad: allow all invocations of this tool for session
+    options.append({
+        "id": "approve_session",
+        "label": f"Allow all {tool_name} for Session",
+        "scope": "session",
+        "pattern": tool_name,
+    })
+
+    if hint and hint.suggested_pattern and hint.suggested_pattern != "*":
+        narrow_pat = f"{tool_name}({hint.suggested_pattern})"
+        narrow_label_short = f"{tool_name}({hint.suggested_pattern})"
+        options.append({
+            "id": "approve_permanent_narrow",
+            "label": f"Always Allow {narrow_label_short}",
+            "scope": "permanent",
+            "pattern": narrow_pat,
+        })
+
+    # Broad: always allow all invocations of this tool
+    options.append({
+        "id": "approve_permanent",
+        "label": f"Always Allow all {tool_name}",
+        "scope": "permanent",
+        "pattern": tool_name,
+    })
+
+    return options
+
+
 class PermissionStage:
     """Checks permissions before calling next.
 
@@ -63,6 +125,10 @@ class PermissionStage:
             )
 
         if result.needs_hitl:
+            # Get tool registry from agent context for permission hints
+            tool_registry = getattr(ctx.agent_context, "tool_registry", None)
+            perm_options = _build_tool_permission_options(ctx.tool_name, ctx.args, tool_registry)
+
             request = HitlRequest(
                 hitl_id=str(uuid4()),
                 type="tool_permission",
@@ -71,6 +137,7 @@ class PermissionStage:
                 tool_args=ctx.args,
                 tool_call_id=ctx.tool_call_id,
                 options=["reject", "approve_once", "approve_session", "approve_permanent"],
+                tool_permission_options=perm_options,
             )
             raise HumanApprovalRequired([request])
 

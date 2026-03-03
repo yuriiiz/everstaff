@@ -7,10 +7,21 @@ from everstaff.tools.native import tool
 from everstaff.tools.path_utils import resolve_safe_path
 
 
+def _write_permission_hint(args):
+    from pathlib import PurePosixPath
+    from everstaff.protocols import PermissionHint
+    fp = args.get("file_path", "")
+    if not fp:
+        return PermissionHint("file_path", "*")
+    parent = str(PurePosixPath(fp).parent)
+    return PermissionHint("file_path", f"{parent}/*")
+
+
 def make_write_tool(workdir: Path):
     """Return a Write NativeTool scoped to *workdir*."""
 
-    @tool(name="Write", description="Write content to a file. Creates parent directories if needed.")
+    @tool(name="Write", description="Write content to a file. Creates parent directories if needed.",
+          permission_hint=_write_permission_hint)
     def write(file_path: str, content: str) -> str:
         """Write content to a file, creating parent directories as needed.
 

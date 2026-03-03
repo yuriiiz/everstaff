@@ -157,6 +157,17 @@ class PermissionResult:
 
 
 @dataclass
+class PermissionHint:
+    """Hint from a tool about how to generate permission patterns.
+
+    Each tool defines its own primary argument and suggests a wildcard pattern
+    based on the current invocation arguments.
+    """
+    primary_key: str        # arg name, e.g. "command" for Bash, "file_path" for Read
+    suggested_pattern: str  # wildcard, e.g. "ls *" for Bash("ls -la /tmp")
+
+
+@dataclass
 class LLMResponse:
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
@@ -180,7 +191,7 @@ class ToolCallRequest:
 class HitlRequest:
     """Describes what the agent needs from a human."""
     hitl_id: str
-    type: str           # "approve_reject" | "choose" | "provide_input" | "notify"
+    type: str           # "approve_reject" | "choose" | "provide_input" | "notify" | "tool_permission"
     prompt: str
     options: list[str] = field(default_factory=list)
     context: str = ""
@@ -191,6 +202,9 @@ class HitlRequest:
     # tool_permission fields
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
+    # Structured permission options with pattern granularity (for tool_permission type).
+    # Each dict has: id, label, scope ("once"|"session"|"permanent"), pattern (e.g. "Bash(ls *)")
+    tool_permission_options: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -201,6 +215,7 @@ class HitlResolution:
     resolved_by: str = "human"
     comment: str | None = None
     grant_scope: str | None = None   # "once" | "session" | "permanent"
+    permission_pattern: str | None = None  # e.g. "Bash(ls *)", "Bash"
 
 
 class HumanApprovalRequired(Exception):

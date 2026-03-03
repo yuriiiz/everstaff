@@ -11,6 +11,12 @@ from everstaff.core.constants import TOOL_MAX_RESULTS as _MAX_RESULTS
 _BINARY_CHECK_SIZE = 8192
 
 
+def _grep_permission_hint(args):
+    from everstaff.protocols import PermissionHint
+    pat = args.get("pattern", "")
+    return PermissionHint("pattern", pat or "*")
+
+
 def make_grep_tool(workdir: Path):
     """Return a Grep NativeTool scoped to *workdir*."""
 
@@ -20,6 +26,7 @@ def make_grep_tool(workdir: Path):
             "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. "
             "All paths must be relative — absolute paths and '..' traversal are not allowed."
         ),
+        permission_hint=_grep_permission_hint,
     )
     def grep_search(pattern: str, path: str = ".", include: str = "") -> str:
         """Search file contents for a regex pattern.

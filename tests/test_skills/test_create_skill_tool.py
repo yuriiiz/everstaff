@@ -107,7 +107,6 @@ async def test_bootstrap_registers_create_skill_tool():
     env.config.skills_dirs = ["./skills"]
     env.config.tools_dirs = ["./tools"]
     env.config.permissions.deny = []
-    env.config.permissions.require_approval = []
     env.build_llm_client = MagicMock()
     env.build_memory_store = AsyncMock(return_value=MagicMock(load=AsyncMock(return_value=[])))
     env.build_tracer = MagicMock()

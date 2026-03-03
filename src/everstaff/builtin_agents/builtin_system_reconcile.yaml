@@ -33,7 +33,7 @@ instructions: "You are System Reconcile, responsible for system-level cleanup an
 permissions:
   allow: []
   deny:
-  - Bash(rm:*)
+  - Bash(rm *)
 skills: []
 source: builtin
 tools:

@@ -43,7 +43,7 @@ const HitlRequestCard = ({ request, onResolve }) => {
     const navigate = useNavigate();
 
     const payload = typeof request.request === 'string' ? JSON.parse(request.request) : (request.request || {});
-    const { prompt, options, type, context } = payload;
+    const { prompt, options, type, context, tool_permission_options } = payload;
 
     let optionsArray = [];
     if (Array.isArray(options)) optionsArray = options;
@@ -51,11 +51,12 @@ const HitlRequestCard = ({ request, onResolve }) => {
         try { optionsArray = JSON.parse(options); } catch (e) { optionsArray = options.split(',').map(s => s.trim()); }
     }
 
-    const handleSubmit = async (finalDecision) => {
+    const handleSubmit = async (finalDecision, extraFields = {}) => {
         setSubmittingAction(finalDecision);
         await onResolve(request.hitl_id, {
             decision: finalDecision,
-            comment: ''
+            comment: '',
+            ...extraFields,
         });
         setSubmittingAction(null);
     };
@@ -63,6 +64,7 @@ const HitlRequestCard = ({ request, onResolve }) => {
     const getTypeConfig = (t) => {
         switch (t) {
             case 'approve_reject': return { icon: <UserCheck size={16} />, bg: '#f0fdf4', color: '#16a34a' };
+            case 'tool_permission': return { icon: <UserCheck size={16} />, bg: '#fef3c7', color: '#d97706' };
             case 'choose': return { icon: <List size={16} />, bg: '#f8fafc', color: '#475569' };
             case 'notify': return { icon: <AlertTriangle size={16} />, bg: '#fffbeb', color: '#d97706' };
             case 'provide_input': return { icon: <HelpCircle size={16} />, bg: '#eff6ff', color: '#2563eb' };
@@ -116,6 +118,49 @@ const HitlRequestCard = ({ request, onResolve }) => {
                 <div style={{ display: 'flex', gap: '8px' }}>
                     {actionButton('approved', 'Approve', <Check size={14} />, () => handleSubmit('approved'), true, '#10b981')}
                     {actionButton('rejected', 'Reject', <X size={14} />, () => handleSubmit('rejected'), false, '#ef4444')}
+                </div>
+            );
+        }
+        if (type === 'tool_permission') {
+            // Use structured options if available
+            const structuredOpts = tool_permission_options || [];
+            if (structuredOpts.length > 0) {
+                return (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {structuredOpts.map(opt => {
+                            const colorMap = {
+                                'reject': '#ef4444',
+                                'approve_once': '#10b981',
+                                'approve_session_narrow': '#3b82f6',
+                                'approve_session': '#3b82f6',
+                                'approve_permanent_narrow': '#6366f1',
+                                'approve_permanent': '#6366f1',
+                            };
+                            const isPrimary = opt.id === 'approve_once';
+                            const btnColor = colorMap[opt.id] || '#3b82f6';
+                            const icon = opt.id === 'reject' ? <X size={14} /> : <Check size={14} />;
+                            return actionButton(
+                                opt.id,
+                                opt.label,
+                                icon,
+                                () => handleSubmit(opt.id, {
+                                    grant_scope: opt.scope || undefined,
+                                    permission_pattern: opt.pattern || undefined,
+                                }),
+                                isPrimary,
+                                btnColor,
+                            );
+                        })}
+                    </div>
+                );
+            }
+            // Fallback to legacy 4-button layout
+            return (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {actionButton('approve_once', 'Allow Once', <Check size={14} />, () => handleSubmit('approve_once'), true, '#10b981')}
+                    {actionButton('approve_session', 'Allow for Session', <Check size={14} />, () => handleSubmit('approve_session'), false, '#3b82f6')}
+                    {actionButton('approve_permanent', 'Always Allow', <Check size={14} />, () => handleSubmit('approve_permanent'), false, '#6366f1')}
+                    {actionButton('reject', 'Reject', <X size={14} />, () => handleSubmit('reject'), false, '#ef4444')}
                 </div>
             );
         }

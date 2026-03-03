@@ -105,12 +105,25 @@ class LarkChannel:
                 if len(args_text) > 500:
                     args_text = args_text[:500] + "..."
                 elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Arguments:\n{args_text}"}})
-            actions = [
-                {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected", "grant_scope": "once"}},
-                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Once"}, "type": "default", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "once"}},
-                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Session"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "session"}},
-                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Always"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "permanent"}},
-            ]
+            # Use structured tool_permission_options when available
+            if request.tool_permission_options:
+                _TYPE_MAP = {"reject": "danger", "approve_once": "default"}
+                for opt in request.tool_permission_options:
+                    btn_type = _TYPE_MAP.get(opt.get("id", ""), "primary")
+                    value: dict = {"hitl_id": hitl_id, "decision": opt["id"]}
+                    if opt.get("scope"):
+                        value["grant_scope"] = opt["scope"]
+                    if opt.get("pattern"):
+                        value["permission_pattern"] = opt["pattern"]
+                    actions.append({"tag": "button", "text": {"tag": "plain_text", "content": opt["label"]}, "type": btn_type, "value": value})
+            else:
+                # Fallback: hardcoded buttons for legacy requests without structured options
+                actions = [
+                    {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected", "grant_scope": "once"}},
+                    {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Once"}, "type": "default", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "once"}},
+                    {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Session"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "session"}},
+                    {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Always"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "permanent"}},
+                ]
         elif request.type == "choose" and request.options:
             actions = [
                 {"tag": "button", "text": {"tag": "plain_text", "content": opt.strip()}, "type": "default", "value": {"hitl_id": hitl_id, "decision": opt.strip()}}

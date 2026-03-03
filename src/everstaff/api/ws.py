@@ -111,15 +111,44 @@ def make_router(config) -> APIRouter:
                         except Exception as echo_err:
                             logger.debug("[WS] user_message_echo broadcast failed: %s", echo_err)
 
-                    # Look up agent_name from session file
+                    # Look up agent_name, agent_uuid, and session status from session file
                     agent_name = ""
+                    agent_uuid = ""
+                    _has_pending_hitl = False
+                    _session_status = ""
                     try:
                         store = app.state.file_store
                         raw_bytes = await store.read(f"{session_id}/session.json")
-                        agent_name = _json.loads(raw_bytes).get("agent_name", "")
-                        logger.debug("[WS] resolved agent=%r  session=%s", agent_name, _sid)
+                        session_raw = _json.loads(raw_bytes)
+                        agent_name = session_raw.get("agent_name", "")
+                        agent_uuid = session_raw.get("agent_uuid", "")
+                        _session_status = session_raw.get("status", "")
+                        _has_pending_hitl = any(
+                            r.get("status") == "pending"
+                            for r in session_raw.get("hitl_requests", [])
+                        )
+                        logger.debug("[WS] resolved agent=%r uuid=%r status=%r pending_hitl=%s  session=%s",
+                                     agent_name, agent_uuid, _session_status, _has_pending_hitl, _sid)
                     except Exception as e:
                         logger.warning("[WS] failed to read agent_name  session=%s  err=%s", _sid, e)
+
+                    # Guard: don't resume a session that is waiting for HITL resolution.
+                    # Sending a user_message while HITLs are pending would cause the
+                    # runtime to drop dangling tool calls, silently auto-rejecting them.
+                    if _session_status == "waiting_for_human" and _has_pending_hitl:
+                        logger.warning("[WS] ignoring user_message for session %s: "
+                                       "session is waiting_for_human with pending HITL(s)", _sid)
+                        if _broadcast_fn is not None:
+                            try:
+                                await _broadcast_fn({
+                                    "type": "error",
+                                    "session_id": session_id,
+                                    "error": "Cannot send message while HITL request is pending. "
+                                             "Please resolve the pending request first.",
+                                })
+                            except Exception:
+                                pass
+                        continue
 
                     if not agent_name:
                         logger.warning("[WS] agent_name empty  session=%s  (resume may fail)", _sid)
@@ -130,6 +159,7 @@ def make_router(config) -> APIRouter:
                             session_id, agent_name, content, app.state.config,
                             broadcast_fn=_broadcast_fn,
                             channel_manager=cm,
+                            agent_uuid=agent_uuid,
                         )
                     )
 
@@ -137,11 +167,19 @@ def make_router(config) -> APIRouter:
                     hitl_id = msg.get("hitl_id", "")
                     decision = msg.get("decision", "")
                     comment = msg.get("comment")
+                    grant_scope = msg.get("grant_scope")
+                    permission_pattern = msg.get("permission_pattern")
+                    # Derive grant_scope from decision value if not provided explicitly
+                    if not grant_scope and decision.startswith("approve_"):
+                        grant_scope = decision.replace("approve_", "")  # approve_once→once, approve_session→session, approve_permanent→permanent
                     if hitl_id and decision:
-                        logger.info("[WS] ← hitl_resolve  hitl=%s  decision=%s  session=%s",
-                                    hitl_id[:8], decision, _sid)
+                        logger.info("[WS] ← hitl_resolve  hitl=%s  decision=%s  pattern=%s  session=%s",
+                                    hitl_id[:8], decision, permission_pattern, _sid)
                         asyncio.create_task(
-                            _resolve_hitl_internal(app, hitl_id, decision, comment, broadcast_fn=_broadcast_fn)
+                            _resolve_hitl_internal(app, hitl_id, decision, comment,
+                                                   grant_scope=grant_scope,
+                                                   permission_pattern=permission_pattern,
+                                                   broadcast_fn=_broadcast_fn)
                         )
 
                 elif msg_type:

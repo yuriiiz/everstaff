@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 RESUMABLE_STATES = {"waiting_for_human", "paused", "cancelled", "failed", "interrupted"}
 
-# Well-known builtin agent UUIDs that don't appear in YAML files
+# Well-known builtin agent UUIDs → display names
 _BUILTIN_UUID_TO_NAME: dict[str, str] = {
     "builtin_agent_creator": "Agent Creator",
     "builtin_skill_creator": "Skill Creator",
@@ -50,28 +50,66 @@ async def _resume_session_task(
     tool_call_id: str = "",
     broadcast_fn=None,   # optional async callable(dict) -> None
     channel_manager=None,  # ChannelManager for HITL broadcast
+    agent_uuid: str = "",
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
 
     sessions_dir = Path(config.sessions_dir).expanduser().resolve()
     agents_dir = Path(config.agents_dir).expanduser().resolve()
-    agent_path = (agents_dir / f"{agent_name}.yaml").resolve()
-    # Guard against path traversal via malicious agent_name in session.json
-    if not str(agent_path).startswith(str(agents_dir) + "/"):
-        logger.error("Resume: invalid agent_name '%s' in session.json", agent_name)
-        return
 
-    if not agent_path.exists():
-        # Fall back to builtin agents
+    agent_path = None
+
+    # Try resolving by agent_uuid first (O(1) lookup for uuid-based filenames)
+    if agent_uuid:
+        candidate = (agents_dir / f"{agent_uuid}.yaml").resolve()
+        if candidate.is_relative_to(agents_dir) and candidate.exists():
+            agent_path = candidate
+
+    # Fall back to agent_name-based lookup
+    if not agent_path:
+        candidate = (agents_dir / f"{agent_name}.yaml").resolve()
+        if str(candidate).startswith(str(agents_dir) + "/") and candidate.exists():
+            agent_path = candidate
+
+    # Fall back to scanning user agents by uuid inside YAML
+    if not agent_path and agent_uuid and agents_dir.exists():
+        from everstaff.utils.yaml_loader import load_yaml
+        for f in agents_dir.glob("*.yaml"):
+            try:
+                if load_yaml(str(f)).get("uuid") == agent_uuid:
+                    agent_path = f
+                    break
+            except Exception:
+                pass
+
+    # Fall back to builtin agents
+    if not agent_path:
         from everstaff.core.config import _builtin_agents_path
         builtin_p = _builtin_agents_path()
         if builtin_p:
-            builtin_candidate = (Path(builtin_p) / f"{agent_name}.yaml").resolve()
-            if builtin_candidate.is_relative_to(Path(builtin_p)) and builtin_candidate.exists():
-                agent_path = builtin_candidate
-    if not agent_path.exists():
-        logger.error("Resume: agent spec not found for %s", agent_name)
+            builtin_dir = Path(builtin_p)
+            if builtin_dir.exists():
+                # Try UUID-based builtin: {uuid}.yaml
+                if agent_uuid:
+                    builtin_candidate = (builtin_dir / f"{agent_uuid}.yaml").resolve()
+                    if builtin_candidate.is_relative_to(builtin_dir) and builtin_candidate.exists():
+                        agent_path = builtin_candidate
+                # Scan builtins by agent_name or uuid inside YAML
+                if not agent_path:
+                    from everstaff.utils.yaml_loader import load_yaml
+                    for f in builtin_dir.glob("*.yaml"):
+                        try:
+                            spec = load_yaml(str(f))
+                            if (agent_uuid and spec.get("uuid") == agent_uuid) or \
+                               (agent_name and spec.get("agent_name") == agent_name):
+                                agent_path = f
+                                break
+                        except Exception:
+                            pass
+
+    if not agent_path:
+        logger.error("Resume: agent spec not found for %s (uuid=%s)", agent_name, agent_uuid)
         return
 
     from everstaff.utils.yaml_loader import load_yaml
@@ -102,10 +140,26 @@ async def _resume_session_task(
             if session_path.exists():
                 try:
                     session_raw = json.loads(session_path.read_text())
+                    hitl_requests = session_raw.get("hitl_requests", [])
                     resolved_hitls = [
-                        item for item in session_raw.get("hitl_requests", [])
+                        item for item in hitl_requests
                         if item.get("status") == "resolved" and item.get("response")
                     ]
+                    pending_hitls = [
+                        item for item in hitl_requests
+                        if item.get("status") == "pending"
+                    ]
+                    # Guard: if there are pending HITLs and nothing resolved to
+                    # process, abort — the session is still waiting for human input.
+                    # Without this guard, runtime.run_stream(None) would drop the
+                    # dangling tool calls, silently auto-rejecting the HITL.
+                    if pending_hitls and not resolved_hitls:
+                        logger.warning(
+                            "[session] aborting resume for session %s: "
+                            "%d pending HITL(s) with no resolved ones to process",
+                            _sid, len(pending_hitls),
+                        )
+                        return
                     if resolved_hitls:
                         from everstaff.protocols import Message
                         from everstaff.tools.pipeline import ToolCallContext
@@ -122,12 +176,34 @@ async def _resume_session_task(
                                 tool_name = req.get("tool_name", "")
                                 tool_args = req.get("tool_args", {})
 
-                                if resp.get("decision") == "approved":
-                                    grant_scope = resp.get("grant_scope", "once")
+                                decision_val = resp.get("decision", "")
+                                # Accept both legacy "approved" and structured option IDs
+                                _APPROVE_DECISIONS = {
+                                    "approved", "approve_once", "approve_session", "approve_permanent",
+                                    "approve_session_narrow", "approve_permanent_narrow",
+                                }
+                                if decision_val in _APPROVE_DECISIONS:
+                                    # Derive grant_scope from decision if not explicitly set
+                                    _DECISION_TO_SCOPE = {
+                                        "approve_once": "once",
+                                        "approve_session": "session",
+                                        "approve_session_narrow": "session",
+                                        "approve_permanent": "permanent",
+                                        "approve_permanent_narrow": "permanent",
+                                        "approved": "once",
+                                    }
+                                    grant_scope = resp.get("grant_scope") or _DECISION_TO_SCOPE.get(decision_val, "once")
+
+                                    # Use permission_pattern from resolution (e.g. "Bash(ls *)")
+                                    # Falls back to bare tool_name for backward compatibility
+                                    perm_pattern = resp.get("permission_pattern") or tool_name
 
                                     # Apply session grant so permission check passes
+                                    # For "once" scope, grant the bare tool name (temporary)
+                                    # For "session"/"permanent", grant the actual pattern
+                                    grant_pat = tool_name if grant_scope == "once" else perm_pattern
                                     if hasattr(ctx.permissions, "add_session_grant"):
-                                        ctx.permissions.add_session_grant(tool_name)
+                                        ctx.permissions.add_session_grant(grant_pat)
 
                                     # Execute the tool through the pipeline — get real result
                                     try:
@@ -147,19 +223,22 @@ async def _resume_session_task(
                                     if grant_scope == "once":
                                         if hasattr(ctx.permissions, "_session_grants"):
                                             try:
-                                                ctx.permissions._session_grants.remove(tool_name)
+                                                ctx.permissions._session_grants.remove(grant_pat)
                                             except ValueError:
                                                 pass
                                     elif grant_scope in ("session", "permanent"):
-                                        extra_perms.append(tool_name)
+                                        extra_perms.append(perm_pattern)
 
                                     if grant_scope == "permanent":
                                         try:
                                             from everstaff.permissions.definition_writer import YamlAgentDefinitionWriter
                                             writer = YamlAgentDefinitionWriter(agents_dir=str(agents_dir))
-                                            await writer.add_allow_permission(agent_name, tool_name)
+                                            await writer.add_allow_permission(
+                                                agent_uuid or agent_name, perm_pattern,
+                                                agent_path=agent_path,
+                                            )
                                         except Exception as wr_err:
-                                            logger.warning("Failed to write permanent grant for %s: %s", tool_name, wr_err)
+                                            logger.warning("Failed to write permanent grant for %s: %s", perm_pattern, wr_err)
                                 else:
                                     # Rejected — inject error tool result
                                     messages.append(Message(
@@ -244,40 +323,66 @@ def make_router(config) -> APIRouter:
     ) -> dict:
         agents_dir_path = Path(config.agents_dir).expanduser().resolve()
         agent_name = body.agent_name
+        agent_uuid = body.agent_uuid or ""
 
         from everstaff.core.config import _builtin_agents_path as _bap
+        from everstaff.utils.yaml_loader import load_yaml
         builtin_agents_dir = Path(_bap()) if _bap() else None
 
-        if not agent_name and body.agent_uuid:
-            # Resolve UUID to agent_name by scanning user agents then builtins
-            from everstaff.utils.yaml_loader import load_yaml
+        agent_path = None
+
+        # Try UUID-based lookup first: {uuid}.yaml
+        if agent_uuid:
+            candidate = (agents_dir_path / f"{agent_uuid}.yaml").resolve()
+            if candidate.is_relative_to(agents_dir_path) and candidate.exists():
+                agent_path = candidate
+                if not agent_name:
+                    agent_name = load_yaml(str(agent_path)).get("agent_name", "")
+
+        # Scan by uuid inside YAML files
+        if not agent_path and agent_uuid:
             for scan_dir in [agents_dir_path, builtin_agents_dir]:
                 if not scan_dir or not scan_dir.exists():
                     continue
                 for f in scan_dir.glob("*.yaml"):
                     try:
                         spec = load_yaml(str(f))
-                        if spec.get("uuid") == body.agent_uuid:
-                            agent_name = spec.get("agent_name")
+                        if spec.get("uuid") == agent_uuid:
+                            agent_path = f
+                            if not agent_name:
+                                agent_name = spec.get("agent_name", "")
                             break
                     except Exception:
                         continue
-                if agent_name:
+                if agent_path:
                     break
 
+        # Fall back to name-based lookup
+        if not agent_path and agent_name:
+            candidate = (agents_dir_path / f"{agent_name}.yaml").resolve()
+            if candidate.is_relative_to(agents_dir_path) and candidate.exists():
+                agent_path = candidate
+            elif builtin_agents_dir and builtin_agents_dir.exists():
+                # Scan builtins by agent_name inside YAML
+                for f in builtin_agents_dir.glob("*.yaml"):
+                    try:
+                        spec = load_yaml(str(f))
+                        if spec.get("agent_name") == agent_name:
+                            agent_path = f
+                            break
+                    except Exception:
+                        continue
+
+        if not agent_path or not agent_path.exists():
+            if not agent_name:
+                raise HTTPException(status_code=400, detail="agent_name or valid agent_uuid is required")
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        if not agent_name:
+            agent_name = load_yaml(str(agent_path)).get("agent_name", "")
         if not agent_name:
             raise HTTPException(status_code=400, detail="agent_name or valid agent_uuid is required")
 
-        # Resolve agent path: user agents_dir takes precedence, then builtin
-        agent_path = (agents_dir_path / f"{agent_name}.yaml").resolve()
-        if not agent_path.is_relative_to(agents_dir_path):
-            raise HTTPException(status_code=400, detail="Invalid agent name")
-        if not agent_path.exists() and builtin_agents_dir:
-            builtin_candidate = (builtin_agents_dir / f"{agent_name}.yaml").resolve()
-            if builtin_candidate.is_relative_to(builtin_agents_dir) and builtin_candidate.exists():
-                agent_path = builtin_candidate
-        if not agent_path.exists():
-            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
         session_id = str(uuid4())
         cm = getattr(request.app.state, "channel_manager", None)
         broadcast_fn = _extract_broadcast_fn(cm) if cm is not None else None
@@ -285,6 +390,7 @@ def make_router(config) -> APIRouter:
             _resume_session_task, session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
             channel_manager=cm,
+            agent_uuid=agent_uuid,
         )
         return {"session_id": session_id, "status": "running"}
 
@@ -444,6 +550,7 @@ def make_router(config) -> APIRouter:
             )
 
         agent_name = session_raw.get("agent_name", "")
+        agent_uuid = session_raw.get("agent_uuid", "")
         cm = getattr(request.app.state, "channel_manager", None)
 
         # For cancelled/failed/interrupted: resume with optional user input
@@ -453,6 +560,7 @@ def make_router(config) -> APIRouter:
                 _resume_session_task, session_id, agent_name, user_input, config,
                 broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
                 channel_manager=cm,
+                agent_uuid=agent_uuid,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -469,6 +577,7 @@ def make_router(config) -> APIRouter:
             _resume_session_task, session_id, agent_name, "", config,
             broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
             channel_manager=cm,
+            agent_uuid=agent_uuid,
         )
         return {"status": "resuming", "session_id": session_id}
 

@@ -16,6 +16,8 @@ class HitlRequestPayload(BaseModel):
     context: str = ""
     tool_name: str = ""
     tool_args: dict[str, Any] = Field(default_factory=dict)
+    # Structured permission options with pattern granularity
+    tool_permission_options: list[dict[str, str]] = Field(default_factory=list)
 
 
 class HitlRequestRecord(BaseModel):

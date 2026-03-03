@@ -48,9 +48,14 @@ class HitlRequestEvent(BaseModel):
     hitl_id: str
     session_id: str
     prompt: str
-    hitl_type: str          # "approve_reject" | "choose" | "provide_input"
+    hitl_type: str          # "approve_reject" | "choose" | "provide_input" | "tool_permission"
     options: list[str] = []
     context: str = ""
+    tool_name: str | None = None
+    tool_args: dict[str, Any] | None = None
+    tool_call_id: str = ""
+    # Structured permission options with pattern granularity
+    tool_permission_options: list[dict[str, str]] = []
 
 
 class HitlResolvedEvent(BaseModel):

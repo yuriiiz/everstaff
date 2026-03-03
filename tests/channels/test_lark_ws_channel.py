@@ -140,10 +140,11 @@ async def test_parse_card_action_extracts_grant_scope(lark_ws_channel):
     """_parse_card_action must extract grant_scope from button value."""
     from everstaff.channels.lark_ws import LarkWsChannel
     data = _make_card_action_data({"hitl_id": "h1", "decision": "approved", "grant_scope": "permanent"})
-    hitl_id, decision, resolved_by, grant_scope = LarkWsChannel._parse_card_action(data)
+    hitl_id, decision, resolved_by, grant_scope, permission_pattern = LarkWsChannel._parse_card_action(data)
     assert hitl_id == "h1"
     assert decision == "approved"
     assert grant_scope == "permanent"
+    assert permission_pattern is None
 
 
 @pytest.mark.asyncio
@@ -151,7 +152,7 @@ async def test_parse_card_action_missing_hitl_id(lark_ws_channel):
     """_parse_card_action with no hitl_id returns empty tuple."""
     from everstaff.channels.lark_ws import LarkWsChannel
     data = _make_card_action_data({"decision": "approved"}, open_id="user_003")
-    hitl_id, decision, resolved_by, grant_scope = LarkWsChannel._parse_card_action(data)
+    hitl_id, decision, resolved_by, grant_scope, permission_pattern = LarkWsChannel._parse_card_action(data)
     assert hitl_id == ""
 
 

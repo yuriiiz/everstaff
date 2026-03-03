@@ -7,6 +7,16 @@ from everstaff.tools.native import tool
 from everstaff.tools.path_utils import resolve_safe_path
 
 
+def _edit_permission_hint(args):
+    from pathlib import PurePosixPath
+    from everstaff.protocols import PermissionHint
+    fp = args.get("file_path", "")
+    if not fp:
+        return PermissionHint("file_path", "*")
+    parent = str(PurePosixPath(fp).parent)
+    return PermissionHint("file_path", f"{parent}/*")
+
+
 def make_edit_tool(workdir: Path):
     """Return an Edit NativeTool scoped to *workdir*."""
 
@@ -16,6 +26,7 @@ def make_edit_tool(workdir: Path):
             "Replace exact text in a file. old_string must be unique unless replace_all is True. "
             "All paths must be relative — absolute paths and '..' traversal are not allowed."
         ),
+        permission_hint=_edit_permission_hint,
     )
     def edit(
         file_path: str,

@@ -21,6 +21,7 @@ from everstaff.schema.stream import (
     TurnStart,
     SessionEnd,
     ErrorEvent,
+    HitlRequestEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -459,11 +460,6 @@ class AgentRuntime:
                             if h.origin_session_id != resume_sid
                         ]
 
-                    tool_start_t = time.monotonic()
-                    self._emit("tool_start", {"tool": tool_call.name, "args": tool_call.args})
-                    stats.record_tool_call()
-                    yield ToolCallStart(name=tool_call.name, args=tool_call.args)
-
                     tool_args = await self._hook("on_tool_start", tool_call.args, tool_call.name)
                     tcc = ToolCallContext(
                         tool_name=tool_call.name,
@@ -471,13 +467,36 @@ class AgentRuntime:
                         agent_context=self._ctx,
                         tool_call_id=tool_call.id,
                     )
+
+                    # Check permission FIRST (may raise HumanApprovalRequired or return denied)
                     try:
-                        result = await self._ctx.tool_pipeline.execute(tcc)
+                        perm_result = await self._ctx.tool_pipeline.check_permission(tcc)
                     except HumanApprovalRequired as _hitl:
-                        # Annotate with the tool_call_id so resume can reconstruct the proper tool message
                         for req in _hitl.requests:
                             req.tool_call_id = tool_call.id
                         raise
+
+                    if perm_result is not None:
+                        # Permission denied — use denied result, skip tool_start event
+                        result = perm_result
+                        tool_start_t = time.monotonic()
+                        self._emit("tool_start", {"tool": tool_call.name, "args": tool_call.args})
+                        stats.record_tool_call()
+                        yield ToolCallStart(name=tool_call.name, args=tool_call.args)
+                    else:
+                        # Permission granted — NOW emit tool_start
+                        tool_start_t = time.monotonic()
+                        self._emit("tool_start", {"tool": tool_call.name, "args": tool_call.args})
+                        stats.record_tool_call()
+                        yield ToolCallStart(name=tool_call.name, args=tool_call.args)
+
+                        # Execute remaining pipeline (PermissionStage already passed)
+                        try:
+                            result = await self._ctx.tool_pipeline.execute(tcc)
+                        except HumanApprovalRequired as _hitl:
+                            for req in _hitl.requests:
+                                req.tool_call_id = tool_call.id
+                            raise
                     result = await self._hook("on_tool_end", result, tool_call.name)
                     tool_ms = (time.monotonic() - tool_start_t) * 1000
                     self._emit("tool_end", {
@@ -499,7 +518,7 @@ class AgentRuntime:
             # Checkpoint: embed hitl_requests in session.json and save
             from everstaff.schema.hitl_models import HitlRequestRecord, HitlRequestPayload
 
-            hitl_data = []
+            new_hitl_data = []
             for req in hitl_exc.requests:
                 record = HitlRequestRecord(
                     hitl_id=req.hitl_id,
@@ -516,10 +535,25 @@ class AgentRuntime:
                         context=req.context,
                         tool_name=req.tool_name,
                         tool_args=req.tool_args,
+                        tool_permission_options=req.tool_permission_options or [],
                     ),
                     response=None,
                 )
-                hitl_data.append(record.model_dump(mode="json"))
+                new_hitl_data.append(record.model_dump(mode="json"))
+
+            # Merge with existing hitl_requests to preserve resolved entries
+            existing_hitls = []
+            try:
+                import json as _json_mod
+                _store = getattr(self._ctx.memory, "_session_store", None) or getattr(self._ctx.memory, "_store", None)
+                if _store:
+                    raw = await _store.read(f"{self._ctx.session_id}/session.json")
+                    existing_hitls = _json_mod.loads(raw.decode()).get("hitl_requests", [])
+            except Exception:
+                pass
+            new_ids = {h["hitl_id"] for h in new_hitl_data}
+            merged_hitls = [h for h in existing_hitls if h.get("hitl_id") not in new_ids] + new_hitl_data
+
             await self._ctx.memory.save(
                 self._ctx.session_id,
                 messages,
@@ -529,7 +563,7 @@ class AgentRuntime:
                 stats=stats,
                 status="waiting_for_human",
                 max_tokens=self._ctx.max_tokens,
-                hitl_requests=hitl_data,
+                hitl_requests=merged_hitls,
             )
             # Broadcast HITL request to channels — only for daemon-sourced sessions.
             # Web and CLI sessions handle HITL via session.json status polling.
@@ -552,6 +586,21 @@ class AgentRuntime:
                 "paused_for_hitl": True,
                 "total_duration_ms": total_ms,
             }, duration_ms=total_ms)
+            # Yield HITL request events so broadcast_fn can notify WS clients
+            # (daemon sessions use channel_manager above; web sessions use this path)
+            for req in hitl_exc.requests:
+                yield HitlRequestEvent(
+                    hitl_id=req.hitl_id,
+                    session_id=self._ctx.session_id,
+                    prompt=req.prompt,
+                    hitl_type=req.type,
+                    options=req.options or [],
+                    context=req.context or "",
+                    tool_name=req.tool_name,
+                    tool_args=req.tool_args,
+                    tool_call_id=req.tool_call_id or "",
+                    tool_permission_options=req.tool_permission_options or [],
+                )
             # RE-RAISE instead of swallowing: let callers handle HITL
             raise
         except Exception as e:

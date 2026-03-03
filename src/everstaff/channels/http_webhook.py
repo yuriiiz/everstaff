@@ -40,6 +40,9 @@ class HttpWebhookChannel:
             "context": request.context,
             "options": request.options,
             "timeout_seconds": request.timeout_seconds,
+            "tool_name": request.tool_name,
+            "tool_args": request.tool_args,
+            "tool_permission_options": request.tool_permission_options,
         }
         try:
             async with aiohttp.ClientSession() as session:

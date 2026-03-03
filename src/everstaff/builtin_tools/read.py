@@ -8,10 +8,21 @@ from everstaff.tools.path_utils import resolve_safe_path
 from everstaff.core.constants import TOOL_MAX_LINE_WIDTH as _MAX_LINE_WIDTH
 
 
+def _read_permission_hint(args):
+    from pathlib import PurePosixPath
+    from everstaff.protocols import PermissionHint
+    fp = args.get("file_path", "")
+    if not fp:
+        return PermissionHint("file_path", "*")
+    parent = str(PurePosixPath(fp).parent)
+    return PermissionHint("file_path", f"{parent}/*")
+
+
 def make_read_tool(workdir: Path):
     """Return a Read NativeTool scoped to *workdir*."""
 
-    @tool(name="Read", description="Read a file and return its contents with line numbers.")
+    @tool(name="Read", description="Read a file and return its contents with line numbers.",
+          permission_hint=_read_permission_hint)
     def read(file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """Read a file, returning lines with line numbers (cat -n style).
 

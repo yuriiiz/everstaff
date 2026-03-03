@@ -106,12 +106,12 @@ daemon:
 
 # ---------------------------------------------------------------------------
 # Permissions — tool call allow/deny rules
-# Patterns: "ToolName", "ToolName(*)", "ToolName(foo:*)"
+# Patterns: "ToolName", "ToolName(*)", "ToolName(ls *)", "ToolName(command:ls *)"
+# Tools not in the allow list automatically trigger HITL approval.
 # ---------------------------------------------------------------------------
 # permissions:
 #   allow: []
 #   deny: []
-#   require_approval: []
 
 # ---------------------------------------------------------------------------
 # Channels — HITL (Human-in-the-Loop) communication channels

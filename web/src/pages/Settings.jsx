@@ -260,12 +260,6 @@ export default function Settings() {
                                         {config.permissions?.deny?.length > 0 ? config.permissions.deny.join(', ') : 'None'}
                                     </div>
                                 </div>
-                                <div>
-                                    <div style={{ fontSize: '10px', color: '#3b82f6', fontWeight: 700 }}>REQUIRE APPROVAL</div>
-                                    <div style={{ fontSize: '12px', color: '#1e40af', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                                        {config.permissions?.require_approval?.length > 0 ? config.permissions.require_approval.join(', ') : 'None'}
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </ConfigSection>

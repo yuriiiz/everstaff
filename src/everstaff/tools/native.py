@@ -75,9 +75,10 @@ def _python_type_to_json_schema_type(py_type: type) -> str:
 class NativeTool:
     """A native Python function wrapped as a tool."""
 
-    def __init__(self, func: Callable, definition_: ToolDefinition):
+    def __init__(self, func: Callable, definition_: ToolDefinition, permission_hint_fn: Callable | None = None):
         self._func = func
         self._definition = definition_
+        self._permission_hint_fn = permission_hint_fn
         functools.update_wrapper(self, func)
 
     @property
@@ -92,6 +93,12 @@ class NativeTool:
             return result
         return json.dumps(result, default=str)
 
+    def permission_hint(self, args: dict[str, Any]) -> "PermissionHint | None":
+        """Return a hint for generating permission patterns, or None."""
+        if self._permission_hint_fn is not None:
+            return self._permission_hint_fn(args)
+        return None
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self._func(*args, **kwargs)
 
@@ -99,6 +106,7 @@ class NativeTool:
 def tool(
     name: str | None = None,
     description: str | None = None,
+    permission_hint: Callable[[dict[str, Any]], Any] | None = None,
 ) -> Callable[[Callable], NativeTool]:
     """Decorator to register a Python function as a native tool.
 
@@ -146,6 +154,6 @@ def tool(
             source="native",
         )
 
-        return NativeTool(func=func, definition_=defn)
+        return NativeTool(func=func, definition_=defn, permission_hint_fn=permission_hint)
 
     return decorator

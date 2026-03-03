@@ -35,6 +35,7 @@ class HitlResolution(BaseModel):
     resolved_at: datetime
     resolved_by: str = "human"
     grant_scope: Optional[str] = None  # "once" | "session" | "permanent"
+    permission_pattern: Optional[str] = None  # e.g. "Bash(ls *)", "Bash"
 
 
 class ErrorResponse(BaseModel):

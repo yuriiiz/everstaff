@@ -23,6 +23,7 @@ class HitlDecision(BaseModel):
     comment: Optional[str] = None
     resolved_by: str = "human"
     grant_scope: Optional[str] = None
+    permission_pattern: Optional[str] = None  # e.g. "Bash(ls *)", "Bash"
 
 
 def _is_expired(hitl_item: dict) -> bool:
@@ -76,7 +77,7 @@ async def _save_session_json(store, session_id: str, session_data: dict) -> None
     await store.write(path, json.dumps(session_data, ensure_ascii=False, indent=2).encode())
 
 
-async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, broadcast_fn=None) -> None:
+async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None, broadcast_fn=None) -> None:
     """Resolve a HITL request — shared by REST endpoint and WS handler."""
     store = app.state.file_store
     config = app.state.config
@@ -97,6 +98,7 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
             decision=decision,
             comment=comment,
             grant_scope=grant_scope,
+            permission_pattern=permission_pattern,
             file_store=store,
         )
     except Exception:
@@ -113,8 +115,9 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
         return
 
     agent_name = session_data.get("agent_name", "")
+    agent_uuid = session_data.get("agent_uuid", "")
     from everstaff.api.sessions import _resume_session_task
-    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager)
+    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid)
 
 
 def make_router(config) -> APIRouter:
@@ -142,16 +145,28 @@ def make_router(config) -> APIRouter:
             if session_data.get("status") != "waiting_for_human":
                 continue
 
+            session_dirty = False
             for item in session_data.get("hitl_requests", []):
                 if item.get("status") != "pending":
                     continue
                 if _is_expired(item):
+                    # Lazily mark expired items in session.json
+                    item["status"] = "expired"
+                    session_dirty = True
                     continue
                 # Enrich with session metadata for callers
                 enriched = dict(item)
                 enriched.setdefault("session_id", session_data.get("session_id", ""))
                 enriched.setdefault("agent_name", session_data.get("agent_name", ""))
                 pending.append(enriched)
+
+            # Write back expired status changes
+            if session_dirty:
+                session_id = session_data.get("session_id", path.replace("/session.json", ""))
+                try:
+                    await _save_session_json(store, session_id, session_data)
+                except Exception:
+                    pass
 
         return pending
 
@@ -189,6 +204,7 @@ def make_router(config) -> APIRouter:
                 comment=decision.comment,
                 resolved_by=decision.resolved_by,
                 grant_scope=decision.grant_scope,
+                permission_pattern=decision.permission_pattern,
                 file_store=store,
             )
         except HitlNotFoundError:
@@ -209,6 +225,7 @@ def make_router(config) -> APIRouter:
         if auto_resume and all_hitls_settled(session_data):
             import everstaff.api.sessions as _sessions_mod
             agent_name = session_data.get("agent_name", "")
+            agent_uuid = session_data.get("agent_uuid", "")
             cm = getattr(request.app.state, "channel_manager", None)
             broadcast_fn = None
             if cm:
@@ -224,6 +241,7 @@ def make_router(config) -> APIRouter:
                 _sessions_mod._resume_session_task, session_id, agent_name, "", config,
                 broadcast_fn=broadcast_fn,
                 channel_manager=cm,
+                agent_uuid=agent_uuid,
             )
 
         return dict(updated_item)

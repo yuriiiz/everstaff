@@ -15,11 +15,38 @@ class YamlAgentDefinitionWriter:
     def __init__(self, agents_dir: str) -> None:
         self._agents_dir = Path(agents_dir)
 
-    async def add_allow_permission(self, agent_name: str, pattern: str) -> None:
-        path = self._agents_dir / f"{agent_name}.yaml"
+    async def add_allow_permission(
+        self,
+        agent_identifier: str,
+        pattern: str,
+        *,
+        agent_path: str | Path | None = None,
+    ) -> None:
+        """Add an allow permission to an agent's YAML file.
+
+        agent_identifier can be a UUID (tries {uuid}.yaml first) or agent_name.
+        If agent_path is provided, use it directly (skips search).
+        """
+        if agent_path:
+            path = Path(agent_path)
+        else:
+            # Try UUID-based path first
+            path = self._agents_dir / f"{agent_identifier}.yaml"
         if not path.exists():
-            logger.warning("Agent YAML not found: %s", path)
-            return
+            # Fall back to scanning by agent_name or uuid inside YAML
+            path = None
+            if self._agents_dir.exists():
+                for f in self._agents_dir.glob("*.yaml"):
+                    try:
+                        data = yaml.safe_load(f.read_text()) or {}
+                        if data.get("uuid") == agent_identifier or data.get("agent_name") == agent_identifier:
+                            path = f
+                            break
+                    except Exception:
+                        pass
+            if not path:
+                logger.warning("Agent YAML not found for: %s", agent_identifier)
+                return
 
         data = yaml.safe_load(path.read_text()) or {}
         permissions = data.setdefault("permissions", {})
@@ -28,4 +55,4 @@ class YamlAgentDefinitionWriter:
         if pattern not in allow:
             allow.append(pattern)
             path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
-            logger.info("Permanently granted '%s' to agent '%s'", pattern, agent_name)
+            logger.info("Permanently granted '%s' to agent '%s'", pattern, agent_identifier)

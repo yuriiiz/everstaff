@@ -8,6 +8,12 @@ from everstaff.tools.path_utils import resolve_safe_path
 from everstaff.core.constants import TOOL_MAX_RESULTS as _MAX_RESULTS
 
 
+def _glob_permission_hint(args):
+    from everstaff.protocols import PermissionHint
+    pat = args.get("pattern", "")
+    return PermissionHint("pattern", pat or "*")
+
+
 def make_glob_tool(workdir: Path):
     """Return a Glob NativeTool scoped to *workdir*."""
 
@@ -17,6 +23,7 @@ def make_glob_tool(workdir: Path):
             "Find files matching a glob pattern within the working directory. "
             "All paths must be relative — absolute paths and '..' traversal are not allowed."
         ),
+        permission_hint=_glob_permission_hint,
     )
     def glob_search(pattern: str, path: str = ".") -> str:
         """Find files matching a glob pattern within the working directory.

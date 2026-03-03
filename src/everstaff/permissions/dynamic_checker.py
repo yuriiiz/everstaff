@@ -1,9 +1,9 @@
 """DynamicPermissionChecker — wraps static checkers with session grants and HITL fallback."""
 from __future__ import annotations
 
-import fnmatch
 from typing import TYPE_CHECKING, Any, Callable
 
+from everstaff.permissions.rule_checker import _matches_rule
 from everstaff.protocols import PermissionResult
 
 if TYPE_CHECKING:
@@ -46,9 +46,9 @@ class DynamicPermissionChecker:
         if self._agent.matches_allow(tool_name, args):
             return PermissionResult(allowed=True)
 
-        # 3. Session grants
+        # 3. Session grants (supports argument patterns like "Bash(ls *)")
         for pattern in self._session_grants:
-            if fnmatch.fnmatch(tool_name, pattern):
+            if _matches_rule(pattern, tool_name, args):
                 return PermissionResult(allowed=True)
 
         # 4. System tool bypass

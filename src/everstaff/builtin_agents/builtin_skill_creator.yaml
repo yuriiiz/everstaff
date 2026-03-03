@@ -41,7 +41,7 @@ instructions: "You are Skill Creator, specialized in helping users create, test,
 permissions:
   allow: []
   deny:
-  - Bash(rm:*)
+  - Bash(rm *)
 skills:
 - find-skills
 - skill-creator

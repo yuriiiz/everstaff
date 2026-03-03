@@ -25,7 +25,7 @@ async def test_create_agent(tmp_path):
     assert resp.status_code == 201
     body = resp.json()
     assert body["name"] == "test-agent"
-    assert (tmp_path / "agents" / "test-agent.yaml").exists()
+    assert (tmp_path / "agents" / "abc-123.yaml").exists()
 
 
 @pytest.mark.asyncio
@@ -49,12 +49,16 @@ async def test_delete_agent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_create_agent_conflict(tmp_path):
+async def test_create_agent_allows_duplicate_names(tmp_path):
+    """UUID-based filenames allow agents with the same display name."""
     app = _make_app(tmp_path)
-    (tmp_path / "agents" / "test-agent.yaml").write_text("agent_name: test-agent\n")
+    (tmp_path / "agents" / "existing-uuid.yaml").write_text("agent_name: test-agent\nuuid: existing-uuid\n")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.post("/api/agents", json={"agent_name": "test-agent"})
-    assert resp.status_code == 409
+    assert resp.status_code == 201
+    # Should now have 2 yaml files
+    yaml_files = list((tmp_path / "agents").glob("*.yaml"))
+    assert len(yaml_files) == 2
 
 
 @pytest.mark.asyncio

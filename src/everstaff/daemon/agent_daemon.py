@@ -246,7 +246,8 @@ class AgentDaemon:
         * Agents whose YAML was removed or whose ``autonomy.enabled`` became
           False are stopped.
         * Newly added autonomous agents are started.
-        * Agents already running with unchanged config are left untouched.
+        * Existing agents are restarted to pick up any config changes
+          (permissions, instructions, tools, etc.).
         """
         logger.info("====== Hot reload triggered ======")
         current_agents = self._discover_autonomous_agents()
@@ -255,12 +256,21 @@ class AgentDaemon:
 
         to_stop = running_names - current_names
         to_start = current_names - running_names
-        logger.info("Reload: to_stop=%s, to_start=%s, unchanged=%s",
-                     list(to_stop), list(to_start), list(running_names & current_names))
+        to_restart = running_names & current_names
+        logger.info("Reload: to_stop=%s, to_start=%s, to_restart=%s",
+                     list(to_stop), list(to_start), list(to_restart))
 
         # Stop agents no longer present or no longer autonomous
         for name in to_stop:
             await self._stop_agent(name)
+
+        # Restart existing agents with fresh specs from YAML
+        for name in to_restart:
+            try:
+                await self._stop_agent(name)
+                await self._start_agent(name, current_agents[name])
+            except Exception as exc:
+                logger.error("Failed to restart agent '%s' during reload: %s", name, exc)
 
         # Start newly discovered agents
         for name in to_start:

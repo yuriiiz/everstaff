@@ -63,4 +63,4 @@ async def test_create_session_missing_agent_name(tmp_path):
     app = _make_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.post("/api/sessions", json={"user_input": "hi"})
-    assert resp.status_code == 422  # Pydantic validation error
+    assert resp.status_code == 400  # agent_name or agent_uuid required
