@@ -142,7 +142,8 @@ instructions: 'You are Agent Creator, specialized in helping users define an AI 
 
   - Create the agent as a persistent, modular project and continuously perform incremental
   updates on the existing codebase. Do not stop iterating or re-creating from scratch
-  until final user satisfaction is confirmed. '
+  until final user satisfaction is confirmed.
+  - Always call create_agent with persistent=true to make the agent persistent.
 permissions:
   allow: []
   deny:
