@@ -96,6 +96,21 @@ class LarkChannel:
                 {"tag": "button", "text": {"tag": "plain_text", "content": "Approve"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved"}},
                 {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected"}},
             ]
+        elif request.type == "tool_permission":
+            # Show tool details
+            if request.tool_name:
+                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Tool: {request.tool_name}"}})
+            if request.tool_args:
+                args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
+                if len(args_text) > 500:
+                    args_text = args_text[:500] + "..."
+                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Arguments:\n{args_text}"}})
+            actions = [
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected", "grant_scope": "once"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Once"}, "type": "default", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "once"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Session"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "session"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Always"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "permanent"}},
+            ]
         elif request.type == "choose" and request.options:
             actions = [
                 {"tag": "button", "text": {"tag": "plain_text", "content": opt.strip()}, "type": "default", "value": {"hitl_id": hitl_id, "decision": opt.strip()}}

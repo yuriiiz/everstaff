@@ -108,40 +108,75 @@ async def _resume_session_task(
                     ]
                     if resolved_hitls:
                         from everstaff.protocols import Message
+                        from everstaff.tools.pipeline import ToolCallContext
                         mem = env.build_memory_store()
                         messages = await mem.load(session_id)
-                        for item in resolved_hitls:
-                            req = item.get("request", {})
-                            resp = item.get("response", {})
-                            dtxt = _format_decision_message(req, resp.get("decision", ""), resp.get("comment"))
-                            tc_id = item.get("tool_call_id", "")
-                            messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id))
-                        await mem.save(session_id, messages)
 
-                        # Process grant_scope for tool_permission resolutions
                         extra_perms = []
                         for item in resolved_hitls:
                             req = item.get("request", {})
                             resp = item.get("response", {})
-                            if req.get("type") == "tool_permission" and resp.get("decision") == "approved":
-                                grant_scope = resp.get("grant_scope", "once")
-                                tool_name = req.get("tool_name", "")
-                                if not tool_name:
-                                    continue
-                                if grant_scope in ("session", "permanent"):
-                                    extra_perms.append(tool_name)
-                                if grant_scope == "permanent":
-                                    try:
-                                        from everstaff.permissions.definition_writer import YamlAgentDefinitionWriter
-                                        writer = YamlAgentDefinitionWriter(agents_dir=str(agents_dir))
-                                        await writer.add_allow_permission(agent_name, tool_name)
-                                    except Exception as wr_err:
-                                        logger.warning("Failed to write permanent grant for %s: %s", tool_name, wr_err)
+                            tc_id = item.get("tool_call_id", "")
 
+                            if req.get("type") == "tool_permission":
+                                tool_name = req.get("tool_name", "")
+                                tool_args = req.get("tool_args", {})
+
+                                if resp.get("decision") == "approved":
+                                    grant_scope = resp.get("grant_scope", "once")
+
+                                    # Apply session grant so permission check passes
+                                    if hasattr(ctx.permissions, "add_session_grant"):
+                                        ctx.permissions.add_session_grant(tool_name)
+
+                                    # Execute the tool through the pipeline — get real result
+                                    try:
+                                        tcc = ToolCallContext(
+                                            tool_name=tool_name,
+                                            args=tool_args,
+                                            agent_context=ctx,
+                                            tool_call_id=tc_id,
+                                        )
+                                        result = await ctx.tool_pipeline.execute(tcc)
+                                        messages.append(Message(role="tool", content=result.content, tool_call_id=tc_id))
+                                    except Exception as exec_err:
+                                        logger.warning("[session] tool execution failed after HITL approval: %s", exec_err)
+                                        messages.append(Message(role="tool", content=f"Tool execution failed: {exec_err}", tool_call_id=tc_id))
+
+                                    # Remove temporary grant for "once" scope
+                                    if grant_scope == "once":
+                                        if hasattr(ctx.permissions, "_session_grants"):
+                                            try:
+                                                ctx.permissions._session_grants.remove(tool_name)
+                                            except ValueError:
+                                                pass
+                                    elif grant_scope in ("session", "permanent"):
+                                        extra_perms.append(tool_name)
+
+                                    if grant_scope == "permanent":
+                                        try:
+                                            from everstaff.permissions.definition_writer import YamlAgentDefinitionWriter
+                                            writer = YamlAgentDefinitionWriter(agents_dir=str(agents_dir))
+                                            await writer.add_allow_permission(agent_name, tool_name)
+                                        except Exception as wr_err:
+                                            logger.warning("Failed to write permanent grant for %s: %s", tool_name, wr_err)
+                                else:
+                                    # Rejected — inject error tool result
+                                    messages.append(Message(
+                                        role="tool",
+                                        content=f"Permission denied: tool '{tool_name}' was rejected by the operator.",
+                                        tool_call_id=tc_id,
+                                    ))
+                            else:
+                                # Non-tool_permission HITL: keep existing behavior
+                                dtxt = _format_decision_message(req, resp.get("decision", ""), resp.get("comment"))
+                                messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id))
+
+                        await mem.save(session_id, messages)
                         if extra_perms:
                             # Merge with existing session grants (additive)
                             existing = session_raw.get("extra_permissions", [])
-                            merged = list(dict.fromkeys(existing + extra_perms))  # deduplicate, preserve order
+                            merged = list(dict.fromkeys(existing + extra_perms))
                             await mem.save(session_id, messages, extra_permissions=merged)
                 except Exception as read_err:
                     logger.warning("[session] failed to read session.json for HITL resume  session=%s  err=%s",

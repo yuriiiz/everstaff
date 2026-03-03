@@ -123,6 +123,21 @@ class LarkWsChannel:
                 {"tag": "button", "text": {"tag": "plain_text", "content": "Approve"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved"}},
                 {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected"}},
             ]
+        elif request.type == "tool_permission":
+            # Show tool details
+            if request.tool_name:
+                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Tool: {request.tool_name}"}})
+            if request.tool_args:
+                args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
+                if len(args_text) > 500:
+                    args_text = args_text[:500] + "..."
+                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Arguments:\n{args_text}"}})
+            actions = [
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected", "grant_scope": "once"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Once"}, "type": "default", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "once"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Session"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "session"}},
+                {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Always"}, "type": "primary", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "permanent"}},
+            ]
         elif request.type == "choose" and request.options:
             actions = [
                 {"tag": "button", "text": {"tag": "plain_text", "content": opt.strip()}, "type": "default", "value": {"hitl_id": hitl_id, "decision": opt.strip()}}
@@ -250,16 +265,16 @@ class LarkWsChannel:
     # ── Card action handler ──────────────────────────────────────
 
     @staticmethod
-    def _parse_card_action(data: Any) -> tuple[str, str, str]:
-        """Extract (hitl_id, decision, resolved_by) from a card action event.
+    def _parse_card_action(data: Any) -> tuple[str, str, str, str | None]:
+        """Extract (hitl_id, decision, resolved_by, grant_scope) from a card action event.
 
-        Returns ("", "", "") if the payload cannot be parsed.
+        Returns ("", "", "", None) if the payload cannot be parsed.
         """
         event = getattr(data, "event", data)
         action = getattr(event, "action", None)
         if action is None:
             logger.warning("[LARK-CB] _parse: no action field in event")
-            return "", "", ""
+            return "", "", "", None
 
         # Log raw fields for debugging
         raw_value = getattr(action, "value", None)
@@ -278,9 +293,10 @@ class LarkWsChannel:
 
         hitl_id = value.get("hitl_id", "")
         decision = value.get("decision", "")
+        grant_scope = value.get("grant_scope")
         if not hitl_id or not decision:
             logger.warning("[LARK-CB] _parse: missing hitl_id=%s or decision=%s in value=%s", hitl_id, decision, value)
-            return "", "", ""
+            return "", "", "", None
 
         if decision == "__input__":
             if isinstance(raw_form, str):
@@ -298,18 +314,19 @@ class LarkWsChannel:
         operator = getattr(event, "operator", None)
         resolved_by = getattr(operator, "open_id", "lark_user") if operator else "lark_user"
         resolved_by = resolved_by or "lark_user"
-        logger.info("[LARK-CB] _parse: hitl_id=%s decision=%r resolved_by=%s", hitl_id, decision, resolved_by)
-        return hitl_id, decision, resolved_by
+        logger.info("[LARK-CB] _parse: hitl_id=%s decision=%r resolved_by=%s grant_scope=%s", hitl_id, decision, resolved_by, grant_scope)
+        return hitl_id, decision, resolved_by, grant_scope
 
-    async def _handle_card_action(self, hitl_id: str, decision: str, resolved_by: str) -> None:
+    async def _handle_card_action(self, hitl_id: str, decision: str, resolved_by: str, grant_scope: str | None = None) -> None:
         """Resolve HITL via channel_manager (broadcasts + persists)."""
-        logger.info("LarkWsChannel._handle_card_action: hitl_id=%s decision=%r by=%s", hitl_id, decision, resolved_by)
+        logger.info("LarkWsChannel._handle_card_action: hitl_id=%s decision=%r by=%s grant_scope=%s", hitl_id, decision, resolved_by, grant_scope)
         try:
             from everstaff.protocols import HitlResolution
             resolution = HitlResolution(
                 decision=decision,
                 resolved_at=datetime.now(timezone.utc),
                 resolved_by=resolved_by,
+                grant_scope=grant_scope,
             )
             if self._channel_manager is not None:
                 result = await self._channel_manager.resolve(hitl_id, resolution)
@@ -352,7 +369,7 @@ class LarkWsChannel:
             Card update is handled uniformly by on_resolved() via broadcast.
             """
             logger.info("[LARK-CB] sync_card_handler ENTERED")
-            hitl_id, decision, resolved_by = self._parse_card_action(data)
+            hitl_id, decision, resolved_by, grant_scope = self._parse_card_action(data)
             if not hitl_id:
                 logger.warning("[LARK-CB] parse failed, returning empty response")
                 return P2CardActionTriggerResponse({})
@@ -360,7 +377,7 @@ class LarkWsChannel:
             # Dispatch backend processing (persist + resume) to app event loop
             if self._app_loop is not None and self._app_loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    self._handle_card_action(hitl_id, decision, resolved_by),
+                    self._handle_card_action(hitl_id, decision, resolved_by, grant_scope),
                     self._app_loop,
                 )
                 logger.info("[LARK-CB] dispatched _handle_card_action to app loop")

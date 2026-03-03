@@ -108,9 +108,7 @@ def _make_card_action_data(value: dict, form_value=None, open_id="user_001"):
 @pytest.mark.asyncio
 async def test_handle_card_action_calls_resolve(lark_ws_channel, channel_manager_mock):
     """_handle_card_action must call channel_manager.resolve() with correct hitl_id."""
-    data = _make_card_action_data({"hitl_id": "h1", "decision": "approved"})
-
-    await lark_ws_channel._handle_card_action(data)
+    await lark_ws_channel._handle_card_action("h1", "approved", "user_001")
 
     channel_manager_mock.resolve.assert_called_once()
     call_args = channel_manager_mock.resolve.call_args
@@ -118,15 +116,19 @@ async def test_handle_card_action_calls_resolve(lark_ws_channel, channel_manager
 
 
 @pytest.mark.asyncio
-async def test_handle_card_action_input_type(lark_ws_channel, channel_manager_mock):
-    """_handle_card_action with __input__ decision reads from form_value."""
-    data = _make_card_action_data(
-        {"hitl_id": "h2", "decision": "__input__"},
-        form_value={"user_input": "my free text"},
-        open_id="user_002",
-    )
+async def test_handle_card_action_with_grant_scope(lark_ws_channel, channel_manager_mock):
+    """_handle_card_action must pass grant_scope to resolution."""
+    await lark_ws_channel._handle_card_action("h1", "approved", "user_001", grant_scope="session")
 
-    await lark_ws_channel._handle_card_action(data)
+    channel_manager_mock.resolve.assert_called_once()
+    resolution = channel_manager_mock.resolve.call_args[0][1]
+    assert resolution.grant_scope == "session"
+
+
+@pytest.mark.asyncio
+async def test_handle_card_action_input_type(lark_ws_channel, channel_manager_mock):
+    """_handle_card_action passes decision directly (parsing done upstream)."""
+    await lark_ws_channel._handle_card_action("h2", "my free text", "user_002")
 
     channel_manager_mock.resolve.assert_called_once()
     resolution = channel_manager_mock.resolve.call_args[0][1]
@@ -134,13 +136,23 @@ async def test_handle_card_action_input_type(lark_ws_channel, channel_manager_mo
 
 
 @pytest.mark.asyncio
-async def test_handle_card_action_missing_hitl_id_is_noop(lark_ws_channel, channel_manager_mock):
-    """_handle_card_action with no hitl_id must not call resolve()."""
-    data = _make_card_action_data({"decision": "approved"}, open_id="user_003")  # no hitl_id
+async def test_parse_card_action_extracts_grant_scope(lark_ws_channel):
+    """_parse_card_action must extract grant_scope from button value."""
+    from everstaff.channels.lark_ws import LarkWsChannel
+    data = _make_card_action_data({"hitl_id": "h1", "decision": "approved", "grant_scope": "permanent"})
+    hitl_id, decision, resolved_by, grant_scope = LarkWsChannel._parse_card_action(data)
+    assert hitl_id == "h1"
+    assert decision == "approved"
+    assert grant_scope == "permanent"
 
-    await lark_ws_channel._handle_card_action(data)
 
-    channel_manager_mock.resolve.assert_not_called()
+@pytest.mark.asyncio
+async def test_parse_card_action_missing_hitl_id(lark_ws_channel):
+    """_parse_card_action with no hitl_id returns empty tuple."""
+    from everstaff.channels.lark_ws import LarkWsChannel
+    data = _make_card_action_data({"decision": "approved"}, open_id="user_003")
+    hitl_id, decision, resolved_by, grant_scope = LarkWsChannel._parse_card_action(data)
+    assert hitl_id == ""
 
 
 # --- start / stop lifecycle ---

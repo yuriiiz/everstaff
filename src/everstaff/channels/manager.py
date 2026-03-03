@@ -10,8 +10,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Callback signature: async (hitl_id, decision, comment) -> None
-ResolveCallback = Callable[[str, str, Optional[str]], Awaitable[None]]
+# Callback signature: async (hitl_id, decision, comment, grant_scope) -> None
+ResolveCallback = Callable[[str, str, Optional[str], Optional[str]], Awaitable[None]]
 
 
 class ChannelManager:
@@ -72,7 +72,7 @@ class ChannelManager:
         # Persist resolution and resume session
         if self._on_resolve is not None:
             try:
-                await self._on_resolve(hitl_id, resolution.decision, resolution.comment)
+                await self._on_resolve(hitl_id, resolution.decision, resolution.comment, getattr(resolution, "grant_scope", None))
             except Exception as exc:
                 logger.error("ChannelManager._on_resolve failed for %s: %s", hitl_id, exc)
 

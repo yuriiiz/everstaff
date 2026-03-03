@@ -200,6 +200,7 @@ class HitlResolution:
     resolved_at: datetime
     resolved_by: str = "human"
     comment: str | None = None
+    grant_scope: str | None = None   # "once" | "session" | "permanent"
 
 
 class HumanApprovalRequired(Exception):

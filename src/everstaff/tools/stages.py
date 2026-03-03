@@ -14,6 +14,29 @@ from everstaff.protocols import (
 )
 
 
+def _format_tool_prompt(tool_name: str, args: dict) -> str:
+    """Format a tool call description with argument-level detail."""
+    if not args:
+        return f"Agent wants to execute: {tool_name}()"
+
+    # Single-argument tool: compact format
+    if len(args) == 1:
+        _key, val = next(iter(args.items()))
+        val_str = str(val)
+        if len(val_str) > 200:
+            val_str = val_str[:200] + "..."
+        return f"Agent wants to execute: {tool_name}({val_str})"
+
+    # Multi-argument: key=value format
+    parts = []
+    for k, v in args.items():
+        v_str = str(v)
+        if len(v_str) > 100:
+            v_str = v_str[:100] + "..."
+        parts.append(f"{k}={v_str}")
+    return f"Agent wants to execute: {tool_name}({', '.join(parts)})"
+
+
 class PermissionStage:
     """Checks permissions before calling next.
 
@@ -43,7 +66,7 @@ class PermissionStage:
             request = HitlRequest(
                 hitl_id=str(uuid4()),
                 type="tool_permission",
-                prompt=f"Agent wants to execute tool '{ctx.tool_name}'",
+                prompt=_format_tool_prompt(ctx.tool_name, ctx.args),
                 tool_name=ctx.tool_name,
                 tool_args=ctx.args,
                 tool_call_id=ctx.tool_call_id,

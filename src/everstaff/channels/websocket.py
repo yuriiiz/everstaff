@@ -42,6 +42,8 @@ class WebSocketChannel:
             "context": request.context,
             "timeout_seconds": request.timeout_seconds,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "tool_name": request.tool_name,
+            "tool_args": request.tool_args,
         }
         await self._broadcast(event)
 

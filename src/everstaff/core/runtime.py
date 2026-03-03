@@ -514,6 +514,8 @@ class AgentRuntime:
                         prompt=req.prompt,
                         options=req.options,
                         context=req.context,
+                        tool_name=req.tool_name,
+                        tool_args=req.tool_args,
                     ),
                     response=None,
                 )
@@ -529,8 +531,10 @@ class AgentRuntime:
                 max_tokens=self._ctx.max_tokens,
                 hitl_requests=hitl_data,
             )
-            # Broadcast HITL request to all channels (Lark cards, WebSocket, etc.)
-            if self._ctx.channel_manager is not None:
+            # Broadcast HITL request to channels — only for daemon-sourced sessions.
+            # Web and CLI sessions handle HITL via session.json status polling.
+            _is_daemon = (self._ctx.trigger is not None and self._ctx.trigger.source == "daemon")
+            if self._ctx.channel_manager is not None and _is_daemon:
                 for req in hitl_exc.requests:
                     try:
                         await self._ctx.channel_manager.broadcast(self._ctx.session_id, req)

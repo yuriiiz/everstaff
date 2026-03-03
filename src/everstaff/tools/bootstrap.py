@@ -77,11 +77,16 @@ class CreateAgentTool:
         if agents_dir is None:
             logger.warning("create_agent: no _env — cannot persist agent '%s'", name)
             return
-        spec_data["agent_name"] = name
-        spec_data["source"] = "custom"
+        # Build a clean copy for persistence (don't mutate caller's dict)
+        persist_data = dict(spec_data)
+        persist_data["agent_name"] = name
+        persist_data["source"] = "custom"
+        if "uuid" not in persist_data:
+            import uuid as _uuid
+            persist_data["uuid"] = str(_uuid.uuid4())
         agents_dir.mkdir(parents=True, exist_ok=True)
         dest = agents_dir / f"{name}.yaml"
-        dest.write_text(yaml.dump(spec_data, allow_unicode=True, sort_keys=False))
+        dest.write_text(yaml.dump(persist_data, allow_unicode=True, sort_keys=False))
         logger.info("create_agent: persisted agent '%s' to %s", name, dest)
 
     async def execute(self, args: dict[str, Any]) -> ToolResult:
