@@ -600,13 +600,14 @@ export default function SessionStore() {
     const pendingSessionIds = new Set(
         hitlRequests
             .filter(r => {
-                const session = sessions.find(s => s.session_id === r.session_id);
+                const sid = (r.origin_session_id || r.session_id);
+                const session = sessions.find(s => s.session_id === sid);
                 return session ? session.status === 'waiting_for_human' : true;
             })
-            .map(r => r.session_id)
+            .map(r => (r.origin_session_id || r.session_id))
     );
     const currentHitlRequest = selectedSession
-        ? hitlRequests.find(r => r.session_id === selectedSession.session_id && r.status === 'pending')
+        ? hitlRequests.find(r => (r.origin_session_id || r.session_id) === selectedSession.session_id && r.status === 'pending')
         : null;
     const currentHitlPayload = currentHitlRequest ? (typeof currentHitlRequest.request === 'string' ? JSON.parse(currentHitlRequest.request) : currentHitlRequest.request) : null;
 
@@ -1244,7 +1245,7 @@ export default function SessionStore() {
 
                             {/* Inline tool permission HITL cards */}
                             {hitlRequests
-                                .filter(r => r.session_id === selectedSession.session_id && r.status === 'pending' && (r.hitl_type === 'tool_permission' || r.request?.type === 'tool_permission'))
+                                .filter(r => (r.origin_session_id || r.session_id) === selectedSession.session_id && r.status === 'pending' && (r.hitl_type === 'tool_permission' || r.request?.type === 'tool_permission'))
                                 .map(r => (
                                     <div key={r.hitl_id} style={{ display: 'flex', gap: '12px', padding: '8px 0' }}>
                                         <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#eff6ff', color: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px', marginTop: '0px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
@@ -1914,7 +1915,7 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
     }
 
     let pendingRequest = hitlRequests?.find(r => {
-        if (r.session_id !== sessionId || (r.status !== 'pending' && r.status !== 'expired')) return false;
+        if ((r.origin_session_id || r.session_id) !== sessionId || (r.status !== 'pending' && r.status !== 'expired')) return false;
 
         // 1. Match by tool_call_id (most reliable)
         if (toolCallId && r.tool_call_id === toolCallId) return true;
@@ -1975,10 +1976,10 @@ const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, ses
                     const res = await fetch('/api/hitl');
                     const freshRequests = await res.json();
                     const match = freshRequests.find(r =>
-                        r.session_id === sessionId && r.status === 'pending' &&
+                        (r.origin_session_id || r.session_id) === sessionId && r.status === 'pending' &&
                         (!toolCallId || r.tool_call_id === toolCallId)
                     ) || freshRequests.find(r =>
-                        r.session_id === sessionId && r.status === 'pending'
+                        (r.origin_session_id || r.session_id) === sessionId && r.status === 'pending'
                     );
                     hitlIdToResolve = match?.hitl_id;
                 } catch (e) {

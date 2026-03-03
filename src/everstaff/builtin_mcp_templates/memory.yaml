@@ -1,0 +1,8 @@
+name: memory
+display_name: Knowledge Graph Memory
+description: Persistent memory using a local knowledge graph for entities and relations
+icon: brain
+category: utilities
+transport: stdio
+command: npx
+args: ["-y", "@modelcontextprotocol/server-memory"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from everstaff.permissions import PermissionConfig
 from everstaff.schema.autonomy import AutonomyConfig, HitlChannelRef
@@ -14,11 +14,20 @@ class MCPServerSpec(BaseModel):
     """An MCP server the agent should connect to."""
 
     name: str
-    command: str
+    command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
-    transport: str = "stdio"
+    transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
     url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_transport_fields(self):
+        if self.transport == "stdio" and not self.command:
+            raise ValueError("stdio transport requires 'command'")
+        if self.transport in ("sse", "streamable_http") and not self.url:
+            raise ValueError(f"{self.transport} transport requires 'url'")
+        return self
 
 
 class SubAgentSpec(BaseModel):

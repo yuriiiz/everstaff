@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from contextlib import AsyncExitStack
-from typing import Any, TYPE_CHECKING
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, AsyncIterator, TYPE_CHECKING
 
 from everstaff.protocols import ToolDefinition
 
@@ -52,23 +52,64 @@ class MCPConnection:
             result.append(MCPTool(session=session, definition_=defn))
         return result
 
+    @asynccontextmanager
+    async def _build_transport(self) -> AsyncIterator[tuple[Any, Any]]:
+        """Return ``(read_stream, write_stream)`` for the configured transport.
+
+        Raises :class:`ValueError` for unsupported transport types.
+        """
+        transport_type = self._spec.transport
+
+        if transport_type == "stdio":
+            from mcp import StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            server_params = StdioServerParameters(
+                command=self._spec.command,
+                args=self._spec.args,
+                env=self._spec.env or None,
+            )
+            async with stdio_client(server_params) as transport:
+                yield transport  # (read_stream, write_stream)
+
+        elif transport_type == "sse":
+            from mcp.client.sse import sse_client
+
+            async with sse_client(
+                url=self._spec.url,
+                headers=self._spec.headers or None,
+            ) as transport:
+                yield transport  # (read_stream, write_stream)
+
+        elif transport_type == "streamable_http":
+            from mcp.client.streamable_http import streamablehttp_client
+
+            async with streamablehttp_client(
+                url=self._spec.url,
+                headers=self._spec.headers or None,
+            ) as transport:
+                # streamablehttp_client yields (read, write, get_session_id);
+                # we only need the first two elements.
+                yield transport[0], transport[1]
+
+        else:
+            raise ValueError(f"Unsupported MCP transport: {transport_type!r}")
+
     async def connect(self) -> list["MCPTool"]:
         """Connect to MCP server and return list of discovered MCPTool."""
-        logger.debug("Connecting to MCP server: %s %s", self._spec.command, self._spec.args)
+        logger.debug(
+            "Connecting to MCP server (transport=%s): %s",
+            self._spec.transport,
+            self._spec.command or self._spec.url,
+        )
         try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
+            from mcp import ClientSession
         except ImportError:
             raise ImportError("MCP package not installed. Run: pip install mcp")
 
         self._exit_stack = AsyncExitStack()
-        server_params = StdioServerParameters(
-            command=self._spec.command,
-            args=self._spec.args,
-            env=self._spec.env or None,
-        )
         transport = await self._exit_stack.enter_async_context(
-            stdio_client(server_params)
+            self._build_transport()
         )
         read_stream, write_stream = transport
         session = await self._exit_stack.enter_async_context(

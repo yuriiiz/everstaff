@@ -85,6 +85,7 @@ class FrameworkConfig(BaseModel):
     agents_dir: str = Field(default_factory=lambda: "./agents")
     skills_dirs: list[str] = Field(default_factory=lambda: ["./skills", ".agent/skills"])
     tools_dirs: list[str] = Field(default_factory=lambda: ["./tools"])
+    mcp_templates_dirs: list[str] = Field(default_factory=lambda: [".agent/mcp_templates"])
     context: ContextConfig = Field(default_factory=ContextConfig)
 
     storage: StorageConfig = Field(default_factory=StorageConfig)
@@ -167,6 +168,16 @@ def _builtin_tools_path() -> str | None:
     return None
 
 
+def _builtin_mcp_templates_path() -> str:
+    """Return the path to the bundled builtin_mcp_templates directory."""
+    try:
+        ref = _pkg_resources.files("everstaff") / "builtin_mcp_templates"
+        return str(ref)
+    except Exception:
+        # Fallback for development (inside src/everstaff/)
+        return str(Path(__file__).parent.parent / "builtin_mcp_templates")
+
+
 def _builtin_agents_path() -> str | None:
     """Return the path to the bundled builtin_agents directory, or None if absent."""
     try:
@@ -196,6 +207,12 @@ def _builtin_defaults() -> FrameworkConfig:
     builtin_tools = _builtin_tools_path()
     if builtin_tools and builtin_tools not in cfg.tools_dirs:
         cfg = cfg.model_copy(update={"tools_dirs": cfg.tools_dirs + [builtin_tools]})
+    # Append builtin MCP templates (user dirs take precedence via first-dir-wins)
+    builtin_mcp = _builtin_mcp_templates_path()
+    if builtin_mcp not in cfg.mcp_templates_dirs:
+        cfg = cfg.model_copy(update={
+            "mcp_templates_dirs": cfg.mcp_templates_dirs + [builtin_mcp],
+        })
     return cfg
 
 
@@ -212,11 +229,13 @@ def _merge_user_config(cfg: FrameworkConfig, user_path: Path) -> FrameworkConfig
 
     new_skills = _dedup(cfg.skills_dirs + data.pop("skills_dirs", []))
     new_tools = _dedup(cfg.tools_dirs + data.pop("tools_dirs", []))
+    new_mcp_templates = _dedup(cfg.mcp_templates_dirs + data.pop("mcp_templates_dirs", []))
     # Rebuild via model_validate so nested dicts are coerced into Pydantic models
     merged = cfg.model_dump()
     merged.update(data)
     merged["skills_dirs"] = new_skills
     merged["tools_dirs"] = new_tools
+    merged["mcp_templates_dirs"] = new_mcp_templates
     return FrameworkConfig.model_validate(merged)
 
 

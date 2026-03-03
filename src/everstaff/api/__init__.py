@@ -289,6 +289,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     from everstaff.api.tools import make_router as make_tools_router
     from everstaff.api.config_api import make_router as make_config_router
     from everstaff.api.stats import make_router as make_stats_router
+    from everstaff.api.mcp_api import make_router as make_mcp_router
     from everstaff.api.webhooks import lark_router
     from everstaff.api.daemon import daemon_router
 
@@ -301,6 +302,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.include_router(make_tools_router(config), prefix="/api")
     app.include_router(make_config_router(config), prefix="/api")
     app.include_router(make_stats_router(config), prefix="/api")
+    app.include_router(make_mcp_router(config), prefix="/api")
     app.include_router(lark_router, prefix="/api")
     app.include_router(daemon_router)
 

@@ -1,0 +1,15 @@
+name: firecrawl
+display_name: Firecrawl
+description: Advanced web scraping, crawling, and structured data extraction
+icon: flame
+category: search
+transport: stdio
+command: npx
+args: ["-y", "firecrawl-mcp"]
+env:
+  FIRECRAWL_API_KEY: ""
+required_env:
+  - key: FIRECRAWL_API_KEY
+    label: Firecrawl API Key
+    description: "Get your API key at https://firecrawl.dev"
+    secret: true

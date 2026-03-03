@@ -1,0 +1,8 @@
+name: fetch
+display_name: Web Fetch
+description: Fetch and extract content from web URLs
+icon: globe
+category: utilities
+transport: stdio
+command: uvx
+args: [mcp-server-fetch]
