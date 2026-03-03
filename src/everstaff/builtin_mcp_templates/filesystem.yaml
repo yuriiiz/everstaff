@@ -1,8 +1,11 @@
 name: filesystem
 display_name: Filesystem
 description: Read, write, and manage local files and directories
-icon: folder
+icon: https://api.dicebear.com/7.x/shapes/svg?seed=filesystem
 category: utilities
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+args:
+- -y
+- '@modelcontextprotocol/server-filesystem'
+- .

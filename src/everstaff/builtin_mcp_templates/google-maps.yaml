@@ -1,15 +1,18 @@
 name: google-maps
 display_name: Google Maps
-description: Search places, get directions, geocode addresses, and retrieve location details
-icon: map-pin
+description: Search places, get directions, geocode addresses, and retrieve location
+  details
+icon: https://cdn.simpleicons.org/googlemaps
 category: utilities
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-google-maps"]
+args:
+- -y
+- '@modelcontextprotocol/server-google-maps'
 env:
-  GOOGLE_MAPS_API_KEY: ""
+  GOOGLE_MAPS_API_KEY: ''
 required_env:
-  - key: GOOGLE_MAPS_API_KEY
-    label: Google Maps API Key
-    description: "Create at https://console.cloud.google.com/apis/credentials"
-    secret: true
+- key: GOOGLE_MAPS_API_KEY
+  label: Google Maps API Key
+  description: Create at https://console.cloud.google.com/apis/credentials
+  secret: true

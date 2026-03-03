@@ -1,8 +1,10 @@
 name: playwright
 display_name: Playwright
 description: Browser automation for web scraping, testing, and interaction
-icon: browser
+icon: https://playwright.dev/img/playwright-logo.svg
 category: browser-automation
 transport: stdio
 command: npx
-args: ["-y", "@playwright/mcp@latest"]
+args:
+- -y
+- '@playwright/mcp@latest'

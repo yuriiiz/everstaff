@@ -27,6 +27,7 @@ class AddMCPServerRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    icon: str | None = None
     template: str | None = None  # If set, install from template
 
 
@@ -39,6 +40,7 @@ class UpdateMCPServerRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    icon: str | None = None
 
 
 class TestConnectionRequest(BaseModel):
@@ -49,6 +51,7 @@ class TestConnectionRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    icon: str | None = None
 
 
 class CreateTemplateRequest(BaseModel):

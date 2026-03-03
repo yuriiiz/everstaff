@@ -1,8 +1,10 @@
 name: context7
 display_name: Context7
 description: Up-to-date documentation and code examples for libraries and frameworks
-icon: book
+icon: https://api.dicebear.com/7.x/shapes/svg?seed=context7
 category: documentation
 transport: stdio
 command: npx
-args: ["-y", "@upstash/context7-mcp@latest"]
+args:
+- -y
+- '@upstash/context7-mcp@latest'

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, Save, Trash2, FileCode, Layout, Settings, ChevronRight, X, Check, User, MessageSquare, Users, UserPlus, Shield, Info, Terminal, Bot, Activity, Search, Share2, Book, Database, Filter, Eye, UserCheck, GitGraph } from 'lucide-react';
+import { Plus, Save, Trash2, FileCode, Layout, Settings, ChevronRight, X, Check, User, MessageSquare, Users, UserPlus, Shield, Info, Terminal, Bot, Activity, Search, Share2, Book, Database, Filter, Eye, UserCheck, GitGraph, Globe, Server, Zap, AlertCircle } from 'lucide-react';
+import { motion } from 'framer-motion';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
 import Select from 'react-select';
@@ -253,6 +254,74 @@ const TagList = ({ items, onRemove }) => {
     );
 };
 
+const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools }) => {
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState(null);
+
+    const handleTest = async () => {
+        setTesting(true);
+        try {
+            const result = await onTest(server);
+            setTestResult(result);
+            if (result.success && onShowTools) {
+                onShowTools(result.tools, server.name);
+            }
+        } catch (e) {
+            setTestResult({ success: false, error: e.message });
+        } finally {
+            setTesting(false);
+        }
+    };
+
+    return (
+        <div style={{ padding: '16px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                        {server.icon ? (
+                            <img src={server.icon} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
+                        ) : (
+                            <Server size={18} color="#111827" />
+                        )}
+                    </div>
+                    <div>
+                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827' }}>{server.name}</div>
+                        <div style={{ fontSize: '11px', color: '#6b7280' }}>{server.transport === 'stdio' ? `command: ${server.command}` : `url: ${server.url}`}</div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={handleTest} disabled={testing} style={{ padding: '6px', borderRadius: '6px', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', color: '#6b7280' }} title="Test Connection">
+                        {testing ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}><AlertCircle size={14} /></motion.div> : <Zap size={14} />}
+                    </button>
+                    <button onClick={() => onEdit(server)} style={{ padding: '6px', borderRadius: '6px', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', color: '#6b7280' }} title="Edit Config">
+                        <Settings size={14} />
+                    </button>
+                    <button onClick={() => onDelete(server)} style={{ padding: '6px', borderRadius: '6px', border: '1px solid #ef4444', background: 'white', cursor: 'pointer', color: '#ef4444' }} title="Remove">
+                        <Trash2 size={14} />
+                    </button>
+                </div>
+            </div>
+
+            {testResult && (
+                <div
+                    onClick={() => testResult.success && onShowTools && onShowTools(testResult.tools, server.name)}
+                    style={{
+                        padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
+                        background: testResult.success ? '#f0fdf4' : '#fef2f2',
+                        color: testResult.success ? '#15803d' : '#b91c1c',
+                        border: `1px solid ${testResult.success ? '#bbf7d0' : '#fecaca'}`,
+                        display: 'flex', gap: '8px', alignItems: 'center',
+                        cursor: testResult.success ? 'pointer' : 'default'
+                    }}
+                >
+                    {testResult.success ? <Check size={14} /> : <AlertCircle size={14} />}
+                    <span>{testResult.success ? `Connected: ${testResult.tool_count} tools (Click to view)` : testResult.error}</span>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const SelectedList = ({ items, onRemove, allItems }) => {
     if (!items || items.length === 0) return null;
     return (
@@ -405,10 +474,14 @@ export default function AgentStore() {
     const [deleteModal, setDeleteModal] = useState({ isOpen: false, agent: null });
     const [sourceTab, setSourceTab] = useState('custom');
     const [addSubAgentModal, setAddSubAgentModal] = useState({ isOpen: false });
+    const [addMcpModal, setAddMcpModal] = useState({ isOpen: false });
+    const [editMcpModal, setEditMcpModal] = useState({ isOpen: false, server: null });
+    const [showToolsModal, setShowToolsModal] = useState({ isOpen: false, tools: [], serverName: '' });
 
     const [activeSubTab, setActiveSubTab] = useState('basic');
     const [agentSessions, setAgentSessions] = useState([]);
     const [agentLoops, setAgentLoops] = useState([]);
+    const [agentMcpServers, setAgentMcpServers] = useState([]);
 
     const [allSkills, setAllSkills] = useState([]);
     const [allTools, setAllTools] = useState([]);
@@ -525,6 +598,7 @@ export default function AgentStore() {
         // Clear previous data while loading new
         if (activeSubTab === 'sessions') setAgentSessions([]);
         if (activeSubTab === 'loops') setAgentLoops([]);
+        if (activeSubTab === 'mcp') setAgentMcpServers([]);
 
         if (activeSubTab === 'sessions') {
             fetch(`/api/sessions?agent_uuid=${encodeURIComponent(selectedAgent.uuid)}`)
@@ -546,6 +620,14 @@ export default function AgentStore() {
                 .catch(err => {
                     console.error("Fetch loops error:", err);
                     setAgentLoops([]);
+                });
+        } else if (activeSubTab === 'mcp') {
+            fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers`)
+                .then(res => res.json())
+                .then(data => setAgentMcpServers(Array.isArray(data) ? data : []))
+                .catch(err => {
+                    console.error("Fetch MCP error:", err);
+                    setAgentMcpServers([]);
                 });
         }
     }, [activeSubTab, selectedAgent?.agent_name, selectedAgent?.uuid]);
@@ -1256,11 +1338,60 @@ export default function AgentStore() {
                                             )}
 
                                             {activeSubTab === 'mcp' && (
-                                                <div style={{ height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', background: 'white', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
-                                                    <div style={{ textAlign: 'center' }}>
-                                                        <Share2 size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
-                                                        <div style={{ fontSize: '16px', fontWeight: 600 }}>MCP Integration</div>
-                                                        <div style={{ fontSize: '13px' }}>Coming Soon...</div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                                    <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#111827' }}>MCP SERVERS</h4>
+                                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                                <button className="btn" style={{ height: '28px', fontSize: '12px', padding: '0 12px' }} onClick={() => navigate('/mcp')}>
+                                                                    <Globe size={14} /> Marketplace
+                                                                </button>
+                                                                <button
+                                                                    className="btn btn-primary" style={{ height: '28px', fontSize: '12px', padding: '0 12px' }}
+                                                                    onClick={() => setAddMcpModal({ isOpen: true })}
+                                                                >
+                                                                    <Plus size={14} /> Add Custom
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '16px' }}>
+                                                            {agentMcpServers.map(server => (
+                                                                <McpServerCard
+                                                                    key={server.name}
+                                                                    server={server}
+                                                                    onTest={async (s) => {
+                                                                        const res = await fetch('/api/mcp/test', {
+                                                                            method: 'POST',
+                                                                            headers: { 'Content-Type': 'application/json' },
+                                                                            body: JSON.stringify(s)
+                                                                        });
+                                                                        return await res.json();
+                                                                    }}
+                                                                    onEdit={(s) => setEditMcpModal({ isOpen: true, server: s })}
+                                                                    onShowTools={(tools, serverName) => setShowToolsModal({ isOpen: true, tools, serverName })}
+                                                                    onDelete={async (s) => {
+                                                                        if (confirm(`Remove MCP server ${s.name}?`)) {
+                                                                            try {
+                                                                                const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers/${s.name}`, { method: 'DELETE' });
+                                                                                if (res.ok) {
+                                                                                    setAgentMcpServers(prev => prev.filter(p => p.name !== s.name));
+                                                                                } else {
+                                                                                    const err = await res.json();
+                                                                                    alert(err.error || "Failed to delete");
+                                                                                }
+                                                                            } catch (e) { alert(e.message); }
+                                                                        }
+                                                                    }}
+                                                                />
+                                                            ))}
+                                                            {agentMcpServers.length === 0 && (
+                                                                <div style={{ gridColumn: '1/-1', padding: '40px', textAlign: 'center', background: '#f8fafc', borderRadius: '12px', border: '1px dashed #e2e8f0' }}>
+                                                                    <Share2 size={40} color="#94a3b8" style={{ marginBottom: '12px', opacity: 0.5 }} />
+                                                                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#64748b' }}>No MCP Servers configured</div>
+                                                                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>Add servers from the Marketplace to equip this agent with more tools.</div>
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             )}
@@ -1683,6 +1814,234 @@ export default function AgentStore() {
 
             <SaveModal isOpen={saveModal.isOpen} result={saveModal.result} onClose={() => setSaveModal({ isOpen: false, result: { status: '', message: '' } })} />
             <DeleteModal isOpen={deleteModal.isOpen} agent={deleteModal.agent} onConfirm={handleDelete} onClose={() => setDeleteModal({ isOpen: false, agent: null })} />
+            <AddMcpServerModal
+                isOpen={addMcpModal.isOpen}
+                onClose={() => setAddMcpModal({ isOpen: false })}
+                onAdd={async (spec) => {
+                    try {
+                        const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(spec)
+                        });
+                        if (res.ok) {
+                            setAgentMcpServers(prev => [...prev, spec]);
+                            setAddMcpModal({ isOpen: false });
+                        } else {
+                            const err = await res.json();
+                            alert(err.error || "Failed to add MCP server");
+                        }
+                    } catch (e) { alert(e.message); }
+                }}
+            />
+            <EditMcpServerModal
+                isOpen={editMcpModal.isOpen}
+                server={editMcpModal.server}
+                onClose={() => setEditMcpModal({ isOpen: false, server: null })}
+                onSave={async (updatedSpec) => {
+                    try {
+                        const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers/${editMcpModal.server.name}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(updatedSpec)
+                        });
+                        if (res.ok) {
+                            setAgentMcpServers(prev => prev.map(s => s.name === editMcpModal.server.name ? updatedSpec : s));
+                            setEditMcpModal({ isOpen: false, server: null });
+                        } else {
+                            const err = await res.json();
+                            alert(err.error || "Failed to update MCP server");
+                        }
+                    } catch (e) { alert(e.message); }
+                }}
+            />
+            <ToolsModal
+                isOpen={showToolsModal.isOpen}
+                tools={showToolsModal.tools}
+                serverName={showToolsModal.serverName}
+                onClose={() => setShowToolsModal({ isOpen: false, tools: [], serverName: '' })}
+            />
+        </div>
+    );
+}
+
+function AddMcpServerModal({ isOpen, onClose, onAdd }) {
+    const [jsonInput, setJsonInput] = useState(`{
+  "mcpServers": {
+    "MiniMax": {
+      "command": "uvx",
+      "args": ["minimax-mcp"],
+      "env": {
+        "MINIMAX_API_KEY": "<insert-your-api-key-here>",
+        "MINIMAX_MCP_BASE_PATH": "<local-output-dir-path>",
+        "MINIMAX_API_HOST": "https://api.minimaxi.chat",
+        "MINIMAX_API_RESOURCE_MODE": "url"
+      }
+    }
+  }
+}`);
+
+    if (!isOpen) return null;
+
+    const handleAdd = () => {
+        try {
+            const data = JSON.parse(jsonInput);
+            const servers = data.mcpServers || data;
+            const entries = Object.entries(servers);
+            if (entries.length === 0) {
+                alert("No servers found in JSON");
+                return;
+            }
+
+            const [name, config] = entries[0];
+            const spec = {
+                name: config.name || name,
+                transport: config.transport || 'stdio',
+                command: config.command,
+                args: config.args || [],
+                env: config.env || {},
+                url: config.url,
+                icon: config.icon
+            };
+            onAdd(spec);
+        } catch (e) {
+            alert("Invalid JSON: " + e.message);
+        }
+    };
+
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div style={{ background: 'white', borderRadius: '12px', width: '600px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                    <Server size={18} color="#3b82f6" />
+                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Import Custom MCP Server (JSON)</h3>
+                </div>
+                <div style={{ marginBottom: '20px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', marginBottom: '8px', display: 'block' }}>PASTE Claude Desktop Config Format</label>
+                    <textarea
+                        autoFocus
+                        style={{ width: '100%', height: '300px', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontFamily: 'monospace', fontSize: '12px', outline: 'none' }}
+                        value={jsonInput}
+                        onChange={e => setJsonInput(e.target.value)}
+                    />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                    <button className="btn" onClick={onClose}>Cancel</button>
+                    <button className="btn btn-primary" onClick={handleAdd}>Import & Add</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function EditMcpServerModal({ isOpen, server, onClose, onSave }) {
+    const [name, setName] = useState('');
+    const [command, setCommand] = useState('');
+    const [argsJson, setArgsJson] = useState('[]');
+    const [envJson, setEnvJson] = useState('{}');
+    const [url, setUrl] = useState('');
+    const [transport, setTransport] = useState('stdio');
+    const [icon, setIcon] = useState('');
+
+    useEffect(() => {
+        if (server) {
+            setName(server.name || '');
+            setTransport(server.transport || 'stdio');
+            setCommand(server.command || '');
+            setArgsJson(JSON.stringify(server.args || [], null, 2));
+            setEnvJson(JSON.stringify(server.env || {}, null, 2));
+            setUrl(server.url || '');
+            setIcon(server.icon || '');
+        }
+    }, [server]);
+
+    if (!isOpen || !server) return null;
+
+    const handleSave = () => {
+        try {
+            const args = JSON.parse(argsJson);
+            const env = JSON.parse(envJson);
+            onSave({
+                name, transport, command, args, env, url, icon
+            });
+        } catch (e) {
+            alert("Invalid JSON: " + e.message);
+        }
+    };
+
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div style={{ background: 'white', borderRadius: '12px', width: '500px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                    <Settings size={18} color="#3b82f6" />
+                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Edit MCP Server: {server.name}</h3>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: '70vh' }}>
+                    <div>
+                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>ICON URL (OPTIONAL)</label>
+                        <input className="input-field" value={icon} onChange={e => setIcon(e.target.value)} placeholder="https://..." />
+                    </div>
+                    {transport === 'stdio' ? (
+                        <>
+                            <div>
+                                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>COMMAND</label>
+                                <input className="input-field" value={command} onChange={e => setCommand(e.target.value)} />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>ARGS (JSON ARRAY)</label>
+                                <textarea className="input-field" style={{ height: '80px', fontFamily: 'monospace' }} value={argsJson} onChange={e => setArgsJson(e.target.value)} />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>ENV (JSON OBJECT)</label>
+                                <textarea className="input-field" style={{ height: '80px', fontFamily: 'monospace' }} value={envJson} onChange={e => setEnvJson(e.target.value)} />
+                            </div>
+                        </>
+                    ) : (
+                        <div>
+                            <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>SSE URL</label>
+                            <input className="input-field" value={url} onChange={e => setUrl(e.target.value)} />
+                        </div>
+                    )}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '20px' }}>
+                    <button className="btn" onClick={onClose}>Cancel</button>
+                    <button className="btn btn-primary" onClick={handleSave}>Save Changes</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ToolsModal({ isOpen, onClose, tools, serverName }) {
+    if (!isOpen) return null;
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}>
+            <div style={{ background: 'white', borderRadius: '12px', width: '600px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
+                <div style={{ padding: '20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <Terminal size={18} color="#3b82f6" />
+                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Tools for {serverName}</h3>
+                    </div>
+                    <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
+                </div>
+                <div style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+                    {tools.length === 0 ? (
+                        <div style={{ textAlign: 'center', color: '#64748b', padding: '40px' }}>No tools found for this server.</div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {tools.map(tool => (
+                                <div key={tool.name} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#111827', marginBottom: '4px' }}>{tool.name}</div>
+                                    <div style={{ fontSize: '12px', color: '#4b5563', lineHeight: '1.5' }}>{tool.description}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                <div style={{ padding: '16px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button className="btn" onClick={onClose}>Close</button>
+                </div>
+            </div>
         </div>
     );
 }

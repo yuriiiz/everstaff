@@ -1,15 +1,17 @@
 name: sentry
 display_name: Sentry
 description: Query error tracking, issues, and performance data from Sentry
-icon: bug
+icon: https://cdn.simpleicons.org/sentry
 category: developer-tools
 transport: stdio
 command: npx
-args: ["-y", "@sentry/mcp-server@latest"]
+args:
+- -y
+- '@sentry/mcp-server@latest'
 env:
-  SENTRY_ACCESS_TOKEN: ""
+  SENTRY_ACCESS_TOKEN: ''
 required_env:
-  - key: SENTRY_ACCESS_TOKEN
-    label: Sentry Access Token
-    description: "Create at https://sentry.io/settings/account/api/auth-tokens/"
-    secret: true
+- key: SENTRY_ACCESS_TOKEN
+  label: Sentry Access Token
+  description: Create at https://sentry.io/settings/account/api/auth-tokens/
+  secret: true

@@ -1,20 +1,22 @@
 name: slack
 display_name: Slack
 description: Read and send messages, manage channels, and search in Slack workspaces
-icon: slack
+icon: https://cdn.simpleicons.org/slack
 category: communication
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-slack"]
+args:
+- -y
+- '@modelcontextprotocol/server-slack'
 env:
-  SLACK_BOT_TOKEN: ""
-  SLACK_TEAM_ID: ""
+  SLACK_BOT_TOKEN: ''
+  SLACK_TEAM_ID: ''
 required_env:
-  - key: SLACK_BOT_TOKEN
-    label: Slack Bot Token
-    description: "Bot User OAuth Token (starts with xoxb-)"
-    secret: true
-  - key: SLACK_TEAM_ID
-    label: Slack Team ID
-    description: "Your Slack workspace ID (starts with T)"
-    secret: false
+- key: SLACK_BOT_TOKEN
+  label: Slack Bot Token
+  description: Bot User OAuth Token (starts with xoxb-)
+  secret: true
+- key: SLACK_TEAM_ID
+  label: Slack Team ID
+  description: Your Slack workspace ID (starts with T)
+  secret: false

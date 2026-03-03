@@ -1,15 +1,17 @@
 name: github
 display_name: GitHub
 description: Access GitHub repositories, issues, pull requests, and more
-icon: github
+icon: https://cdn.simpleicons.org/github
 category: developer-tools
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-github"]
+args:
+- -y
+- '@modelcontextprotocol/server-github'
 env:
-  GITHUB_PERSONAL_ACCESS_TOKEN: ""
+  GITHUB_PERSONAL_ACCESS_TOKEN: ''
 required_env:
-  - key: GITHUB_PERSONAL_ACCESS_TOKEN
-    label: GitHub Personal Access Token
-    description: "Create at https://github.com/settings/tokens"
-    secret: true
+- key: GITHUB_PERSONAL_ACCESS_TOKEN
+  label: GitHub Personal Access Token
+  description: Create at https://github.com/settings/tokens
+  secret: true

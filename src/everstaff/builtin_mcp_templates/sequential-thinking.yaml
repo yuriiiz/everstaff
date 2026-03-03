@@ -1,8 +1,10 @@
 name: sequential-thinking
 display_name: Sequential Thinking
 description: Dynamic problem-solving through structured sequential thought chains
-icon: lightbulb
+icon: https://api.dicebear.com/7.x/shapes/svg?seed=think
 category: reasoning
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+args:
+- -y
+- '@modelcontextprotocol/server-sequential-thinking'

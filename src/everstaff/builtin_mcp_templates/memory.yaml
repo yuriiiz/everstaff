@@ -1,8 +1,10 @@
 name: memory
 display_name: Knowledge Graph Memory
 description: Persistent memory using a local knowledge graph for entities and relations
-icon: brain
+icon: https://api.dicebear.com/7.x/shapes/svg?seed=memory
 category: utilities
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-memory"]
+args:
+- -y
+- '@modelcontextprotocol/server-memory'

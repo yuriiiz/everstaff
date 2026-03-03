@@ -1,8 +1,11 @@
 name: puppeteer
 display_name: Puppeteer
-description: Headless Chrome browser automation for screenshots, scraping, and PDF generation
-icon: browser
+description: Headless Chrome browser automation for screenshots, scraping, and PDF
+  generation
+icon: https://cdn.simpleicons.org/puppeteer
 category: browser-automation
 transport: stdio
 command: npx
-args: ["-y", "@modelcontextprotocol/server-puppeteer"]
+args:
+- -y
+- '@modelcontextprotocol/server-puppeteer'

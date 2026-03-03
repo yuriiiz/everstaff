@@ -20,6 +20,7 @@ class MCPServerSpec(BaseModel):
     transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    icon: str | None = None
 
     @model_validator(mode="after")
     def validate_transport_fields(self):
