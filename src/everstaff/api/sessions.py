@@ -122,6 +122,18 @@ async def _resume_session_task(
         channel_manager=channel_manager,
     )
     _sid = session_id[:8]
+
+    # Clear any leftover cancel.signal before building the runtime.
+    # This prevents the new runtime from immediately self-cancelling
+    # when resumed right after a stop (before the old runtime cleaned up).
+    _cancel_file = sessions_dir / session_id / "cancel.signal"
+    try:
+        if _cancel_file.exists():
+            _cancel_file.unlink()
+            logger.debug("[session] cleared leftover cancel.signal  session=%s", _sid)
+    except Exception:
+        pass
+
     logger.info("[session] start  agent=%s  session=%s", agent_name, _sid)
     runtime, ctx = await AgentBuilder(spec, env, session_id=session_id).build()
     try:

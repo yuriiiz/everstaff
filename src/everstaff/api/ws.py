@@ -153,6 +153,23 @@ def make_router(config) -> APIRouter:
                     if not agent_name:
                         logger.warning("[WS] agent_name empty  session=%s  (resume may fail)", _sid)
 
+                    # If the session is still running (e.g. stuck in a loop),
+                    # write cancel.signal to stop it before starting a new resume.
+                    # _resume_session_task will clear the signal before building
+                    # the new runtime, so only the old runtime sees it.
+                    if _session_status == "running":
+                        try:
+                            store = app.state.file_store
+                            await store.write(
+                                f"{session_id}/cancel.signal",
+                                _json.dumps({"force": False}).encode(),
+                            )
+                            logger.info("[WS] auto-stopping running session before resume  session=%s", _sid)
+                            # Give the old runtime a moment to detect the signal
+                            await asyncio.sleep(1)
+                        except Exception as stop_err:
+                            logger.warning("[WS] failed to auto-stop session %s: %s", _sid, stop_err)
+
                     cm = getattr(app.state, "channel_manager", None)
                     asyncio.create_task(
                         _resume_session_task(
