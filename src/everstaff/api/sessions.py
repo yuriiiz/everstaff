@@ -54,6 +54,7 @@ async def _resume_session_task(
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
+    from everstaff.protocols import HumanApprovalRequired
 
     sessions_dir = Path(config.sessions_dir).expanduser().resolve()
     agents_dir = Path(config.agents_dir).expanduser().resolve()
@@ -135,8 +136,41 @@ async def _resume_session_task(
         pass
 
     logger.info("[session] start  agent=%s  session=%s", agent_name, _sid)
-    runtime, ctx = await AgentBuilder(spec, env, session_id=session_id).build()
+
+    # Ensure session.json exists and status is "running" BEFORE build(),
+    # so the session is always visible in the UI — even if build() crashes.
+    _session_dir = sessions_dir / session_id
+    _session_dir.mkdir(parents=True, exist_ok=True)
+    _meta = _session_dir / "session.json"
+    if _meta.exists():
+        # Resume: reset status to "running" and clear previous error.
+        try:
+            _existing = json.loads(_meta.read_text())
+            _existing["status"] = "running"
+            _existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _existing.pop("error", None)
+            _meta.write_text(json.dumps(_existing, indent=2))
+        except Exception:
+            pass
+    else:
+        # New session: write initial session.json.
+        _now = datetime.now(timezone.utc).isoformat()
+        _meta.write_text(json.dumps({
+            "session_id": session_id,
+            "agent_name": agent_name,
+            "agent_uuid": agent_uuid,
+            "status": "running",
+            "created_at": _now,
+            "updated_at": _now,
+            "parent_session_id": None,
+            "metadata": {"title": agent_name},
+            "messages": [],
+            "hitl_requests": [],
+        }, indent=2))
+
+    ctx = None
     try:
+        runtime, ctx = await AgentBuilder(spec, env, session_id=session_id).build()
         if tool_call_id:
             # Proper resume (single-HITL legacy path): insert HITL decision as a tool-role message.
             from everstaff.protocols import Message
@@ -284,10 +318,27 @@ async def _resume_session_task(
                     logger.debug("[session] broadcast failed  session=%s  event=%s  err=%s",
                                  _sid, type(event).__name__, exc)
         logger.info("[session] end agent=%s session=%s", agent_name, _sid)
+    except HumanApprovalRequired:
+        # HITL pause — runtime already wrote status="waiting_for_human".
+        logger.info("[session] paused for HITL  agent=%s  session=%s", agent_name, _sid)
     except Exception as e:
         logger.error("[session] error agent=%s session=%s err=%s", agent_name, _sid, e)
+        # Mark session as failed with error details so the UI shows why.
+        try:
+            _fail_meta = sessions_dir / session_id / "session.json"
+            if _fail_meta.exists():
+                _fail_data = json.loads(_fail_meta.read_text())
+            else:
+                _fail_data = {"session_id": session_id, "agent_name": agent_name}
+            _fail_data["status"] = "failed"
+            _fail_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _fail_data["error"] = f"{type(e).__name__}: {e}"
+            _fail_meta.write_text(json.dumps(_fail_data, indent=2))
+        except Exception:
+            pass
     finally:
-        await ctx.aclose()
+        if ctx is not None:
+            await ctx.aclose()
 
 
 def _extract_broadcast_fn(channel_manager):
@@ -457,7 +508,7 @@ def make_router(config) -> APIRouter:
                         active=False,
                         metadata=_parse_session_metadata(raw.get("metadata", {})),
                         hitl_requests=raw.get("hitl_requests", []),
-                        # messages NOT included in list response
+                        error=raw.get("error"),
                     )
 
                     sessions.append(session_obj)
@@ -502,6 +553,7 @@ def make_router(config) -> APIRouter:
             messages=raw.get("messages", []),
             metadata=_parse_session_metadata(raw.get("metadata", {})),
             hitl_requests=raw.get("hitl_requests", []),
+            error=raw.get("error"),
         )
 
     @router.delete("/sessions/{session_id}", status_code=204)

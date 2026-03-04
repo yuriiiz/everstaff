@@ -20,3 +20,4 @@ class Session(BaseModel):
     messages: list[Message] = Field(default_factory=list)
     metadata: SessionMetadata = Field(default_factory=SessionMetadata)
     hitl_requests: list[dict] = Field(default_factory=list)
+    error: str | None = None

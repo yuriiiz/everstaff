@@ -124,6 +124,14 @@ class AgentBuilder:
         if getattr(self._spec, "enable_bootstrap", False):
             system_tool_names.update(("create_agent", "create_skill"))
 
+        # Framework tools (e.g. system_reconcile) are builtin-only
+        # and should bypass permission checks.
+        _FRAMEWORK_TOOL_NAMES = {"system_reconcile"}
+        spec_tools = set(getattr(self._spec, "tools", None) or [])
+        source = getattr(self._spec, "source", "custom")
+        if source == "builtin":
+            system_tool_names.update(spec_tools & _FRAMEWORK_TOOL_NAMES)
+
         # Resolve file_store BEFORE permissions (needed for session grants)
         try:
             file_store = self._env.build_file_store()

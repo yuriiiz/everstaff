@@ -88,6 +88,7 @@ const ChatInput = memo(({
     currentHitlPayload,
     onSendMessage,
     onStop,
+    onRetry,
     statusContent,
     CREATOR_SUGGESTIONS,
     renderMessagesCount
@@ -110,6 +111,79 @@ const ChatInput = memo(({
 
     return (
         <div style={{ padding: '20px', borderTop: '1px solid #f3f4f6', background: 'white' }}>
+            {/* Error Message & Retry for Failed Sessions */}
+            {selectedSession?.status === 'failed' && !isProcessing && (
+                <div style={{
+                    marginBottom: '12px',
+                    padding: '8px 12px',
+                    background: '#fff5f5',
+                    border: '1px solid #fee2e2',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    animation: 'fadeIn 0.3s ease-out',
+                    justifyContent: 'space-between',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444', flexShrink: 0 }}>
+                            <X size={14} strokeWidth={3} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '10px', fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1 }}>Session Error</div>
+                            {selectedSession.error && (
+                                <div style={{
+                                    fontSize: '12px',
+                                    color: '#b91c1c',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    marginTop: '2px',
+                                    opacity: 0.9,
+                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+                                }} title={selectedSession.error}>
+                                    {selectedSession.error}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <button
+                        onClick={onRetry}
+                        style={{
+                            background: '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '6px',
+                            padding: '6px 12px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            flexShrink: 0,
+                            transition: 'all 0.2s',
+                            boxShadow: '0 2px 4px rgba(239, 68, 68, 0.15)'
+                        }}
+                        onMouseEnter={e => {
+                            e.currentTarget.style.background = '#dc2626';
+                            e.currentTarget.style.transform = 'translateY(-1px)';
+                            e.currentTarget.style.boxShadow = '0 4px 8px rgba(239, 68, 68, 0.2)';
+                        }}
+                        onMouseLeave={e => {
+                            e.currentTarget.style.background = '#ef4444';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = '0 2px 4px rgba(239, 68, 68, 0.15)';
+                        }}
+                    >
+                        <Zap size={12} fill="currentColor" />
+                        RETRY
+                    </button>
+                    <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+                </div>
+            )}
+
             {/* Suggested Actions for Creator Agents */}
             {selectedSession.isNew && CREATOR_SUGGESTIONS[selectedSession.agent_uuid] && renderMessagesCount === 1 && (
                 <div style={{
@@ -137,7 +211,7 @@ const ChatInput = memo(({
                 borderRadius: '12px',
                 border: '1px solid #e5e7eb',
                 boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
-                opacity: !isAgentOnline && selectedSession ? 0.7 : 1
+                opacity: (!isAgentOnline && selectedSession) ? 0.7 : 1
             }}>
                 <input
                     ref={inputRef}
@@ -988,6 +1062,29 @@ export default function SessionStore() {
         }
     };
 
+    const resumeSession = async () => {
+        if (!selectedSession?.session_id) return;
+        setIsProcessing(true);
+        setStatusContent('Resuming...');
+        try {
+            const res = await fetch(`/api/sessions/${selectedSession.session_id}/resume`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_input: "" })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.detail || 'Failed to resume session');
+            }
+            // Wait for WS events to handle the rest
+        } catch (error) {
+            console.error('Failed to resume session:', error);
+            alert(`Failed to resume: ${error.message}`);
+            setIsProcessing(false);
+            setStatusContent('');
+        }
+    };
+
     const [sessionToDelete, setSessionToDelete] = useState(null);
 
     const handleDeleteClick = (e, session) => {
@@ -1453,6 +1550,7 @@ export default function SessionStore() {
                             currentHitlPayload={currentHitlPayload}
                             onSendMessage={sendMessage}
                             onStop={stopSession}
+                            onRetry={resumeSession}
                             statusContent={statusContent}
                             CREATOR_SUGGESTIONS={CREATOR_SUGGESTIONS}
                             renderMessagesCount={renderMessages.length}

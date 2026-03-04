@@ -263,6 +263,15 @@ class AgentRuntime:
                 max_tokens=self._ctx.max_tokens,
                 trigger=self._ctx.trigger,
             )
+        elif messages:
+            # Resume without new user input.
+            # If the last message is from the assistant, inject a continuation
+            # prompt so the LLM message alternation (user → assistant) is preserved.
+            last = messages[-1]
+            if last.role == "assistant":
+                messages.append(Message(role="user", content="Continue."))
+            # If the last message is already from the user, the LLM will
+            # simply re-process it — no injection needed.
 
         turns = 0
         try:

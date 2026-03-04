@@ -184,6 +184,21 @@ class ThinkEngine:
                     )
                     break
 
+                # Build a single assistant message with all tool calls
+                assistant_tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": str(tc.args)},
+                    }
+                    for tc in response.tool_calls
+                ]
+                messages.append(Message(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=assistant_tool_calls,
+                ))
+
                 decided = False
                 for tc in response.tool_calls:
                     if tc.name == "make_decision":
@@ -196,74 +211,39 @@ class ThinkEngine:
                         logger.info("[Think:%s] Decision made — action=%s, priority=%s, task='%s'",
                                      agent_name, decision.action, decision.priority,
                                      decision.task_prompt[:80] if decision.task_prompt else '-')
-                        # Capture assistant tool call + tool result to complete the exchange
-                        messages.append(Message(
-                            role="assistant",
-                            content=response.content,
-                            tool_calls=[{
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {"name": tc.name, "arguments": str(tc.args)},
-                            }],
-                        ))
                         messages.append(Message(
                             role="tool",
                             content=f"Decision '{decision.action}' recorded.",
                             tool_call_id=tc.id,
                         ))
                         decided = True
-                        break
 
-                if tc.name == "recall_semantic_detail":
-                    topic = tc.args.get("topic", "index")
-                    logger.debug("[Think:%s] Tool call: recall_semantic_detail(topic=%s)", agent_name, topic)
-                    content = await self._memory.semantic_read(agent_name, topic)
-                    messages.append(Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[{
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": str(tc.args),
-                            },
-                        }],
-                    ))
-                    messages.append(Message(
-                        role="tool",
-                        content=content or "(empty)",
-                        tool_call_id=tc.id,
-                    ))
+                    elif tc.name == "recall_semantic_detail":
+                        topic = tc.args.get("topic", "index")
+                        logger.debug("[Think:%s] Tool call: recall_semantic_detail(topic=%s)", agent_name, topic)
+                        content = await self._memory.semantic_read(agent_name, topic)
+                        messages.append(Message(
+                            role="tool",
+                            content=content or "(empty)",
+                            tool_call_id=tc.id,
+                        ))
 
-                elif tc.name == "recall_recent_episodes":
-                    days = tc.args.get("days", 1)
-                    tags = tc.args.get("tags")
-                    logger.debug("[Think:%s] Tool call: recall_recent_episodes(days=%s, tags=%s)", agent_name, days, tags)
-                    eps = await self._memory.episode_query(
-                        agent_name, days=days, tags=tags,
-                    )
-                    ep_text = "\n".join(
-                        f"- [{e.timestamp}] {e.trigger}: {e.action} -> {e.result}"
-                        for e in eps
-                    ) or "(no episodes)"
-                    messages.append(Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[{
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": str(tc.args),
-                            },
-                        }],
-                    ))
-                    messages.append(Message(
-                        role="tool",
-                        content=ep_text,
-                        tool_call_id=tc.id,
-                    ))
+                    elif tc.name == "recall_recent_episodes":
+                        days = tc.args.get("days", 1)
+                        tags = tc.args.get("tags")
+                        logger.debug("[Think:%s] Tool call: recall_recent_episodes(days=%s, tags=%s)", agent_name, days, tags)
+                        eps = await self._memory.episode_query(
+                            agent_name, days=days, tags=tags,
+                        )
+                        ep_text = "\n".join(
+                            f"- [{e.timestamp}] {e.trigger}: {e.action} -> {e.result}"
+                            for e in eps
+                        ) or "(no episodes)"
+                        messages.append(Message(
+                            role="tool",
+                            content=ep_text,
+                            tool_call_id=tc.id,
+                        ))
 
                 if decided:
                     break

@@ -108,17 +108,21 @@ class MCPConnection:
             raise ImportError("MCP package not installed. Run: pip install mcp")
 
         self._exit_stack = AsyncExitStack()
-        transport = await self._exit_stack.enter_async_context(
-            self._build_transport()
-        )
-        read_stream, write_stream = transport
-        session = await self._exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
-        )
-        await session.initialize()
-        tools = await self._discover_tools(session)
-        logger.debug("MCP server connected, discovered %d tool(s)", len(tools))
-        return tools
+        try:
+            transport = await self._exit_stack.enter_async_context(
+                self._build_transport()
+            )
+            read_stream, write_stream = transport
+            session = await self._exit_stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            await session.initialize()
+            tools = await self._discover_tools(session)
+            logger.debug("MCP server connected, discovered %d tool(s)", len(tools))
+            return tools
+        except BaseException:
+            await self.disconnect()
+            raise
 
     async def disconnect(self) -> None:
         if self._exit_stack:
