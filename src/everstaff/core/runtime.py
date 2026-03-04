@@ -8,9 +8,12 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
+from pathlib import Path
+
 from everstaff.core.context import AgentContext
 from everstaff.tools.pipeline import ToolCallContext
 from everstaff.protocols import HumanApprovalRequired, LLMClient, Message, TraceEvent
+from everstaff.utils.workspace_diff import snapshot_workspace, diff_snapshots, guess_mime
 from everstaff.schema.token_stats import SessionStats, TokenUsage
 from everstaff.schema.stream import (
     StreamEvent,
@@ -22,6 +25,7 @@ from everstaff.schema.stream import (
     SessionEnd,
     ErrorEvent,
     HitlRequestEvent,
+    FileCreatedEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -479,6 +483,7 @@ class AgentRuntime:
                     if perm_result is not None:
                         # Permission denied — use denied result, skip tool_start event
                         result = perm_result
+                        _ws_before = {}
                         tool_start_t = time.monotonic()
                         self._emit("tool_start", {"tool": tool_call.name, "args": tool_call.args})
                         stats.record_tool_call()
@@ -489,6 +494,10 @@ class AgentRuntime:
                         self._emit("tool_start", {"tool": tool_call.name, "args": tool_call.args})
                         stats.record_tool_call()
                         yield ToolCallStart(name=tool_call.name, args=tool_call.args)
+
+                        # Snapshot workspace before tool execution
+                        _workdir = self._ctx.workdir
+                        _ws_before = snapshot_workspace(_workdir) if _workdir else {}
 
                         # Execute remaining pipeline (PermissionStage already passed)
                         try:
@@ -513,6 +522,22 @@ class AgentRuntime:
                     # Track child HITL requests from delegate_task_to_subagent results
                     if hasattr(result, '_child_hitl_requests') and result._child_hitl_requests:
                         self._pending_child_hitls.extend(result._child_hitl_requests)
+
+                    # Detect new/modified files and emit FileCreatedEvent
+                    if self._ctx.workdir and not result.is_error and _ws_before is not None:
+                        _ws_after = snapshot_workspace(self._ctx.workdir)
+                        _created, _modified = diff_snapshots(_ws_before, _ws_after)
+                        for fp in _created + _modified:
+                            try:
+                                full = self._ctx.workdir / fp
+                                yield FileCreatedEvent(
+                                    file_path=fp,
+                                    file_name=Path(fp).name,
+                                    size=full.stat().st_size,
+                                    mime_type=guess_mime(fp),
+                                )
+                            except OSError:
+                                pass
 
         except HumanApprovalRequired as hitl_exc:
             # Checkpoint: embed hitl_requests in session.json and save
