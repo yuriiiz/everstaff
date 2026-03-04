@@ -525,6 +525,17 @@ def make_router(config) -> APIRouter:
         signal_path = f"{session_id}/cancel.signal"
         payload = json.dumps({"force": force}).encode()
         await store.write(signal_path, payload)
+        # Update session status immediately so the UI sees "cancelled"
+        # even before the runtime checks the cancel signal.
+        session_path = f"{session_id}/session.json"
+        try:
+            raw = await store.read(session_path)
+            session_data = json.loads(raw.decode())
+            if session_data.get("status") == "running":
+                session_data["status"] = "cancelled"
+                await store.write(session_path, json.dumps(session_data, ensure_ascii=False).encode())
+        except Exception:
+            pass  # cancel.signal is the primary mechanism; this is best-effort
         return {"status": "cancelled", "force": force, "session_id": session_id}
 
     @router.post("/sessions/{session_id}/resume", status_code=202)

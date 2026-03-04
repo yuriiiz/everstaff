@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
-import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal, Cpu, Bot, UserCheck, Check, Search, X, Sparkles, Zap, Filter } from 'lucide-react';
+import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal, Cpu, Bot, UserCheck, Check, Search, X, Sparkles, Zap, Filter, Folder, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HitlPanel } from './HitlComponents';
 import FileCard from '../components/FileCard';
 import FilePreviewModal from '../components/FilePreviewModal';
+import FileBrowser from '../components/FileBrowser';
 
 const CREATOR_SUGGESTIONS = {
     'builtin_agent_creator': [
@@ -86,6 +87,8 @@ const ChatInput = memo(({
     isConnecting,
     currentHitlPayload,
     onSendMessage,
+    onStop,
+    statusContent,
     CREATOR_SUGGESTIONS,
     renderMessagesCount
 }) => {
@@ -164,12 +167,12 @@ const ChatInput = memo(({
                             handleSend();
                         }
                     }}
-                    disabled={isWaitingForInput ? false : ((!isConnected && !selectedSession?.isNew) || !isAgentOnline || isProcessing)}
+                    disabled={isWaitingForInput ? false : ((!isConnected && !selectedSession?.isNew) || !isAgentOnline)}
                     autoFocus
                 />
                 <button
                     onClick={handleSend}
-                    disabled={isWaitingForInput ? !input.trim() : ((!isConnected && !selectedSession?.isNew) || !input.trim() || !isAgentOnline || isProcessing)}
+                    disabled={isWaitingForInput ? !input.trim() : ((!isConnected && !selectedSession?.isNew) || !input.trim() || !isAgentOnline)}
                     style={{
                         background: isWaitingForInput ? (input.trim() ? '#2563eb' : '#e5e7eb') : ((isConnected || selectedSession?.isNew) && input.trim() && isAgentOnline ? '#111827' : '#e5e7eb'),
                         color: 'white',
@@ -186,7 +189,75 @@ const ChatInput = memo(({
                 >
                     <Send size={14} />
                 </button>
+                {isProcessing && (
+                    <button
+                        onClick={onStop}
+                        style={{
+                            background: '#fee2e2',
+                            color: '#ef4444',
+                            border: '1px solid #fecdd3',
+                            borderRadius: '8px',
+                            width: '32px',
+                            height: '32px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s'
+                        }}
+                        title="Stop Session"
+                    >
+                        <Square size={12} fill="#ef4444" />
+                    </button>
+                )}
             </div>
+            {(() => {
+                const displayStatus = isProcessing ? (statusContent || 'Thinking...') : (selectedSession?.isNew ? '' : selectedSession?.status);
+                if (!displayStatus) return null;
+
+                const statusStyles = {
+                    'running': { color: '#3b82f6', label: 'Processing...', dot: '#3b82f6', pulse: true },
+                    'cancelled': { color: '#6b7280', label: 'Stopped', dot: '#9ca3af', pulse: false },
+                    'completed': { color: '#10b981', label: 'Completed', dot: '#10b981', pulse: false },
+                    'failed': { color: '#ef4444', label: 'Error', dot: '#ef4444', pulse: false },
+                    'interrupted': { color: '#f59e0b', label: 'Interrupted', dot: '#f59e0b', pulse: false },
+                    'waiting_for_human': { color: '#8b5cf6', label: 'Waiting for approval', dot: '#8b5cf6', pulse: true }
+                };
+
+                const style = statusStyles[isProcessing ? 'running' : displayStatus] || { color: '#6b7280', label: displayStatus, dot: '#9ca3af', pulse: false };
+
+                return (
+                    <div style={{
+                        marginTop: '8px',
+                        fontSize: '11px',
+                        color: style.color,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '0 4px',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.02em'
+                    }}>
+                        <div className="status-dot" style={{
+                            width: '6px',
+                            height: '6px',
+                            background: style.dot,
+                            borderRadius: '50%',
+                            animation: style.pulse ? 'pulse 1.5s infinite' : 'none',
+                            opacity: style.pulse ? 1 : 0.6
+                        }} />
+                        <span>{isProcessing ? (statusContent || style.label) : style.label}</span>
+                    </div>
+                );
+            })()}
+            <style>{`
+                @keyframes pulse {
+                    0% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.4; transform: scale(1.2); }
+                    100% { opacity: 1; transform: scale(1); }
+                }
+            `}</style>
         </div>
     );
 });
@@ -212,6 +283,8 @@ export default function SessionStore() {
     const [searchTerm, setSearchTerm] = useState('');
     const [config, setConfig] = useState(null);
     const [loadingConfig, setLoadingConfig] = useState(true);
+    const [newFilesCount, setNewFilesCount] = useState(0);
+    const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
     const wsRef = useRef(null);
     const sseRef = useRef(null);
     const [isHitlModalOpen, setIsHitlModalOpen] = useState(false);
@@ -464,6 +537,7 @@ export default function SessionStore() {
                     });
                     setIsProcessing(false);
                     setStatusContent('');
+                    setFileRefreshTrigger(prev => prev + 1);
                 } else if (data.type === 'thinking_delta') {
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
@@ -547,6 +621,9 @@ export default function SessionStore() {
                         }
                         return prev;
                     });
+                    // Increment new files count
+                    setNewFilesCount(prev => prev + 1);
+                    setFileRefreshTrigger(prev => prev + 1);
                 } else if (data.type === 'status') {
                     setIsProcessing(data.status === 'busy');
                     if (data.content !== undefined) setStatusContent(data.content);
@@ -706,6 +783,15 @@ export default function SessionStore() {
         }
     }, [messages, isProcessing]);
 
+    // Poll for files while the session is running
+    useEffect(() => {
+        if (!isProcessing || !selectedSession?.session_id) return;
+        const interval = setInterval(() => {
+            setFileRefreshTrigger(prev => prev + 1);
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [isProcessing, selectedSession?.session_id]);
+
     const scrollToBottom = () => {
         requestAnimationFrame(() => {
             if (scrollRef.current) {
@@ -768,8 +854,8 @@ export default function SessionStore() {
                 }
                 setTokenUsage(sum);
 
-                setIsProcessing(false);
-                setStatusContent('');
+                setIsProcessing(data.status === 'running');
+                setStatusContent(data.status === 'running' ? 'Thinking...' : '');
                 setShowSystemPrompt(false);
 
                 // Fetch workspace files and attach to last assistant message
@@ -801,7 +887,7 @@ export default function SessionStore() {
                             }
                         }
                     })
-                    .catch(() => {});
+                    .catch(() => { });
             })
             .catch(err => {
                 console.warn(`[debug] fetchMessages failed for ${sid}: ${err.message}. Preserving state.`);
@@ -891,6 +977,15 @@ export default function SessionStore() {
         setIsProcessing(true);
         setStatusContent('Thinking...');
         wsRef.current.send(JSON.stringify({ type: 'user_message', content: currentInput, client_id: clientIdRef.current }));
+    };
+
+    const stopSession = async () => {
+        if (!selectedSession?.session_id) return;
+        try {
+            await fetch(`/api/sessions/${selectedSession.session_id}/stop`, { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to stop session:', error);
+        }
     };
 
     const [sessionToDelete, setSessionToDelete] = useState(null);
@@ -1357,6 +1452,8 @@ export default function SessionStore() {
                             isConnecting={isConnecting}
                             currentHitlPayload={currentHitlPayload}
                             onSendMessage={sendMessage}
+                            onStop={stopSession}
+                            statusContent={statusContent}
                             CREATOR_SUGGESTIONS={CREATOR_SUGGESTIONS}
                             renderMessagesCount={renderMessages.length}
                         />
@@ -1370,220 +1467,286 @@ export default function SessionStore() {
             </div>
 
             {/* 3. Right Details Panel */}
-            <div style={{ width: '280px', flexShrink: 0, borderLeft: '1px solid #e5e7eb', background: '#fcfcfc', padding: '20px', display: selectedSession ? 'block' : 'none' }}>
-                <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: '16px', letterSpacing: '0.05em' }}>
-                    Session Details
-                </div>
-                {selectedSession && (
-                    <div key={selectedSession.session_id} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
-                            <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Agent Name</div>
-                            <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f2937' }}>{selectedSession.agent_name}</div>
-                        </div>
-                        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
-                            <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Session Title</div>
-                            <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f2937' }}>{selectedSession.metadata?.title || 'Untitled Session'}</div>
-                        </div>
-                        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
-                            <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Session ID</div>
-                            <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#4b5563', wordBreak: 'break-all' }}>{selectedSession.session_id}</div>
-                        </div>
-
-                        {/* Context Window - Pure Frontend Calculation */}
-                        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <Cpu size={14} color="#6b7280" />
-                                <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Context Window</div>
+            <div style={{ width: '320px', flexShrink: 0, borderLeft: '1px solid #e5e7eb', background: '#fcfcfc', display: selectedSession ? 'flex' : 'none', flexDirection: 'column' }}>
+                {/* Scrollable Details Section */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.05em' }}>
+                        Session Details
+                    </div>
+                    {selectedSession && (
+                        <div key={selectedSession.session_id} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
+                                <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Agent Name</div>
+                                <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f2937' }}>{selectedSession.agent_name}</div>
+                            </div>
+                            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
+                                <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Session Title</div>
+                                <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f2937' }}>{selectedSession.metadata?.title || 'Untitled Session'}</div>
+                            </div>
+                            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
+                                <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Session ID</div>
+                                <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#4b5563', wordBreak: 'break-all' }}>{selectedSession.session_id}</div>
                             </div>
 
-                            {(() => {
-                                // Calculate current usage based on message content
-                                const calculateTokens = (msgs) => {
-                                    let totalTokens = 0;
+                            {/* Context Window - Pure Frontend Calculation */}
+                            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <Cpu size={14} color="#6b7280" />
+                                    <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Context Window</div>
+                                </div>
 
-                                    // Include system prompt if present
-                                    const systemPrompt = selectedSession.metadata?.system_prompt || '';
-                                    const allText = msgs.reduce((acc, m) => {
-                                        return acc + (m.content || '') + (m.thinking || '') + (m.tool_calls ? JSON.stringify(m.tool_calls) : '');
-                                    }, systemPrompt);
+                                {(() => {
+                                    // Calculate current usage based on message content
+                                    const calculateTokens = (msgs) => {
+                                        let totalTokens = 0;
 
-                                    for (let char of allText) {
-                                        // Heuristic: ASCII range (excluding controls) considered "English"
-                                        if (char.charCodeAt(0) <= 127) {
-                                            totalTokens += 0.3;
-                                        } else {
-                                            totalTokens += 0.6;
+                                        // Include system prompt if present
+                                        const systemPrompt = selectedSession.metadata?.system_prompt || '';
+                                        const allText = msgs.reduce((acc, m) => {
+                                            return acc + (m.content || '') + (m.thinking || '') + (m.tool_calls ? JSON.stringify(m.tool_calls) : '');
+                                        }, systemPrompt);
+
+                                        for (let char of allText) {
+                                            // Heuristic: ASCII range (excluding controls) considered "English"
+                                            if (char.charCodeAt(0) <= 127) {
+                                                totalTokens += 0.3;
+                                            } else {
+                                                totalTokens += 0.6;
+                                            }
                                         }
-                                    }
-                                    return Math.floor(totalTokens);
-                                };
+                                        return Math.floor(totalTokens);
+                                    };
 
-                                const currentUsage = calculateTokens(messages);
+                                    const currentUsage = calculateTokens(messages);
 
-                                // Determine models being used
-                                const usedModels = new Set();
-                                const md = selectedSession.metadata || {};
-                                [...(md.own_calls || []), ...(md.children_calls || [])].forEach(c => {
-                                    if (c.model_id) usedModels.add(c.model_id);
-                                });
+                                    // Determine models being used
+                                    const usedModels = new Set();
+                                    const md = selectedSession.metadata || {};
+                                    [...(md.own_calls || []), ...(md.children_calls || [])].forEach(c => {
+                                        if (c.model_id) usedModels.add(c.model_id);
+                                    });
 
-                                // If no calls yet, show the primary agent's model kind from config
-                                if (usedModels.size === 0 && config?.model_mappings) {
-                                    const agentInfo = availableAgents.find(a => a.agent_name === selectedSession.agent_name);
-                                    const kind = agentInfo?.adviced_model_kind || 'smart';
-                                    const mapping = config.model_mappings[kind];
-                                    if (mapping) usedModels.add(mapping.model_id);
-                                }
-
-                                if (usedModels.size === 0) return <div style={{ fontSize: '11px', color: '#9ca3af' }}>No model data</div>;
-
-                                return Array.from(usedModels).map(modelId => {
-                                    let maxTokens = 128000;
-                                    if (config?.model_mappings) {
-                                        const mapping = Object.values(config.model_mappings).find(m => m.model_id === modelId);
-                                        if (mapping) maxTokens = mapping.max_tokens;
+                                    // If no calls yet, show the primary agent's model kind from config
+                                    if (usedModels.size === 0 && config?.model_mappings) {
+                                        const agentInfo = availableAgents.find(a => a.agent_name === selectedSession.agent_name);
+                                        const kind = agentInfo?.adviced_model_kind || 'smart';
+                                        const mapping = config.model_mappings[kind];
+                                        if (mapping) usedModels.add(mapping.model_id);
                                     }
 
-                                    const percent = Math.min(100, Math.floor((currentUsage / maxTokens) * 100));
+                                    if (usedModels.size === 0) return <div style={{ fontSize: '11px', color: '#9ca3af' }}>No model data</div>;
 
-                                    return (
-                                        <div key={modelId} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#f8fafc', padding: '10px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
-                                            {/* Circular Progress (Pie) */}
-                                            <div style={{ position: 'relative', width: '36px', height: '36px', flexShrink: 0 }}>
-                                                <svg width="36" height="36" viewBox="0 0 36 36">
-                                                    <circle cx="18" cy="18" r="15" fill="none" stroke="#e2e8f0" strokeWidth="4" />
-                                                    <circle cx="18" cy="18" r="15" fill="none" stroke={percent > 80 ? '#ef4444' : percent > 50 ? '#f59e0b' : '#3b82f6'} strokeWidth="4"
-                                                        strokeDasharray={`${2 * Math.PI * 15}`}
-                                                        strokeDashoffset={`${2 * Math.PI * 15 * (1 - percent / 100)}`}
-                                                        strokeLinecap="round"
-                                                        transform="rotate(-90 18 18)"
-                                                        style={{ transition: 'stroke-dashoffset 0.5s ease' }}
-                                                    />
-                                                </svg>
-                                                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontWeight: 700, color: '#475569' }}>
-                                                    {percent}%
-                                                </div>
-                                            </div>
+                                    return Array.from(usedModels).map(modelId => {
+                                        let maxTokens = 128000;
+                                        if (config?.model_mappings) {
+                                            const mapping = Object.values(config.model_mappings).find(m => m.model_id === modelId);
+                                            if (mapping) maxTokens = mapping.max_tokens;
+                                        }
 
-                                            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                                <div style={{ fontSize: '11px', fontWeight: 700, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={modelId}>
-                                                    {modelId}
-                                                </div>
-                                                <div style={{ fontSize: '10px', color: '#6b7280', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                                                    <span>current <strong>{currentUsage < 10000 ? (currentUsage / 1000).toFixed(1) : Math.floor(currentUsage / 1000)}K</strong></span>
-                                                    <span style={{ color: '#9ca3af', margin: '0 4px' }}>/</span>
-                                                    <span>max <strong>{Math.floor(maxTokens / 1000)}K</strong></span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                });
-                            })()}
-                        </div>
-
-                        {tokenUsage > 0 && (
-                            <>
-                                <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Token Usage</div>
-
-                                    {(() => {
-                                        const md = selectedSession.metadata || {};
-                                        // Use live data during streaming; fall back to server metadata
-                                        const own = liveTokenCalls.length > 0 ? liveTokenCalls : (md.own_calls || []);
-                                        const children = md.children_calls || [];
-
-                                        // Aggregate by model
-                                        const aggOwn = {};
-                                        const aggChild = {};
-
-                                        own.forEach(c => {
-                                            const m = c.model_id || 'Unknown';
-                                            if (!aggOwn[m]) aggOwn[m] = { in: 0, out: 0, count: 0 };
-                                            aggOwn[m].in += (c.input_tokens || 0);
-                                            aggOwn[m].out += (c.output_tokens || 0);
-                                            aggOwn[m].count += 1;
-                                        });
-
-                                        children.forEach(c => {
-                                            const m = c.model_id || 'Unknown';
-                                            if (!aggChild[m]) aggChild[m] = { in: 0, out: 0, count: 0 };
-                                            aggChild[m].in += (c.input_tokens || 0);
-                                            aggChild[m].out += (c.output_tokens || 0);
-                                            aggChild[m].count += 1;
-                                        });
+                                        const percent = Math.min(100, Math.floor((currentUsage / maxTokens) * 100));
 
                                         return (
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '4px' }}>
-                                                {/* Agent Calls */}
-                                                {Object.keys(aggOwn).length > 0 && (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                                                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#475569' }} />
-                                                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Agent Calls</div>
-                                                        </div>
-                                                        {Object.entries(aggOwn).map(([modelId, stats]) => (
-                                                            <div key={`own-${modelId}`} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: '6px', padding: '10px' }}>
-                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b', wordBreak: 'break-all', paddingRight: '12px' }}>{modelId}</div>
-                                                                    <div style={{ fontSize: '10px', fontWeight: 600, color: '#475569', background: '#e2e8f0', padding: '2px 6px', borderRadius: '12px', flexShrink: 0 }}>{stats.count}x</div>
-                                                                </div>
-                                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Input</span>
-                                                                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.in || 0).toLocaleString()}</span>
-                                                                    </div>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Output</span>
-                                                                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.out || 0).toLocaleString()}</span>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        ))}
+                                            <div key={modelId} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#f8fafc', padding: '10px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                                                {/* Circular Progress (Pie) */}
+                                                <div style={{ position: 'relative', width: '36px', height: '36px', flexShrink: 0 }}>
+                                                    <svg width="36" height="36" viewBox="0 0 36 36">
+                                                        <circle cx="18" cy="18" r="15" fill="none" stroke="#e2e8f0" strokeWidth="4" />
+                                                        <circle cx="18" cy="18" r="15" fill="none" stroke={percent > 80 ? '#ef4444' : percent > 50 ? '#f59e0b' : '#3b82f6'} strokeWidth="4"
+                                                            strokeDasharray={`${2 * Math.PI * 15}`}
+                                                            strokeDashoffset={`${2 * Math.PI * 15 * (1 - percent / 100)}`}
+                                                            strokeLinecap="round"
+                                                            transform="rotate(-90 18 18)"
+                                                            style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+                                                        />
+                                                    </svg>
+                                                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontWeight: 700, color: '#475569' }}>
+                                                        {percent}%
                                                     </div>
-                                                )}
+                                                </div>
 
-                                                {/* Sub-Agent Calls */}
-                                                {Object.keys(aggChild).length > 0 && (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                                                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#475569' }} />
-                                                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Sub-Agent Calls</div>
-                                                        </div>
-                                                        {Object.entries(aggChild).map(([modelId, stats]) => (
-                                                            <div key={`child-${modelId}`} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: '6px', padding: '10px' }}>
-                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b', wordBreak: 'break-all', paddingRight: '12px' }}>{modelId}</div>
-                                                                    <div style={{ fontSize: '10px', fontWeight: 600, color: '#475569', background: '#e2e8f0', padding: '2px 6px', borderRadius: '12px', flexShrink: 0 }}>{stats.count}x</div>
-                                                                </div>
-                                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Input</span>
-                                                                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.in || 0).toLocaleString()}</span>
-                                                                    </div>
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Output</span>
-                                                                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.out || 0).toLocaleString()}</span>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        ))}
+                                                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={modelId}>
+                                                        {modelId}
                                                     </div>
-                                                )}
+                                                    <div style={{ fontSize: '10px', color: '#6b7280', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                                        <span>current <strong>{currentUsage < 10000 ? (currentUsage / 1000).toFixed(1) : Math.floor(currentUsage / 1000)}K</strong></span>
+                                                        <span style={{ color: '#9ca3af', margin: '0 4px' }}>/</span>
+                                                        <span>max <strong>{Math.floor(maxTokens / 1000)}K</strong></span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         );
-                                    })()}
+                                    });
+                                })()}
+                            </div>
 
-                                    <div style={{ borderTop: '1px solid #f3f4f6', paddingTop: '8px', marginTop: '4px', display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end' }}>
-                                        <div style={{ textAlign: 'right' }}>
-                                            <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Total Tokens</div>
-                                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#111827' }}>{tokenUsage.toLocaleString()}</div>
+                            {tokenUsage > 0 && (
+                                <>
+                                    <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Token Usage</div>
+
+                                        {(() => {
+                                            const md = selectedSession.metadata || {};
+                                            // Use live data during streaming; fall back to server metadata
+                                            const own = liveTokenCalls.length > 0 ? liveTokenCalls : (md.own_calls || []);
+                                            const children = md.children_calls || [];
+
+                                            // Aggregate by model
+                                            const aggOwn = {};
+                                            const aggChild = {};
+
+                                            own.forEach(c => {
+                                                const m = c.model_id || 'Unknown';
+                                                if (!aggOwn[m]) aggOwn[m] = { in: 0, out: 0, count: 0 };
+                                                aggOwn[m].in += (c.input_tokens || 0);
+                                                aggOwn[m].out += (c.output_tokens || 0);
+                                                aggOwn[m].count += 1;
+                                            });
+
+                                            children.forEach(c => {
+                                                const m = c.model_id || 'Unknown';
+                                                if (!aggChild[m]) aggChild[m] = { in: 0, out: 0, count: 0 };
+                                                aggChild[m].in += (c.input_tokens || 0);
+                                                aggChild[m].out += (c.output_tokens || 0);
+                                                aggChild[m].count += 1;
+                                            });
+
+                                            return (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '4px' }}>
+                                                    {/* Agent Calls */}
+                                                    {Object.keys(aggOwn).length > 0 && (
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                                                                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#475569' }} />
+                                                                <div style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Agent Calls</div>
+                                                            </div>
+                                                            {Object.entries(aggOwn).map(([modelId, stats]) => (
+                                                                <div key={`own-${modelId}`} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: '6px', padding: '10px' }}>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                                        <div style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b', wordBreak: 'break-all', paddingRight: '12px' }}>{modelId}</div>
+                                                                        <div style={{ fontSize: '10px', fontWeight: 600, color: '#475569', background: '#e2e8f0', padding: '2px 6px', borderRadius: '12px', flexShrink: 0 }}>{stats.count}x</div>
+                                                                    </div>
+                                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                            <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Input</span>
+                                                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.in || 0).toLocaleString()}</span>
+                                                                        </div>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                            <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Output</span>
+                                                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.out || 0).toLocaleString()}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Sub-Agent Calls */}
+                                                    {Object.keys(aggChild).length > 0 && (
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                                                                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#475569' }} />
+                                                                <div style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Sub-Agent Calls</div>
+                                                            </div>
+                                                            {Object.entries(aggChild).map(([modelId, stats]) => (
+                                                                <div key={`child-${modelId}`} style={{ background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: '6px', padding: '10px' }}>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                                        <div style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b', wordBreak: 'break-all', paddingRight: '12px' }}>{modelId}</div>
+                                                                        <div style={{ fontSize: '10px', fontWeight: 600, color: '#475569', background: '#e2e8f0', padding: '2px 6px', borderRadius: '12px', flexShrink: 0 }}>{stats.count}x</div>
+                                                                    </div>
+                                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                            <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Input</span>
+                                                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.in || 0).toLocaleString()}</span>
+                                                                        </div>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                            <span style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>Output</span>
+                                                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{(stats.out || 0).toLocaleString()}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+
+                                        <div style={{ borderTop: '1px solid #f3f4f6', paddingTop: '8px', marginTop: '4px', display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end' }}>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <div style={{ fontSize: '10px', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Total Tokens</div>
+                                                <div style={{ fontSize: '13px', fontWeight: 700, color: '#111827' }}>{tokenUsage.toLocaleString()}</div>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            </>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Pinned Files Section at Bottom */}
+                <div style={{
+                    borderTop: '1px solid #e5e7eb',
+                    background: 'white',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    height: '350px', // Fixed height for pinning at bottom
+                    flexShrink: 0,
+                    boxShadow: '0 -4px 12px rgba(0,0,0,0.03)'
+                }}>
+                    <div
+                        onClick={() => setNewFilesCount(0)}
+                        style={{
+                            padding: '10px 16px',
+                            background: newFilesCount > 0 ? '#eef2ff' : '#f9fafb',
+                            color: newFilesCount > 0 ? '#4338ca' : '#475569',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            borderBottom: '1px solid #e5e7eb',
+                            borderTop: newFilesCount > 0 ? '1px solid #c7d2fe' : 'none',
+                            transition: 'all 0.3s'
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Folder size={14} style={{ opacity: 0.8 }} />
+                            <span>Workspace Files</span>
+                        </div>
+                        {newFilesCount > 0 && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <div style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    background: '#4f46e5',
+                                    borderRadius: '50%',
+                                    animation: 'pulse-dot 1.5s infinite'
+                                }} />
+                                <span style={{
+                                    color: '#4338ca',
+                                    fontSize: '10px',
+                                    fontWeight: 700
+                                }}>
+                                    {newFilesCount} NEW
+                                </span>
+                            </div>
                         )}
                     </div>
-                )}
+                    <div style={{ flex: 1, minHeight: 0 }}>
+                        {selectedSession && <FileBrowser sessionId={selectedSession.session_id} onPreview={setPreviewFile} refreshTrigger={fileRefreshTrigger} />}
+                    </div>
+                    <style>{`
+                        @keyframes pulse-dot {
+                            0% { transform: scale(1); opacity: 1; }
+                            50% { transform: scale(1.3); opacity: 0.6; }
+                            100% { transform: scale(1); opacity: 1; }
+                        }
+                    `}</style>
+                </div>
             </div>
             {/* Delete Modal */}
             {/* Delete Modal */}
@@ -1660,13 +1823,15 @@ export default function SessionStore() {
                     />
                 </div>
             </Modal>
-            {previewFile && selectedSession && (
-                <FilePreviewModal
-                    file={previewFile}
-                    sessionId={selectedSession.session_id}
-                    onClose={() => setPreviewFile(null)}
-                />
-            )}
+            {
+                previewFile && selectedSession && (
+                    <FilePreviewModal
+                        file={previewFile}
+                        sessionId={selectedSession.session_id}
+                        onClose={() => setPreviewFile(null)}
+                    />
+                )
+            }
         </div >
     );
 }

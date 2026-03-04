@@ -22,7 +22,7 @@ function getLanguage(filename) {
 function isTextMime(mime) {
     if (mime.startsWith('text/')) return true;
     if (['application/json', 'application/x-yaml', 'application/xml',
-         'application/javascript', 'application/typescript'].includes(mime)) return true;
+        'application/javascript', 'application/typescript'].includes(mime)) return true;
     return false;
 }
 
@@ -221,7 +221,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
         >
             <div
                 style={{
-                    width: 'min(90vw, 900px)', height: 'min(85vh, 700px)',
+                    width: 'min(98vw, 1600px)', height: 'min(96vh, 1000px)',
                     background: 'white', borderRadius: '12px',
                     display: 'flex', flexDirection: 'column',
                     boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
@@ -231,33 +231,45 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
             >
                 {/* Header */}
                 <div style={{
-                    display: 'flex', alignItems: 'center', gap: '10px',
-                    padding: '12px 16px', borderBottom: '1px solid #e5e7eb',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    padding: '14px 20px', borderBottom: '1px solid #f3f4f6',
                     flexShrink: 0,
+                    background: 'rgba(255, 255, 255, 0.8)',
+                    backdropFilter: 'blur(8px)',
+                    zIndex: 10,
                 }}>
-                    <span style={{ fontWeight: 600, fontSize: '14px', color: '#111827', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {file.file_name}
-                    </span>
-                    <button onClick={handleCopyLink} title="Copy link" style={{
-                        background: 'none', border: '1px solid #e5e7eb', borderRadius: '6px',
-                        padding: '4px 10px', cursor: 'pointer', fontSize: '12px', color: '#6b7280',
-                        display: 'flex', alignItems: 'center', gap: '4px',
-                    }}>
-                        <Link size={12} /> {copied ? 'Copied!' : 'Copy Link'}
-                    </button>
-                    <button onClick={handleDownload} title="Download" style={{
-                        background: 'none', border: '1px solid #e5e7eb', borderRadius: '6px',
-                        padding: '4px 10px', cursor: 'pointer', fontSize: '12px', color: '#6b7280',
-                        display: 'flex', alignItems: 'center', gap: '4px',
-                    }}>
-                        <Download size={12} /> Download
-                    </button>
-                    <button onClick={onClose} title="Close" style={{
-                        background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: '#9ca3af',
-                        display: 'flex',
-                    }}>
-                        <X size={18} />
-                    </button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '14px', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {file.file_name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af' }}>
+                            {file.mime_type} • {file.size ? (file.size / 1024).toFixed(1) + ' KB' : '--'}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button onClick={handleCopyLink} title="Copy link" style={{
+                            background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px',
+                            padding: '6px 12px', cursor: 'pointer', fontSize: '12px', color: '#4b5563',
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            transition: 'all 0.2s', fontWeight: 500,
+                        }}>
+                            <Link size={14} /> {copied ? 'Copied!' : 'Copy Link'}
+                        </button>
+                        <button onClick={handleDownload} title="Download" style={{
+                            background: '#111827', border: '1px solid #111827', borderRadius: '8px',
+                            padding: '6px 12px', cursor: 'pointer', fontSize: '12px', color: 'white',
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            transition: 'all 0.2s', fontWeight: 500,
+                        }}>
+                            <Download size={14} /> Download
+                        </button>
+                        <button onClick={onClose} title="Close" style={{
+                            background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: '#9ca3af',
+                            display: 'flex',
+                        }}>
+                            <X size={18} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Content */}
@@ -268,3 +280,4 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
         </div>
     );
 }
+

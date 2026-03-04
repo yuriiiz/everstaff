@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Image, Film, Globe, File, Download, Link, Eye } from 'lucide-react';
+import { FileText, Image, Film, Globe, File, Download, Link, Eye, Check } from 'lucide-react';
 
 const ICON_MAP = {
     'text/': FileText,
@@ -24,6 +24,7 @@ function formatSize(bytes) {
 }
 
 export default function FileCard({ file, sessionId, onPreview }) {
+    const [copied, setCopied] = React.useState(false);
     const Icon = getFileIcon(file.mime_type);
     const fileUrl = `/api/sessions/${sessionId}/files/${encodeURIComponent(file.file_path)}`;
 
@@ -40,6 +41,8 @@ export default function FileCard({ file, sessionId, onPreview }) {
         const url = `${window.location.origin}${fileUrl}`;
         try {
             await navigator.clipboard.writeText(url);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
         } catch {
             const input = document.createElement('input');
             input.value = url;
@@ -47,6 +50,8 @@ export default function FileCard({ file, sessionId, onPreview }) {
             input.select();
             document.execCommand('copy');
             document.body.removeChild(input);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
         }
     };
 
@@ -92,9 +97,9 @@ export default function FileCard({ file, sessionId, onPreview }) {
             <button
                 onClick={handleCopyLink}
                 title="Copy link"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#6b7280', display: 'flex' }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: copied ? '#10b981' : '#6b7280', display: 'flex', transition: 'color 0.2s' }}
             >
-                <Link size={14} />
+                {copied ? <Check size={14} /> : <Link size={14} />}
             </button>
         </div>
     );

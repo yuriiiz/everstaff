@@ -252,6 +252,17 @@ class AgentRuntime:
         messages = _drop_dangling_tool_calls(messages)
         if user_input is not None:
             messages.append(Message(role="user", content=user_input))
+            # Persist user message immediately so it survives page refresh
+            await self._ctx.memory.save(
+                self._ctx.session_id,
+                messages,
+                agent_name=self._ctx.agent_name,
+                agent_uuid=self._ctx.agent_uuid,
+                parent_session_id=self._ctx.parent_session_id,
+                status="running",
+                max_tokens=self._ctx.max_tokens,
+                trigger=self._ctx.trigger,
+            )
 
         turns = 0
         try:
@@ -358,6 +369,30 @@ class AgentRuntime:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                 )
+
+                # Check cancel after LLM completes — covers the window
+                # where the user clicked stop while LLM was streaming.
+                if await self._is_cancelled():
+                    await self._ctx.memory.save(
+                        self._ctx.session_id,
+                        messages,
+                        agent_name=self._ctx.agent_name,
+                        agent_uuid=self._ctx.agent_uuid,
+                        status="cancelled",
+                    )
+                    total_ms = (time.monotonic() - session_start) * 1000
+                    self._emit("session_end", {
+                        "turns": turns,
+                        "stopped": True,
+                        "total_duration_ms": total_ms,
+                    }, duration_ms=total_ms)
+                    if self._ctx.file_store is not None:
+                        try:
+                            await self._ctx.file_store.delete(f"{self._ctx.session_id}/cancel.signal")
+                        except Exception:
+                            pass
+                    yield SessionEnd(response=_STOPPED)
+                    return
 
                 if response.is_final:
                     # Framework fallback: if any child HITL requests remain unresolved, raise
