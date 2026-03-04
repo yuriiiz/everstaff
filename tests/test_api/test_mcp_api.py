@@ -461,3 +461,74 @@ def test_test_connection_includes_tool_count(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["tool_count"] == 1
+
+
+def test_add_mcp_server_with_timeout(client):
+    """POST /agents/{name}/mcp-servers persists timeout field."""
+    resp = client.post("/api/agents/my-agent/mcp-servers", json={
+        "name": "slow-server",
+        "transport": "stdio",
+        "command": "python",
+        "args": ["-m", "slow"],
+        "timeout": 120.0,
+    })
+    assert resp.status_code == 201
+
+    # Verify timeout is persisted
+    resp2 = client.get("/api/agents/my-agent/mcp-servers")
+    servers = resp2.json()
+    srv = [s for s in servers if s["name"] == "slow-server"][0]
+    assert srv.get("timeout") == 120.0
+
+
+def test_update_mcp_server_with_timeout(client):
+    """PUT /agents/{name}/mcp-servers/{server} persists timeout field."""
+    # Add first
+    client.post("/api/agents/my-agent/mcp-servers", json={
+        "name": "timeout-srv",
+        "transport": "stdio",
+        "command": "echo",
+    })
+
+    # Update with timeout
+    resp = client.put("/api/agents/my-agent/mcp-servers/timeout-srv", json={
+        "name": "timeout-srv",
+        "transport": "stdio",
+        "command": "echo",
+        "timeout": 60.0,
+    })
+    assert resp.status_code == 200
+
+    # Verify
+    resp2 = client.get("/api/agents/my-agent/mcp-servers")
+    servers = resp2.json()
+    srv = [s for s in servers if s["name"] == "timeout-srv"][0]
+    assert srv.get("timeout") == 60.0
+
+
+def test_test_connection_with_timeout(client):
+    """POST /mcp/test accepts timeout field in request body."""
+    mock_tool = MagicMock()
+    mock_tool.definition = ToolDefinition(
+        name="t", description="", parameters={}
+    )
+    mock_conn_instance = MagicMock()
+    mock_conn_instance.connect = AsyncMock(return_value=[mock_tool])
+    mock_conn_instance.disconnect = AsyncMock()
+
+    with patch(
+        "everstaff.mcp_client.connection.MCPConnection",
+        return_value=mock_conn_instance,
+    ) as mock_cls:
+        resp = client.post("/api/mcp/test", json={
+            "name": "srv",
+            "transport": "stdio",
+            "command": "echo",
+            "timeout": 90.0,
+        })
+
+    assert resp.status_code == 200
+    # Verify MCPServerSpec was constructed with timeout=90.0
+    call_args = mock_cls.call_args
+    spec = call_args[0][0] if call_args[0] else call_args[1].get("spec")
+    assert spec.timeout == 90.0

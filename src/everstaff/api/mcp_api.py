@@ -28,6 +28,7 @@ class AddMCPServerRequest(BaseModel):
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     icon: str | None = None
+    timeout: float | None = None
     template: str | None = None  # If set, install from template
 
 
@@ -41,6 +42,7 @@ class UpdateMCPServerRequest(BaseModel):
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     icon: str | None = None
+    timeout: float | None = None
 
 
 class TestConnectionRequest(BaseModel):
@@ -52,6 +54,7 @@ class TestConnectionRequest(BaseModel):
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     icon: str | None = None
+    timeout: float | None = None
 
 
 class CreateTemplateRequest(BaseModel):
@@ -192,6 +195,7 @@ def make_router(config) -> APIRouter:
             env=body.env,
             url=body.url,
             headers=body.headers,
+            timeout=body.timeout if body.timeout is not None else 30.0,
         )
         conn = MCPConnection(spec)
         try:
