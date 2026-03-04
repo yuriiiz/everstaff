@@ -72,6 +72,14 @@ class TokenUsageEvent(BaseModel):
     output_tokens: int
 
 
+class FileCreatedEvent(BaseModel):
+    type: Literal["file_created"] = "file_created"
+    file_path: str      # relative to workspace, e.g. "output/report.md"
+    file_name: str      # basename, e.g. "report.md"
+    size: int           # bytes
+    mime_type: str       # e.g. "text/markdown", "image/png"
+
+
 # Union with discriminator for clean OpenAPI oneOf
 StreamEvent = Annotated[
     Union[
@@ -85,6 +93,7 @@ StreamEvent = Annotated[
         HitlRequestEvent,
         HitlResolvedEvent,
         TokenUsageEvent,
+        FileCreatedEvent,
     ],
     Field(discriminator="type"),
 ]
