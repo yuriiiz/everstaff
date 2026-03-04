@@ -57,3 +57,21 @@ def test_backward_compat_stdio_command_required():
     spec = MCPServerSpec(name="srv", command="npx", args=["-y", "@mcp/server"])
     assert spec.transport == "stdio"
     assert spec.command == "npx"
+
+
+def test_timeout_default_value():
+    """MCPServerSpec defaults to 30.0s timeout."""
+    spec = MCPServerSpec(name="test", command="python", transport="stdio")
+    assert spec.timeout == 30.0
+
+
+def test_timeout_custom_value():
+    """MCPServerSpec accepts a custom timeout."""
+    spec = MCPServerSpec(name="test", command="python", transport="stdio", timeout=120.0)
+    assert spec.timeout == 120.0
+
+
+def test_timeout_in_remote_transport():
+    """Timeout works for remote transports too."""
+    spec = MCPServerSpec(name="test", transport="sse", url="https://example.com/sse", timeout=60.0)
+    assert spec.timeout == 60.0

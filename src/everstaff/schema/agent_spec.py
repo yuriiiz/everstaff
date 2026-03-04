@@ -21,6 +21,7 @@ class MCPServerSpec(BaseModel):
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     icon: str | None = None
+    timeout: float = 30.0
 
     @model_validator(mode="after")
     def validate_transport_fields(self):
