@@ -16,10 +16,12 @@ class MCPTool:
         session: Any,
         definition_: ToolDefinition,
         tool_call_id: str = "",
+        timeout_seconds: float = 30.0,
     ) -> None:
         self._session = session
         self._definition = definition_
         self._tool_call_id = tool_call_id
+        self._timeout_seconds = timeout_seconds
 
     @property
     def definition(self) -> ToolDefinition:
@@ -29,7 +31,7 @@ class MCPTool:
         try:
             result = await asyncio.wait_for(
                 self._session.call_tool(self._definition.name, arguments=args),
-                timeout=30.0,
+                timeout=self._timeout_seconds,
             )
             parts = []
             for block in result.content:
@@ -46,7 +48,7 @@ class MCPTool:
         except asyncio.TimeoutError:
             return ToolResult(
                 tool_call_id=self._tool_call_id,
-                content=f"Error: MCP tool '{self._definition.name}' timed out after 30s",
+                content=f"Error: MCP tool '{self._definition.name}' timed out after {self._timeout_seconds}s",
                 is_error=True,
             )
         except Exception as e:
