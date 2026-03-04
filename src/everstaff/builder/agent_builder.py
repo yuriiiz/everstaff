@@ -190,6 +190,7 @@ class AgentBuilder:
             # Bootstrap support
             sessions_dir=sessions_dir,
             file_store=file_store,
+            workdir=workdir,
 
             # LLM limits for metadata persistence
             max_tokens=getattr(self._spec, "max_tokens", None),

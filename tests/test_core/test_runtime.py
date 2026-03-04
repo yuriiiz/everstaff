@@ -1260,3 +1260,13 @@ async def test_system_prompt_includes_hitl_rules_when_tool_registered():
     prompt = runtime._build_system_prompt()
     assert "Human Interaction Rules" in prompt
     assert "request_human_input" in prompt
+
+
+def test_agent_context_has_workdir():
+    from pathlib import Path
+    ctx = make_context()
+    # Default should be None
+    assert ctx.workdir is None
+    # Can be set
+    ctx.workdir = Path("/tmp/test")
+    assert ctx.workdir == Path("/tmp/test")

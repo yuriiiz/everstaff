@@ -5,6 +5,7 @@ from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from everstaff.builder.environment import RuntimeEnvironment
 
 from everstaff.tools.pipeline import ToolCallPipeline
@@ -50,6 +51,7 @@ class AgentContext:
 
     sessions_dir: str | None = None   # base dir for dynamic agent/skill storage
     file_store: FileStore | None = None  # FileStore for stateless cancellation signals
+    workdir: "Path | None" = None  # workspace directory for file change tracking
     channel_manager: Any = None          # ChannelManager for HITL broadcast (set by API/CLI layer)
     _env: "RuntimeEnvironment | None" = field(default=None, repr=False)  # set by AgentBuilder after build()
 
