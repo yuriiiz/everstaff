@@ -581,4 +581,37 @@ def make_router(config) -> APIRouter:
         )
         return {"status": "resuming", "session_id": session_id}
 
+    def _guard_workspace_path(session_id: str, subpath: str = "") -> Path:
+        """Resolve workspace path and guard against traversal."""
+        session_dir = _guard_session_id(sessions_dir, session_id)
+        if not (session_dir / "session.json").exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+        workspace = session_dir / "workspaces"
+        if not subpath:
+            return workspace
+        target = (workspace / subpath).resolve()
+        if not target.is_relative_to(workspace.resolve()):
+            raise HTTPException(status_code=403, detail="Path traversal detected")
+        return target
+
+    @router.get("/sessions/{session_id}/files")
+    async def list_files(
+        session_id: str,
+        path: str = Query(default=""),
+    ) -> dict:
+        from everstaff.schema.api_models import FileInfo, FileListResponse
+        target = _guard_workspace_path(session_id, path)
+        if not target.exists() or not target.is_dir():
+            return FileListResponse(files=[], path=path).model_dump()
+        files = []
+        for entry in sorted(target.iterdir()):
+            stat = entry.stat()
+            files.append(FileInfo(
+                name=entry.name,
+                type="directory" if entry.is_dir() else "file",
+                size=stat.st_size if entry.is_file() else 0,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            ))
+        return FileListResponse(files=files, path=path).model_dump()
+
     return router
