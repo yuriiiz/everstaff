@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -67,3 +67,15 @@ class CreateToolRequest(BaseModel):
     name: str
     description: str
     code: Optional[str] = None
+
+
+class FileInfo(BaseModel):
+    name: str
+    type: Literal["file", "directory"]
+    size: int
+    modified_at: str
+
+
+class FileListResponse(BaseModel):
+    files: list[FileInfo]
+    path: str
