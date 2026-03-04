@@ -49,7 +49,7 @@ class MCPConnection:
         result = []
         for t in tools_response.tools:
             defn = self._tool_definition(t)
-            result.append(MCPTool(session=session, definition_=defn))
+            result.append(MCPTool(session=session, definition_=defn, timeout_seconds=self._spec.timeout))
         return result
 
     @asynccontextmanager
