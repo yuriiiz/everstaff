@@ -117,3 +117,56 @@ def test_list_files_path_traversal(client, sessions_dir):
     (sessions_dir / "sess-traversal" / "workspaces").mkdir(parents=True, exist_ok=True)
     resp = client.get("/api/sessions/sess-traversal/files?path=../../")
     assert resp.status_code == 403
+
+
+def test_download_file(client, sessions_dir):
+    """GET /sessions/{id}/files/report.csv returns file content."""
+    _write_session(sessions_dir, "sess-dl")
+    ws = sessions_dir / "sess-dl" / "workspaces"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "report.csv").write_text("a,b,c\n1,2,3")
+    resp = client.get("/api/sessions/sess-dl/files/report.csv")
+    assert resp.status_code == 200
+    assert resp.text == "a,b,c\n1,2,3"
+    assert "text/csv" in resp.headers.get("content-type", "")
+
+
+def test_download_file_in_subdir(client, sessions_dir):
+    """GET /sessions/{id}/files/sub/data.json returns nested file."""
+    _write_session(sessions_dir, "sess-nested")
+    ws = sessions_dir / "sess-nested" / "workspaces"
+    sub = ws / "sub"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / "data.json").write_text('{"ok": true}')
+    resp = client.get("/api/sessions/sess-nested/files/sub/data.json")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_download_file_not_found(client, sessions_dir):
+    """GET /sessions/{id}/files/missing.txt returns 404."""
+    _write_session(sessions_dir, "sess-miss")
+    (sessions_dir / "sess-miss" / "workspaces").mkdir(parents=True, exist_ok=True)
+    resp = client.get("/api/sessions/sess-miss/files/missing.txt")
+    assert resp.status_code == 404
+
+
+def test_download_file_path_traversal(client, sessions_dir):
+    """GET /sessions/{id}/files/../../etc/passwd is blocked."""
+    _write_session(sessions_dir, "sess-trav2")
+    (sessions_dir / "sess-trav2" / "workspaces").mkdir(parents=True, exist_ok=True)
+    resp = client.get("/api/sessions/sess-trav2/files/..%2F..%2Fetc%2Fpasswd")
+    assert resp.status_code == 403
+
+
+def test_download_with_download_flag(client, sessions_dir):
+    """GET /sessions/{id}/files/report.csv?download=true sets Content-Disposition."""
+    _write_session(sessions_dir, "sess-att")
+    ws = sessions_dir / "sess-att" / "workspaces"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "report.csv").write_text("data")
+    resp = client.get("/api/sessions/sess-att/files/report.csv?download=true")
+    assert resp.status_code == 200
+    cd = resp.headers.get("content-disposition", "")
+    assert "attachment" in cd
+    assert "report.csv" in cd

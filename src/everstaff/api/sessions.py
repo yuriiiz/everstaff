@@ -614,4 +614,22 @@ def make_router(config) -> APIRouter:
             ))
         return FileListResponse(files=files, path=path).model_dump()
 
+    @router.get("/sessions/{session_id}/files/{file_path:path}")
+    async def download_file(
+        session_id: str,
+        file_path: str,
+        download: bool = Query(default=False),
+    ):
+        from fastapi.responses import FileResponse
+        target = _guard_workspace_path(session_id, file_path)
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        if download:
+            return FileResponse(
+                path=str(target),
+                filename=target.name,
+                media_type="application/octet-stream",
+            )
+        return FileResponse(path=str(target))
+
     return router
