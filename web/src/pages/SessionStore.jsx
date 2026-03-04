@@ -4,6 +4,8 @@ import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal,
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HitlPanel } from './HitlComponents';
+import FileCard from '../components/FileCard';
+import FilePreviewModal from '../components/FilePreviewModal';
 
 const CREATOR_SUGGESTIONS = {
     'builtin_agent_creator': [
@@ -196,6 +198,7 @@ export default function SessionStore() {
     const wsRef = useRef(null);
     const sseRef = useRef(null);
     const [isHitlModalOpen, setIsHitlModalOpen] = useState(false);
+    const [previewFile, setPreviewFile] = useState(null);
     const scrollRef = useRef(null);
     const clientIdRef = useRef(crypto.randomUUID());
     const [searchParams] = useSearchParams();
@@ -504,6 +507,25 @@ export default function SessionStore() {
                                         ...prev.slice(i + 1),
                                     ];
                                 }
+                            }
+                        }
+                        return prev;
+                    });
+                } else if (data.type === 'file_created') {
+                    setMessages(prev => {
+                        for (let i = prev.length - 1; i >= 0; i--) {
+                            if (prev[i].role === 'assistant') {
+                                const artifacts = [...(prev[i].fileArtifacts || []), {
+                                    file_path: data.file_path,
+                                    file_name: data.file_name,
+                                    size: data.size,
+                                    mime_type: data.mime_type,
+                                }];
+                                return [
+                                    ...prev.slice(0, i),
+                                    { ...prev[i], fileArtifacts: artifacts },
+                                    ...prev.slice(i + 1),
+                                ];
                             }
                         }
                         return prev;
@@ -1240,6 +1262,7 @@ export default function SessionStore() {
                                     onResolve={handleHitlResolve}
                                     sessionId={selectedSession.session_id}
                                     sessionStatus={selectedSession.status}
+                                    onPreviewFile={setPreviewFile}
                                 />
                             ))}
 
@@ -1589,6 +1612,13 @@ export default function SessionStore() {
                     />
                 </div>
             </Modal>
+            {previewFile && selectedSession && (
+                <FilePreviewModal
+                    file={previewFile}
+                    sessionId={selectedSession.session_id}
+                    onClose={() => setPreviewFile(null)}
+                />
+            )}
         </div >
     );
 }
@@ -1624,7 +1654,7 @@ function extractThinkingFromContent(thinking, content) {
 }
 
 // Reuseable Message Component with Tool Folding
-const MessageItem = memo(({ message, agentName, hitlRequests, onResolve, sessionId, sessionStatus }) => {
+const MessageItem = memo(({ message, agentName, hitlRequests, onResolve, sessionId, sessionStatus, onPreviewFile }) => {
     const isUser = message.role === 'user';
     const hasTools = message.tool_calls && message.tool_calls.length > 0;
     const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
@@ -1894,6 +1924,13 @@ const MessageItem = memo(({ message, agentName, hitlRequests, onResolve, session
                                 </div>
                             );
                         })}
+                    </div>
+                )}
+                {message.fileArtifacts && message.fileArtifacts.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px', maxWidth: '400px' }}>
+                        {message.fileArtifacts.map((f, i) => (
+                            <FileCard key={i} file={f} sessionId={sessionId} onPreview={onPreviewFile} />
+                        ))}
                     </div>
                 )}
             </div>
