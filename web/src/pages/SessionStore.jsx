@@ -20,6 +20,23 @@ const CREATOR_SUGGESTIONS = {
     ]
 };
 
+function guessMimeClient(filename) {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const map = {
+        md: 'text/markdown', txt: 'text/plain', py: 'text/x-python',
+        js: 'text/javascript', ts: 'text/typescript', json: 'application/json',
+        yaml: 'application/x-yaml', yml: 'application/x-yaml',
+        html: 'text/html', css: 'text/css', csv: 'text/csv',
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+        gif: 'image/gif', svg: 'image/svg+xml', pdf: 'application/pdf',
+        mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg',
+        xml: 'text/xml', sh: 'text/x-shellscript', bash: 'text/x-shellscript',
+        rs: 'text/x-rust', go: 'text/x-go', java: 'text/x-java',
+        rb: 'text/x-ruby', php: 'text/x-php', sql: 'text/x-sql',
+    };
+    return map[ext] || 'application/octet-stream';
+}
+
 const SuggestedAction = memo(({ icon: Icon, text, onClick }) => (
     <div
         onClick={() => onClick(text)}
@@ -754,6 +771,37 @@ export default function SessionStore() {
                 setIsProcessing(false);
                 setStatusContent('');
                 setShowSystemPrompt(false);
+
+                // Fetch workspace files and attach to last assistant message
+                fetch(`/api/sessions/${sid}/files`)
+                    .then(r => r.ok ? r.json() : { files: [] })
+                    .then(fileData => {
+                        if (fileData.files && fileData.files.length > 0) {
+                            const artifacts = fileData.files
+                                .filter(f => f.type === 'file')
+                                .map(f => ({
+                                    file_path: f.name,
+                                    file_name: f.name,
+                                    size: f.size,
+                                    mime_type: guessMimeClient(f.name),
+                                }));
+                            if (artifacts.length > 0) {
+                                setMessages(prev => {
+                                    for (let i = prev.length - 1; i >= 0; i--) {
+                                        if (prev[i].role === 'assistant') {
+                                            return [
+                                                ...prev.slice(0, i),
+                                                { ...prev[i], fileArtifacts: artifacts },
+                                                ...prev.slice(i + 1),
+                                            ];
+                                        }
+                                    }
+                                    return prev;
+                                });
+                            }
+                        }
+                    })
+                    .catch(() => {});
             })
             .catch(err => {
                 console.warn(`[debug] fetchMessages failed for ${sid}: ${err.message}. Preserving state.`);
