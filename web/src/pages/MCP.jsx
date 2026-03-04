@@ -307,6 +307,9 @@ export default function MCP() {
                                         ) : (
                                             <div><span style={{ color: '#94a3b8' }}>url:</span> {selectedTemplate.url}</div>
                                         )}
+                                        {selectedTemplate.timeout && selectedTemplate.timeout !== 30 && (
+                                            <div style={{ marginTop: '4px' }}><span style={{ color: '#94a3b8' }}>timeout:</span> {selectedTemplate.timeout}s</div>
+                                        )}
                                     </div>
                                 </div>
 

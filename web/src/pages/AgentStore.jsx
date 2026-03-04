@@ -1901,7 +1901,8 @@ function AddMcpServerModal({ isOpen, onClose, onAdd }) {
                 args: config.args || [],
                 env: config.env || {},
                 url: config.url,
-                icon: config.icon
+                icon: config.icon,
+                timeout: config.timeout || 30
             };
             onAdd(spec);
         } catch (e) {
@@ -1942,6 +1943,7 @@ function EditMcpServerModal({ isOpen, server, onClose, onSave }) {
     const [url, setUrl] = useState('');
     const [transport, setTransport] = useState('stdio');
     const [icon, setIcon] = useState('');
+    const [timeout, setTimeout_] = useState(30);
 
     useEffect(() => {
         if (server) {
@@ -1952,6 +1954,7 @@ function EditMcpServerModal({ isOpen, server, onClose, onSave }) {
             setEnvJson(JSON.stringify(server.env || {}, null, 2));
             setUrl(server.url || '');
             setIcon(server.icon || '');
+            setTimeout_(server.timeout || 30);
         }
     }, [server]);
 
@@ -1962,7 +1965,7 @@ function EditMcpServerModal({ isOpen, server, onClose, onSave }) {
             const args = JSON.parse(argsJson);
             const env = JSON.parse(envJson);
             onSave({
-                name, transport, command, args, env, url, icon
+                name, transport, command, args, env, url, icon, timeout: timeout
             });
         } catch (e) {
             alert("Invalid JSON: " + e.message);
@@ -1980,6 +1983,11 @@ function EditMcpServerModal({ isOpen, server, onClose, onSave }) {
                     <div>
                         <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>ICON URL (OPTIONAL)</label>
                         <input className="input-field" value={icon} onChange={e => setIcon(e.target.value)} placeholder="https://..." />
+                    </div>
+                    <div>
+                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', display: 'block', marginBottom: '4px' }}>TIMEOUT (SECONDS)</label>
+                        <input className="input-field" type="number" min={10} max={3600} value={timeout} onChange={e => setTimeout_(Number(e.target.value) || 30)} />
+                        <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>Max execution time per tool call (10–3600s, default 30)</div>
                     </div>
                     {transport === 'stdio' ? (
                         <>
