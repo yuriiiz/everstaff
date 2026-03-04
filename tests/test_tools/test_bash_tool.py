@@ -49,3 +49,39 @@ async def test_bash_exception_returns_error_string():
         result = await bash.execute({"command": "anything"})
     assert "error" in result.lower()
     assert "test error" in result
+
+
+@pytest.mark.asyncio
+async def test_bash_custom_timeout_accepted():
+    """Bash tool accepts a custom timeout parameter."""
+    bash = _get_bash_tool()
+    # A fast command with custom timeout should succeed normally
+    result = await bash.execute({"command": "echo ok", "timeout": 60})
+    assert "ok" in result
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_clamped_minimum():
+    """Timeout below 10s is clamped to 10s."""
+    bash = _get_bash_tool()
+    result = await bash.execute({"command": "echo clamped", "timeout": 1})
+    # Should not error — clamped to 10s, fast command finishes before that
+    assert "clamped" in result
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_clamped_maximum():
+    """Timeout above 3600s is clamped to 3600s."""
+    bash = _get_bash_tool()
+    result = await bash.execute({"command": "echo maxed", "timeout": 99999})
+    assert "maxed" in result
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_error_shows_custom_value():
+    """Timeout error message reflects the custom timeout value."""
+    bash = _get_bash_tool()
+    # Mock to simulate timeout at the clamped value
+    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        result = await bash.execute({"command": "sleep 999", "timeout": 600})
+    assert "600" in result

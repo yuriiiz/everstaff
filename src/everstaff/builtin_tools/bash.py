@@ -24,8 +24,9 @@ def make_bash_tool(workdir: Path):
 
     @tool(name="Bash", description="Execute a shell command and return stdout + stderr.",
           permission_hint=_bash_permission_hint)
-    async def bash(command: str) -> str:
+    async def bash(command: str, timeout: int = 300) -> str:
         """Execute a terminal command and return the combined output."""
+        timeout = min(max(timeout, 10), 3600)  # clamp: 10s–3600s
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
@@ -34,15 +35,15 @@ def make_bash_tool(workdir: Path):
                 cwd=workdir,
             )
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=float(timeout))
             except asyncio.TimeoutError:
                 try:
                     process.terminate()
                     await process.wait()
                 except Exception:
                     pass
-                logger.warning("Bash command timed out after 300s: %.200s", command)
-                return "Error: Command timed out after 300 seconds."
+                logger.warning("Bash command timed out after %ds: %.200s", timeout, command)
+                return f"Error: Command timed out after {timeout} seconds."
 
             output = stdout.decode(errors="replace")
             err = stderr.decode(errors="replace")
