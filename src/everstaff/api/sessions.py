@@ -51,6 +51,7 @@ async def _resume_session_task(
     broadcast_fn=None,   # optional async callable(dict) -> None
     channel_manager=None,  # ChannelManager for HITL broadcast
     agent_uuid: str = "",
+    mcp_pool=None,  # McpConnectionPool for cross-session connection reuse
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -121,6 +122,7 @@ async def _resume_session_task(
         sessions_dir=str(sessions_dir),
         config=config,
         channel_manager=channel_manager,
+        mcp_pool=mcp_pool,
     )
     _sid = session_id[:8]
 
@@ -449,11 +451,13 @@ def make_router(config) -> APIRouter:
         session_id = str(uuid4())
         cm = getattr(request.app.state, "channel_manager", None)
         broadcast_fn = _extract_broadcast_fn(cm) if cm is not None else None
+        mcp_pool = getattr(request.app.state, "mcp_pool", None)
         background_tasks.add_task(
             _resume_session_task, session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
             channel_manager=cm,
             agent_uuid=agent_uuid,
+            mcp_pool=mcp_pool,
         )
         return {"session_id": session_id, "status": "running"}
 
@@ -627,6 +631,7 @@ def make_router(config) -> APIRouter:
         agent_name = session_raw.get("agent_name", "")
         agent_uuid = session_raw.get("agent_uuid", "")
         cm = getattr(request.app.state, "channel_manager", None)
+        mcp_pool = getattr(request.app.state, "mcp_pool", None)
 
         # For cancelled/failed/interrupted: resume with optional user input
         if current_status in ("cancelled", "failed", "interrupted"):
@@ -636,6 +641,7 @@ def make_router(config) -> APIRouter:
                 broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
                 channel_manager=cm,
                 agent_uuid=agent_uuid,
+                mcp_pool=mcp_pool,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -653,6 +659,7 @@ def make_router(config) -> APIRouter:
             broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
             channel_manager=cm,
             agent_uuid=agent_uuid,
+            mcp_pool=mcp_pool,
         )
         return {"status": "resuming", "session_id": session_id}
 

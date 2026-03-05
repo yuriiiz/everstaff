@@ -117,7 +117,8 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
     agent_name = session_data.get("agent_name", "")
     agent_uuid = session_data.get("agent_uuid", "")
     from everstaff.api.sessions import _resume_session_task
-    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid)
+    mcp_pool = getattr(app.state, "mcp_pool", None)
+    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid, mcp_pool=mcp_pool)
 
 
 def make_router(config) -> APIRouter:
@@ -237,11 +238,13 @@ def make_router(config) -> APIRouter:
                             break
                 except Exception:
                     pass
+            mcp_pool = getattr(request.app.state, "mcp_pool", None)
             background_tasks.add_task(
                 _sessions_mod._resume_session_task, session_id, agent_name, "", config,
                 broadcast_fn=broadcast_fn,
                 channel_manager=cm,
                 agent_uuid=agent_uuid,
+                mcp_pool=mcp_pool,
             )
 
         return dict(updated_item)

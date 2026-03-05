@@ -171,12 +171,14 @@ def make_router(config) -> APIRouter:
                             logger.warning("[WS] failed to auto-stop session %s: %s", _sid, stop_err)
 
                     cm = getattr(app.state, "channel_manager", None)
+                    mcp_pool = getattr(app.state, "mcp_pool", None)
                     asyncio.create_task(
                         _resume_session_task(
                             session_id, agent_name, content, app.state.config,
                             broadcast_fn=_broadcast_fn,
                             channel_manager=cm,
                             agent_uuid=agent_uuid,
+                            mcp_pool=mcp_pool,
                         )
                     )
 

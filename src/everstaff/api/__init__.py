@@ -86,6 +86,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                         session_id=session_id,
                         config=config,
                         channel_manager=scoped_cm,
+                        mcp_pool=app.state.mcp_pool,
                     )
                     if agent_spec is None:
                         from everstaff.schema.agent_spec import AgentSpec
@@ -125,12 +126,24 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             await daemon.stop()
             _logger.info("AgentDaemon stopped")
 
+        # Shutdown: close MCP connection pool
+        mcp_pool = getattr(app.state, "mcp_pool", None)
+        if mcp_pool is not None:
+            await mcp_pool.close()
+            _logger.info("MCP connection pool closed")
+
         # Shutdown: stop all channels
         await cm.stop_all()
         _logger.info("All channels stopped")
 
     app = FastAPI(title="Agent Framework API", version="0.2.0", lifespan=lifespan)
     app.state.config = config
+
+    # Build and attach MCP connection pool
+    from everstaff.mcp_client.pool import McpConnectionPool
+    mcp_pool = McpConnectionPool(idle_timeout=300.0)
+    mcp_pool.start_cleanup_loop()
+    app.state.mcp_pool = mcp_pool
 
     # Build and attach FileStore to app.state before registering routers
     from everstaff.core.factories import build_file_store, build_channel_manager_from_registry, build_channel_registry
