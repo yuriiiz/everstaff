@@ -83,3 +83,26 @@ class TestExecutorManager:
         assert mgr.has_active("s1")
         await mgr.destroy("s1")
         assert not mgr.has_active("s1")
+
+    async def test_idle_timeout_destroys_executor(self):
+        """Executors idle longer than timeout should be destroyed."""
+        mgr = ExecutorManager(
+            factory=lambda: FakeExecutor(),
+            secret_store=SecretStore(),
+            idle_timeout=0.01,
+        )
+        await mgr.get_or_create("s1")
+        assert mgr.has_active("s1")
+
+        # Simulate passage of time by backdating last_activity
+        import time
+        mgr._last_activity["s1"] = time.monotonic() - 1.0
+        await mgr.cleanup_idle()
+        assert not mgr.has_active("s1")
+
+    async def test_no_idle_timeout_by_default(self):
+        """Without idle_timeout, cleanup_idle is a no-op."""
+        mgr = ExecutorManager(factory=lambda: FakeExecutor(), secret_store=SecretStore())
+        await mgr.get_or_create("s1")
+        await mgr.cleanup_idle()
+        assert mgr.has_active("s1")
