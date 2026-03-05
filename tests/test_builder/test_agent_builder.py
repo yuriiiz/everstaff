@@ -395,3 +395,47 @@ async def test_builder_registers_mcp_tools():
     assert ctx.tool_registry.has_tool("mcp_echo"), (
         "MCP tool 'mcp_echo' must be registered in ToolRegistry"
     )
+
+
+@pytest.mark.asyncio
+async def test_builder_uses_pooled_provider_when_pool_available():
+    """When env provides mcp_pool, builder should use PooledMcpProvider."""
+    from unittest.mock import AsyncMock, patch
+    from everstaff.builder.agent_builder import AgentBuilder
+    from everstaff.builder.environment import TestEnvironment
+    from everstaff.schema.agent_spec import AgentSpec, MCPServerSpec
+    from everstaff.mcp_client.provider import PooledMcpProvider
+    from everstaff.mcp_client.pool import McpConnectionPool
+    from everstaff.protocols import ToolDefinition
+    from everstaff.mcp_client.tool import MCPTool
+
+    fake_tool = MCPTool(
+        session=AsyncMock(),
+        definition_=ToolDefinition(name="pool_echo", description="echo", parameters={}),
+    )
+
+    pool = McpConnectionPool(idle_timeout=60)
+
+    class PooledTestEnv(TestEnvironment):
+        @property
+        def mcp_pool(self):
+            return pool
+
+    spec = AgentSpec(
+        agent_name="mcp-agent",
+        instructions="",
+        mcp_servers=[MCPServerSpec(name="demo", command="python", args=[])],
+    )
+    env = PooledTestEnv()
+    builder = AgentBuilder(spec, env)
+
+    with patch("everstaff.mcp_client.pool.MCPConnection") as MockConn:
+        inst = AsyncMock()
+        inst.connect = AsyncMock(return_value=[fake_tool])
+        inst.disconnect = AsyncMock()
+        MockConn.return_value = inst
+
+        _, ctx = await builder.build()
+
+    assert isinstance(ctx.mcp_provider, PooledMcpProvider)
+    assert ctx.tool_registry.has_tool("pool_echo")

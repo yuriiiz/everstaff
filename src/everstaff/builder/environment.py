@@ -56,6 +56,11 @@ class RuntimeEnvironment:
         """Return the base sessions directory, or None if not applicable."""
         return None
 
+    @property
+    def mcp_pool(self):
+        """Return shared MCP connection pool, or None."""
+        return None
+
 
 class DefaultEnvironment(RuntimeEnvironment):
     def __init__(
@@ -64,9 +69,11 @@ class DefaultEnvironment(RuntimeEnvironment):
         session_id: str | None = None,  # DEPRECATED: ignored, use AgentBuilder(session_id=) instead
         config=None,              # FrameworkConfig | None
         channel_manager: Any = None,
+        mcp_pool: Any = None,
     ) -> None:
         super().__init__(config=config, channel_manager=channel_manager)
         self._sessions_dir = sessions_dir
+        self._mcp_pool = mcp_pool
         # NOTE: session_id is intentionally NOT stored — use AgentBuilder(session_id=) instead
 
     def build_file_store(self) -> "FileStore":
@@ -96,6 +103,10 @@ class DefaultEnvironment(RuntimeEnvironment):
 
     def sessions_dir(self) -> str | None:
         return self._sessions_dir
+
+    @property
+    def mcp_pool(self):
+        return self._mcp_pool
 
 
 class TestEnvironment(RuntimeEnvironment):

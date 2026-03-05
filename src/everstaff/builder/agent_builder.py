@@ -431,8 +431,13 @@ class AgentBuilder:
             from everstaff.nulls import NullMcpProvider
             return NullMcpProvider()
         try:
-            from everstaff.mcp_client.provider import DefaultMcpProvider
-            provider = DefaultMcpProvider(self._spec.mcp_servers)
+            pool = self._env.mcp_pool
+            if pool is not None:
+                from everstaff.mcp_client.provider import PooledMcpProvider
+                provider = PooledMcpProvider(self._spec.mcp_servers, pool=pool)
+            else:
+                from everstaff.mcp_client.provider import DefaultMcpProvider
+                provider = DefaultMcpProvider(self._spec.mcp_servers)
             await provider.connect_all()
             return provider
         except Exception as exc:
