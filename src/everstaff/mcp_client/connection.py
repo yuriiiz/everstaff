@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
@@ -11,6 +12,7 @@ from everstaff.protocols import ToolDefinition
 if TYPE_CHECKING:
     from everstaff.schema.agent_spec import MCPServerSpec
     from everstaff.mcp_client.tool import MCPTool
+    from everstaff.core.secret_store import SecretStore
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +20,35 @@ logger = logging.getLogger(__name__)
 class MCPConnection:
     """Manages a connection to a single MCP server."""
 
-    def __init__(self, spec: "MCPServerSpec") -> None:
+    def __init__(self, spec: "MCPServerSpec", secret_store: "SecretStore | None" = None) -> None:
         self._spec = spec
+        self._secret_store = secret_store
         self._exit_stack: AsyncExitStack | None = None
+
+    def _resolve_spec_env(self) -> dict[str, str] | None:
+        """Resolve ${VAR} references in spec.env using SecretStore.
+
+        If no SecretStore is available, returns spec.env as-is (backward compat).
+        Returns None if spec.env is empty.
+        """
+        if not self._spec.env:
+            return None
+        if self._secret_store is None:
+            return dict(self._spec.env)
+
+        resolved: dict[str, str] = {}
+        for key, value in self._spec.env.items():
+            def _sub(m: re.Match) -> str:
+                name = m.group(1)
+                val = self._secret_store.get(name)
+                if val is None:
+                    raise ValueError(
+                        f"Secret '{name}' referenced in MCP server "
+                        f"'{self._spec.name}' env is not available"
+                    )
+                return val
+            resolved[key] = re.sub(r"\$\{([^}]+)\}", _sub, value)
+        return resolved
 
     def _tool_definition(self, t: Any) -> ToolDefinition:
         """Convert MCP tool schema to ToolDefinition with parameters as dict."""
@@ -67,7 +95,7 @@ class MCPConnection:
             server_params = StdioServerParameters(
                 command=self._spec.command,
                 args=self._spec.args,
-                env=self._spec.env or None,
+                env=self._resolve_spec_env(),
             )
             async with stdio_client(server_params) as transport:
                 yield transport  # (read_stream, write_stream)
