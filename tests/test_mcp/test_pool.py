@@ -122,3 +122,34 @@ async def test_pool_idle_cleanup():
 
         assert pool.idle_count == 0
         inst.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pool_reuse_across_providers():
+    """Simulates two sessions using the same pool — second session reuses connection."""
+    from everstaff.mcp_client.provider import PooledMcpProvider
+    from everstaff.mcp_client.pool import McpConnectionPool
+
+    pool = McpConnectionPool(idle_timeout=60)
+    tool = _make_mock_tool("shared_tool")
+
+    with patch("everstaff.mcp_client.pool.MCPConnection") as MockConn:
+        inst = AsyncMock()
+        inst.connect = AsyncMock(return_value=[tool])
+        inst.disconnect = AsyncMock()
+        MockConn.return_value = inst
+
+        # Session 1: acquire + release
+        p1 = PooledMcpProvider([_make_spec("srv1")], pool=pool)
+        await p1.connect_all()
+        assert pool.active_count == 1
+        await p1.aclose()
+        assert pool.idle_count == 1
+
+        # Session 2: should reuse
+        p2 = PooledMcpProvider([_make_spec("srv1")], pool=pool)
+        await p2.connect_all()
+        assert pool.active_count == 1
+
+    # connect() was called only once total (reuse!)
+    inst.connect.assert_awaited_once()
