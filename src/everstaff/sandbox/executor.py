@@ -35,3 +35,11 @@ class SandboxExecutor(ABC):
     @abstractmethod
     def is_alive(self) -> bool:
         """Whether the sandbox is running."""
+
+    async def push_cancel(self) -> None:
+        """Push cancel signal to sandbox. Default: no-op for simple backends."""
+
+    async def push_hitl_resolution(
+        self, hitl_id: str, decision: str, comment: str = ""
+    ) -> None:
+        """Push HITL resolution to sandbox. Default: no-op for simple backends."""
