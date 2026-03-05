@@ -2028,20 +2028,1266 @@ Expected: All tests PASS (except pre-existing API test failures unrelated to our
 
 ---
 
+## Task 11: Sandbox Entry Point
+
+**Files:**
+- Create: `src/everstaff/sandbox/entry.py`
+- Create: `tests/test_sandbox/test_entry.py`
+
+**Step 1: Write the failing tests**
+
+Create `tests/test_sandbox/test_entry.py`:
+
+```python
+"""Tests for sandbox entry point."""
+import asyncio
+import json
+import pytest
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from everstaff.sandbox.entry import sandbox_main, parse_args
+
+
+class TestParseArgs:
+    def test_parse_args_basic(self):
+        args = parse_args(["--socket-path", "/tmp/test.sock", "--token", "abc123",
+                           "--session-id", "s1", "--agent-spec", '{"name":"test"}'])
+        assert args.socket_path == "/tmp/test.sock"
+        assert args.token == "abc123"
+        assert args.session_id == "s1"
+        assert args.agent_spec == '{"name":"test"}'
+
+    def test_parse_args_with_workspace(self):
+        args = parse_args(["--socket-path", "/tmp/test.sock", "--token", "abc",
+                           "--session-id", "s1", "--agent-spec", "{}",
+                           "--workspace-dir", "/work"])
+        assert args.workspace_dir == "/work"
+
+
+@pytest.mark.asyncio
+class TestSandboxMain:
+    async def test_connects_and_authenticates(self, tmp_path):
+        """sandbox_main should connect to IPC, authenticate, get secrets."""
+        mock_channel = MagicMock()
+        mock_channel.connect = AsyncMock()
+        mock_channel.send_request = AsyncMock(return_value={
+            "secrets": {"API_KEY": "secret123"},
+        })
+        mock_channel.on_push = MagicMock()
+        mock_channel.close = AsyncMock()
+
+        with patch("everstaff.sandbox.entry.UnixSocketChannel", return_value=mock_channel), \
+             patch("everstaff.sandbox.entry._run_agent", new_callable=AsyncMock) as mock_run:
+            await sandbox_main(
+                socket_path=str(tmp_path / "test.sock"),
+                token="test-token",
+                session_id="s1",
+                agent_spec_json='{"name":"test"}',
+                workspace_dir=str(tmp_path),
+            )
+
+        mock_channel.connect.assert_awaited_once_with(str(tmp_path / "test.sock"))
+        mock_channel.send_request.assert_awaited_once_with("auth", {"token": "test-token"})
+        mock_run.assert_awaited_once()
+
+    async def test_registers_cancel_handler(self, tmp_path):
+        """sandbox_main should register a cancel push handler."""
+        mock_channel = MagicMock()
+        mock_channel.connect = AsyncMock()
+        mock_channel.send_request = AsyncMock(return_value={"secrets": {}})
+        mock_channel.on_push = MagicMock()
+        mock_channel.close = AsyncMock()
+
+        with patch("everstaff.sandbox.entry.UnixSocketChannel", return_value=mock_channel), \
+             patch("everstaff.sandbox.entry._run_agent", new_callable=AsyncMock):
+            await sandbox_main(
+                socket_path="/tmp/test.sock",
+                token="t",
+                session_id="s1",
+                agent_spec_json='{"name":"test"}',
+                workspace_dir=str(tmp_path),
+            )
+
+        # Verify cancel and hitl.resolution handlers were registered
+        push_methods = [call.args[0] for call in mock_channel.on_push.call_args_list]
+        assert "cancel" in push_methods
+        assert "hitl.resolution" in push_methods
+
+    async def test_closes_channel_on_exit(self, tmp_path):
+        """Channel should be closed even if _run_agent raises."""
+        mock_channel = MagicMock()
+        mock_channel.connect = AsyncMock()
+        mock_channel.send_request = AsyncMock(return_value={"secrets": {}})
+        mock_channel.on_push = MagicMock()
+        mock_channel.close = AsyncMock()
+
+        with patch("everstaff.sandbox.entry.UnixSocketChannel", return_value=mock_channel), \
+             patch("everstaff.sandbox.entry._run_agent", new_callable=AsyncMock,
+                   side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                await sandbox_main(
+                    socket_path="/tmp/test.sock",
+                    token="t",
+                    session_id="s1",
+                    agent_spec_json='{"name":"test"}',
+                    workspace_dir=str(tmp_path),
+                )
+
+        mock_channel.close.assert_awaited_once()
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_sandbox/test_entry.py -v`
+Expected: FAIL — module `everstaff.sandbox.entry` not found
+
+**Step 3: Implement**
+
+Create `src/everstaff/sandbox/entry.py`:
+
+```python
+"""Sandbox process entry point.
+
+This module is the main() for a sandbox subprocess. It:
+1. Connects to orchestrator via IPC channel
+2. Authenticates with ephemeral token and receives secrets
+3. Builds SandboxEnvironment with proxy adapters
+4. Runs AgentRuntime with the provided agent spec
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+from everstaff.core.secret_store import SecretStore
+from everstaff.sandbox.environment import SandboxEnvironment
+from everstaff.sandbox.ipc.unix_socket import UnixSocketChannel
+
+logger = logging.getLogger(__name__)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Everstaff sandbox process")
+    parser.add_argument("--socket-path", required=True, help="IPC socket path")
+    parser.add_argument("--token", required=True, help="Ephemeral auth token")
+    parser.add_argument("--session-id", required=True, help="Session ID")
+    parser.add_argument("--agent-spec", required=True, help="Agent spec JSON string")
+    parser.add_argument("--workspace-dir", default="/work", help="Workspace directory")
+    return parser.parse_args(argv)
+
+
+async def sandbox_main(
+    socket_path: str,
+    token: str,
+    session_id: str,
+    agent_spec_json: str,
+    workspace_dir: str,
+) -> None:
+    """Entry point for sandbox process."""
+    # 1. Connect and authenticate
+    channel = UnixSocketChannel()
+    await channel.connect(socket_path)
+
+    try:
+        auth_result = await channel.send_request("auth", {"token": token})
+        secret_store = SecretStore(auth_result.get("secrets", {}))
+
+        # 2. Build environment
+        workspace = Path(workspace_dir)
+        workspace.mkdir(parents=True, exist_ok=True)
+        env = SandboxEnvironment(
+            channel=channel,
+            secret_store=secret_store,
+            workspace_dir=workspace,
+        )
+
+        # 3. Register cancel handler
+        _cancelled = asyncio.Event()
+        channel.on_push("cancel", lambda params: _cancelled.set())
+
+        # 4. Register HITL resolution handler (placeholder — wired in Task 13)
+        _hitl_resolutions: asyncio.Queue = asyncio.Queue()
+        channel.on_push("hitl.resolution", lambda params: _hitl_resolutions.put_nowait(params))
+
+        # 5. Run agent
+        await _run_agent(
+            env=env,
+            session_id=session_id,
+            agent_spec_json=agent_spec_json,
+            cancelled=_cancelled,
+            hitl_resolutions=_hitl_resolutions,
+        )
+    finally:
+        await channel.close()
+
+
+async def _run_agent(
+    env: SandboxEnvironment,
+    session_id: str,
+    agent_spec_json: str,
+    cancelled: asyncio.Event,
+    hitl_resolutions: asyncio.Queue,
+) -> None:
+    """Build and run AgentRuntime. Separated for testability."""
+    from everstaff.builder.agent_builder import AgentBuilder
+    from everstaff.schema.agent_spec import AgentSpec
+
+    spec = AgentSpec.model_validate_json(agent_spec_json)
+    builder = AgentBuilder(spec, env, session_id=session_id)
+    runtime, ctx = await builder.build()
+
+    # Wire cancellation
+    # TODO: connect _cancelled event to ctx.cancellation once CancellationToken is available
+
+    async for _event in runtime.run_stream():
+        pass  # All saves/traces go through proxies automatically
+
+
+def main() -> None:
+    """CLI entry point: python -m everstaff.sandbox.entry"""
+    args = parse_args()
+    asyncio.run(sandbox_main(
+        socket_path=args.socket_path,
+        token=args.token,
+        session_id=args.session_id,
+        agent_spec_json=args.agent_spec,
+        workspace_dir=args.workspace_dir,
+    ))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Step 4: Run tests**
+
+Run: `uv run pytest tests/test_sandbox/test_entry.py -v`
+Expected: All tests PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/everstaff/sandbox/entry.py tests/test_sandbox/test_entry.py
+git commit -m "feat: add sandbox process entry point (entry.py)"
+```
+
+---
+
+## Task 12: ProcessSandbox IPC Integration
+
+**Files:**
+- Modify: `src/everstaff/sandbox/process_sandbox.py`
+- Modify: `src/everstaff/sandbox/executor.py`
+- Create: `tests/test_sandbox/test_process_sandbox_ipc.py`
+
+This task upgrades ProcessSandbox from a simple subprocess runner to a full sandbox
+that spawns a subprocess running `entry.py`, sets up the IPC server, handles auth,
+and delivers secrets.
+
+**Step 1: Write the failing tests**
+
+Create `tests/test_sandbox/test_process_sandbox_ipc.py`:
+
+```python
+"""Tests for ProcessSandbox with IPC integration."""
+import asyncio
+import json
+import pytest
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from everstaff.core.secret_store import SecretStore
+from everstaff.sandbox.process_sandbox import ProcessSandbox
+from everstaff.sandbox.ipc.token_store import EphemeralTokenStore
+
+
+@pytest.mark.asyncio
+class TestProcessSandboxIpc:
+    async def test_start_creates_ipc_server(self, tmp_path):
+        """start() should create and start an IPC server."""
+        store = SecretStore({"API_KEY": "secret"})
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        try:
+            assert sandbox.is_alive
+            assert sandbox._ipc_socket_path is not None
+            assert Path(sandbox._ipc_socket_path).parent.exists()
+        finally:
+            await sandbox.stop()
+
+    async def test_stop_cleans_up_ipc(self, tmp_path):
+        """stop() should close IPC server and remove socket file."""
+        store = SecretStore()
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        socket_path = sandbox._ipc_socket_path
+        await sandbox.stop()
+        assert not sandbox.is_alive
+        # Socket file should be cleaned up
+        assert not Path(socket_path).exists()
+
+    async def test_start_generates_ephemeral_token(self, tmp_path):
+        """start() should generate an ephemeral token for sandbox auth."""
+        store = SecretStore({"KEY": "val"})
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        try:
+            assert sandbox._ephemeral_token is not None
+            assert len(sandbox._ephemeral_token) > 0
+        finally:
+            await sandbox.stop()
+
+    async def test_push_cancel(self, tmp_path):
+        """push_cancel() should send cancel message to sandbox via IPC."""
+        store = SecretStore()
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        try:
+            # push_cancel should not raise even if no client connected
+            await sandbox.push_cancel()
+        finally:
+            await sandbox.stop()
+
+    async def test_push_hitl_resolution(self, tmp_path):
+        """push_hitl_resolution() should send resolution to sandbox via IPC."""
+        store = SecretStore()
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        try:
+            await sandbox.push_hitl_resolution(
+                hitl_id="h1", decision="approved", comment="ok"
+            )
+        finally:
+            await sandbox.stop()
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_sandbox/test_process_sandbox_ipc.py -v`
+Expected: FAIL — `_ipc_socket_path` attribute not found
+
+**Step 3: Update SandboxExecutor ABC**
+
+In `src/everstaff/sandbox/executor.py`, add push methods:
+
+```python
+class SandboxExecutor(ABC):
+    # ... existing methods ...
+
+    async def push_cancel(self) -> None:
+        """Push cancel signal to sandbox. Default: no-op for simple backends."""
+
+    async def push_hitl_resolution(
+        self, hitl_id: str, decision: str, comment: str = ""
+    ) -> None:
+        """Push HITL resolution to sandbox. Default: no-op for simple backends."""
+```
+
+**Step 4: Implement ProcessSandbox IPC integration**
+
+Update `src/everstaff/sandbox/process_sandbox.py`:
+
+```python
+"""ProcessSandbox -- local subprocess-based sandbox backend with IPC."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import tempfile
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from everstaff.sandbox.executor import SandboxExecutor
+from everstaff.sandbox.ipc.server_handler import IpcServerHandler
+from everstaff.sandbox.ipc.token_store import EphemeralTokenStore
+from everstaff.sandbox.models import SandboxCommand, SandboxResult, SandboxStatus
+
+if TYPE_CHECKING:
+    from everstaff.core.secret_store import SecretStore
+
+logger = logging.getLogger(__name__)
+
+
+def _minimal_env() -> dict[str, str]:
+    """Minimal environment for subprocess execution."""
+    env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "USER", "LANG", "TERM"):
+        val = os.environ.get(key)
+        if val is not None:
+            env[key] = val
+    return env
+
+
+class ProcessSandbox(SandboxExecutor):
+    """Sandbox that runs agent in a local subprocess with IPC channel.
+
+    Lifecycle:
+    1. start() → creates IPC server + socket, generates ephemeral token
+    2. Orchestrator spawns subprocess: python -m everstaff.sandbox.entry
+    3. Subprocess connects, authenticates, receives secrets, runs AgentRuntime
+    4. stop() → closes IPC server, terminates process, cleans up socket
+    """
+
+    def __init__(self, workdir: Path, secret_store: "SecretStore") -> None:
+        self._workdir = workdir
+        self._secret_store = secret_store
+        self._session_id: str = ""
+        self._alive: bool = False
+        self._started_at: float = 0.0
+        self._subprocess_env = _minimal_env()
+
+        # IPC state
+        self._ipc_socket_path: str | None = None
+        self._ipc_server: asyncio.AbstractServer | None = None
+        self._ipc_handler: IpcServerHandler | None = None
+        self._ephemeral_token: str | None = None
+        self._token_store: EphemeralTokenStore | None = None
+        self._client_writer: asyncio.StreamWriter | None = None
+
+    async def start(self, session_id: str) -> None:
+        self._session_id = session_id
+        self._workdir.mkdir(parents=True, exist_ok=True)
+
+        # Create IPC socket in temp directory
+        tmpdir = tempfile.mkdtemp(prefix="everstaff-ipc-")
+        self._ipc_socket_path = os.path.join(tmpdir, f"{session_id}.sock")
+
+        # Generate ephemeral token
+        self._token_store = EphemeralTokenStore()
+        self._ephemeral_token = self._token_store.create(session_id, ttl_seconds=30)
+
+        # Start IPC server
+        self._ipc_handler = IpcServerHandler(
+            token_store=self._token_store,
+            secret_store=self._secret_store,
+        )
+        self._ipc_server = await asyncio.start_unix_server(
+            self._handle_connection,
+            path=self._ipc_socket_path,
+        )
+
+        self._alive = True
+        self._started_at = time.monotonic()
+        logger.info("ProcessSandbox started for session %s at %s", session_id, self._workdir)
+
+    async def _handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """Handle one sandbox subprocess IPC connection."""
+        self._client_writer = writer
+        try:
+            async for line in reader:
+                msg = json.loads(line)
+                response = await self._ipc_handler.handle_message(msg)
+                if response is not None:
+                    writer.write(json.dumps(response).encode() + b"\n")
+                    await writer.drain()
+        except Exception as e:
+            logger.debug("IPC connection closed: %s", e)
+        finally:
+            self._client_writer = None
+            writer.close()
+
+    async def execute(self, command: SandboxCommand) -> SandboxResult:
+        if not self._alive:
+            return SandboxResult(success=False, error="Sandbox not running")
+        if command.type == "bash":
+            return await self._exec_bash(command.payload)
+        return SandboxResult(success=False, error=f"Unknown command type: {command.type}")
+
+    async def stop(self) -> None:
+        # Close IPC server
+        if self._ipc_server is not None:
+            self._ipc_server.close()
+            await self._ipc_server.wait_closed()
+            self._ipc_server = None
+
+        # Close client connection
+        if self._client_writer is not None:
+            self._client_writer.close()
+            self._client_writer = None
+
+        # Clean up socket file
+        if self._ipc_socket_path and Path(self._ipc_socket_path).exists():
+            Path(self._ipc_socket_path).unlink(missing_ok=True)
+            # Remove parent tmpdir if empty
+            parent = Path(self._ipc_socket_path).parent
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+            self._ipc_socket_path = None
+
+        self._alive = False
+        logger.info("ProcessSandbox stopped for session %s", self._session_id)
+
+    async def status(self) -> SandboxStatus:
+        uptime = time.monotonic() - self._started_at if self._alive else 0.0
+        return SandboxStatus(
+            alive=self._alive,
+            session_id=self._session_id,
+            uptime_seconds=uptime,
+        )
+
+    @property
+    def is_alive(self) -> bool:
+        return self._alive
+
+    async def push_cancel(self) -> None:
+        """Push cancel signal to sandbox via IPC."""
+        await self._push_message("cancel", {"session_id": self._session_id})
+
+    async def push_hitl_resolution(
+        self, hitl_id: str, decision: str, comment: str = ""
+    ) -> None:
+        """Push HITL resolution to sandbox via IPC."""
+        await self._push_message("hitl.resolution", {
+            "hitl_id": hitl_id,
+            "decision": decision,
+            "comment": comment,
+        })
+
+    async def _push_message(self, method: str, params: dict) -> None:
+        """Send a server-push message to connected sandbox client."""
+        if self._client_writer is None:
+            logger.debug("No sandbox client connected, cannot push %s", method)
+            return
+        try:
+            msg = {"jsonrpc": "2.0", "method": method, "params": params}
+            self._client_writer.write(json.dumps(msg).encode() + b"\n")
+            await self._client_writer.drain()
+        except Exception as e:
+            logger.warning("Failed to push %s to sandbox: %s", method, e)
+
+    async def _exec_bash(self, payload: dict) -> SandboxResult:
+        cmd = payload.get("command", "")
+        timeout = min(max(payload.get("timeout", 300), 1), 3600)
+        started_at = time.monotonic()
+
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._workdir,
+                env=self._subprocess_env,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=float(timeout)
+                )
+            except asyncio.TimeoutError:
+                try:
+                    process.terminate()
+                    await process.wait()
+                except Exception:
+                    pass
+                return SandboxResult(
+                    success=False,
+                    exit_code=-1,
+                    error=f"Timeout: command exceeded {timeout} seconds",
+                    started_at=started_at,
+                    finished_at=time.monotonic(),
+                )
+
+            output = stdout.decode(errors="replace")
+            err = stderr.decode(errors="replace")
+            if err:
+                output += f"\n{err}"
+
+            return SandboxResult(
+                success=process.returncode == 0,
+                output=output.strip(),
+                exit_code=process.returncode or 0,
+                started_at=started_at,
+                finished_at=time.monotonic(),
+            )
+        except Exception as e:
+            return SandboxResult(
+                success=False,
+                error=str(e),
+                started_at=started_at,
+                finished_at=time.monotonic(),
+            )
+```
+
+**Step 5: Run tests**
+
+Run: `uv run pytest tests/test_sandbox/test_process_sandbox_ipc.py tests/test_sandbox/test_process_sandbox.py -v`
+Expected: All tests PASS
+
+**Step 6: Commit**
+
+```bash
+git add src/everstaff/sandbox/executor.py src/everstaff/sandbox/process_sandbox.py tests/test_sandbox/test_process_sandbox_ipc.py
+git commit -m "feat: integrate IPC server into ProcessSandbox"
+```
+
+---
+
+## Task 13: HITL Resolution Push
+
+**Files:**
+- Modify: `src/everstaff/sandbox/ipc/server_handler.py`
+- Modify: `src/everstaff/sandbox/entry.py`
+- Create: `tests/test_sandbox/test_hitl_resolution.py`
+
+This task wires HITL resolution from orchestrator to sandbox. When a human approves/rejects,
+orchestrator pushes resolution via IPC → sandbox receives it and resumes the runtime.
+
+**Step 1: Write the failing tests**
+
+Create `tests/test_sandbox/test_hitl_resolution.py`:
+
+```python
+"""Tests for HITL resolution push flow."""
+import asyncio
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+from everstaff.sandbox.ipc.server_handler import IpcServerHandler
+from everstaff.sandbox.ipc.token_store import EphemeralTokenStore
+from everstaff.core.secret_store import SecretStore
+
+
+@pytest.mark.asyncio
+class TestHitlResolution:
+    async def test_server_handler_detects_hitl_from_memory_save(self):
+        """When memory.save includes status=waiting_for_human, handler should flag it."""
+        token_store = EphemeralTokenStore()
+        secret_store = SecretStore()
+        handler = IpcServerHandler(token_store=token_store, secret_store=secret_store)
+
+        # Mock memory_store on handler
+        handler._memory_store = MagicMock()
+        handler._memory_store.save = AsyncMock(return_value=None)
+
+        msg = {
+            "jsonrpc": "2.0",
+            "method": "memory.save",
+            "params": {
+                "session_id": "s1",
+                "messages": [],
+                "status": "waiting_for_human",
+                "hitl_requests": [{"hitl_id": "h1", "tool_name": "bash", "args": {}}],
+            },
+            "id": 1,
+        }
+        result = await handler.handle_message(msg)
+        assert result is not None
+        # Handler should have called memory_store.save with correct params
+        handler._memory_store.save.assert_awaited_once()
+
+    async def test_hitl_resolution_queue_receives_push(self):
+        """sandbox entry should receive HITL resolution via IPC push."""
+        resolutions: asyncio.Queue = asyncio.Queue()
+
+        # Simulate the on_push handler from entry.py
+        handler = lambda params: resolutions.put_nowait(params)
+        handler({"hitl_id": "h1", "decision": "approved", "comment": "looks good"})
+
+        resolution = resolutions.get_nowait()
+        assert resolution["hitl_id"] == "h1"
+        assert resolution["decision"] == "approved"
+        assert resolution["comment"] == "looks good"
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_sandbox/test_hitl_resolution.py -v`
+Expected: FAIL — `_memory_store` attribute not on handler or handler doesn't support hitl detection
+
+**Step 3: Implement HITL detection in IpcServerHandler**
+
+Update `src/everstaff/sandbox/ipc/server_handler.py` — add HITL detection to the `memory.save` handler:
+
+```python
+async def _handle_memory_save(self, params: dict) -> dict:
+    """Handle memory.save request. Detect HITL status."""
+    await self._memory_store.save(**params)
+
+    # Detect HITL request for channel broadcast
+    status = params.get("status")
+    hitl_requests = params.get("hitl_requests")
+    if status == "waiting_for_human" and hitl_requests:
+        session_id = params.get("session_id", "")
+        if self._on_hitl_detected:
+            await self._on_hitl_detected(session_id, hitl_requests)
+
+    return {"ok": True}
+```
+
+Add `on_hitl_detected` callback to `IpcServerHandler.__init__`:
+
+```python
+def __init__(
+    self,
+    token_store: EphemeralTokenStore,
+    secret_store: SecretStore,
+    memory_store: MemoryStore | None = None,
+    tracer: TracingBackend | None = None,
+    file_store: FileStore | None = None,
+    on_hitl_detected: Callable | None = None,
+):
+    # ...existing init...
+    self._on_hitl_detected = on_hitl_detected
+```
+
+**Step 4: Run tests**
+
+Run: `uv run pytest tests/test_sandbox/test_hitl_resolution.py -v`
+Expected: All PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/everstaff/sandbox/ipc/server_handler.py src/everstaff/sandbox/entry.py tests/test_sandbox/test_hitl_resolution.py
+git commit -m "feat: HITL resolution push via IPC"
+```
+
+---
+
+## Task 14: ExecutorManager Idle Timeout
+
+**Files:**
+- Modify: `src/everstaff/sandbox/manager.py`
+- Modify: `tests/test_sandbox/test_manager.py`
+
+**Step 1: Write the failing tests**
+
+Add to `tests/test_sandbox/test_manager.py`:
+
+```python
+async def test_idle_timeout_destroys_executor(self):
+    """Executors idle longer than timeout should be destroyed."""
+    executor = AsyncMock()
+    executor.is_alive = True
+    executor.status = AsyncMock(return_value=MagicMock(
+        alive=True, uptime_seconds=0
+    ))
+    executor.stop = AsyncMock()
+
+    factory = MagicMock(return_value=executor)
+    store = SecretStore()
+    mgr = ExecutorManager(factory=factory, secret_store=store, idle_timeout=1)
+
+    await mgr.get_or_create("s1")
+    assert mgr.has_active("s1")
+
+    # Simulate idle check — executor has been idle > timeout
+    executor._last_activity = 0  # far in the past
+    await mgr.cleanup_idle()
+    # After cleanup, idle executor should be destroyed
+    executor.stop.assert_awaited()
+
+async def test_no_idle_timeout_by_default(self):
+    """Without idle_timeout, cleanup_idle is a no-op."""
+    executor = AsyncMock()
+    executor.is_alive = True
+    executor.stop = AsyncMock()
+
+    factory = MagicMock(return_value=executor)
+    store = SecretStore()
+    mgr = ExecutorManager(factory=factory, secret_store=store)
+
+    await mgr.get_or_create("s1")
+    await mgr.cleanup_idle()
+    executor.stop.assert_not_awaited()
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_sandbox/test_manager.py::TestExecutorManager::test_idle_timeout_destroys_executor -v`
+Expected: FAIL — `idle_timeout` parameter not accepted
+
+**Step 3: Implement**
+
+Update `src/everstaff/sandbox/manager.py`:
+
+```python
+class ExecutorManager:
+    """Create, cache, and recycle sandbox executors per session."""
+
+    def __init__(
+        self,
+        factory: Callable[[], "SandboxExecutor"],
+        secret_store: "SecretStore",
+        idle_timeout: float | None = None,
+    ) -> None:
+        self._factory = factory
+        self._secret_store = secret_store
+        self._executors: dict[str, "SandboxExecutor"] = {}
+        self._idle_timeout = idle_timeout
+        self._last_activity: dict[str, float] = {}
+
+    async def get_or_create(self, session_id: str) -> "SandboxExecutor":
+        self._last_activity[session_id] = time.monotonic()
+        # ... existing logic ...
+
+    async def destroy(self, session_id: str) -> None:
+        self._last_activity.pop(session_id, None)
+        # ... existing logic ...
+
+    async def cleanup_idle(self) -> None:
+        """Destroy executors that have been idle longer than idle_timeout."""
+        if self._idle_timeout is None:
+            return
+        now = time.monotonic()
+        to_destroy = [
+            sid for sid, last in self._last_activity.items()
+            if now - last > self._idle_timeout and sid in self._executors
+        ]
+        for sid in to_destroy:
+            logger.info("Destroying idle executor for session %s", sid)
+            await self.destroy(sid)
+```
+
+**Step 4: Run tests**
+
+Run: `uv run pytest tests/test_sandbox/test_manager.py -v`
+Expected: All PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/everstaff/sandbox/manager.py tests/test_sandbox/test_manager.py
+git commit -m "feat: add idle timeout cleanup to ExecutorManager"
+```
+
+---
+
+## Task 15: DockerSandbox Backend
+
+**Files:**
+- Create: `src/everstaff/sandbox/docker_sandbox.py`
+- Create: `tests/test_sandbox/test_docker_sandbox.py`
+
+**Step 1: Write the failing tests**
+
+Create `tests/test_sandbox/test_docker_sandbox.py`:
+
+```python
+"""Tests for DockerSandbox backend."""
+import pytest
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from everstaff.core.secret_store import SecretStore
+from everstaff.sandbox.docker_sandbox import DockerSandbox, DockerSandboxConfig
+from everstaff.sandbox.models import SandboxCommand
+
+
+class TestDockerSandboxConfig:
+    def test_defaults(self):
+        cfg = DockerSandboxConfig()
+        assert cfg.image == "everstaff-sandbox:latest"
+        assert cfg.memory_limit == "512m"
+        assert cfg.cpu_limit == 1.0
+        assert cfg.network_disabled is True
+
+    def test_custom_values(self):
+        cfg = DockerSandboxConfig(image="custom:v1", memory_limit="1g", cpu_limit=2.0)
+        assert cfg.image == "custom:v1"
+        assert cfg.memory_limit == "1g"
+
+
+@pytest.mark.asyncio
+class TestDockerSandbox:
+    async def test_start_creates_container(self, tmp_path):
+        """start() should create a Docker container with correct mounts."""
+        store = SecretStore({"API_KEY": "secret"})
+        config = DockerSandboxConfig(image="test-image:latest")
+        sandbox = DockerSandbox(
+            workdir=tmp_path, secret_store=store, config=config
+        )
+
+        with patch("everstaff.sandbox.docker_sandbox.asyncio") as mock_asyncio:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(return_value=(b"container-id-123\n", b""))
+            mock_asyncio.create_subprocess_exec = AsyncMock(return_value=mock_proc)
+            mock_asyncio.start_unix_server = AsyncMock()
+
+            await sandbox.start("test-session")
+            assert sandbox.is_alive
+            assert sandbox._container_id == "container-id-123"
+
+            await sandbox.stop()
+
+    async def test_stop_removes_container(self, tmp_path):
+        """stop() should remove the Docker container."""
+        store = SecretStore()
+        config = DockerSandboxConfig()
+        sandbox = DockerSandbox(
+            workdir=tmp_path, secret_store=store, config=config
+        )
+        sandbox._alive = True
+        sandbox._container_id = "test-container"
+        sandbox._session_id = "s1"
+
+        with patch("everstaff.sandbox.docker_sandbox.asyncio") as mock_asyncio:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_asyncio.create_subprocess_exec = AsyncMock(return_value=mock_proc)
+
+            await sandbox.stop()
+            assert not sandbox.is_alive
+            # Should have called docker rm
+            calls = mock_asyncio.create_subprocess_exec.call_args_list
+            assert any("rm" in str(c) for c in calls)
+
+    async def test_push_cancel(self, tmp_path):
+        """push_cancel() should send cancel to container via IPC."""
+        store = SecretStore()
+        sandbox = DockerSandbox(workdir=tmp_path, secret_store=store)
+        sandbox._alive = True
+        sandbox._client_writer = MagicMock()
+        sandbox._client_writer.write = MagicMock()
+        sandbox._client_writer.drain = AsyncMock()
+        sandbox._session_id = "s1"
+
+        await sandbox.push_cancel()
+        sandbox._client_writer.write.assert_called_once()
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_sandbox/test_docker_sandbox.py -v`
+Expected: FAIL — module `everstaff.sandbox.docker_sandbox` not found
+
+**Step 3: Implement**
+
+Create `src/everstaff/sandbox/docker_sandbox.py`:
+
+```python
+"""DockerSandbox -- Docker container-based sandbox backend."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import tempfile
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from everstaff.sandbox.executor import SandboxExecutor
+from everstaff.sandbox.ipc.server_handler import IpcServerHandler
+from everstaff.sandbox.ipc.token_store import EphemeralTokenStore
+from everstaff.sandbox.models import SandboxCommand, SandboxResult, SandboxStatus
+
+if TYPE_CHECKING:
+    from everstaff.core.secret_store import SecretStore
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DockerSandboxConfig:
+    """Configuration for Docker sandbox containers."""
+    image: str = "everstaff-sandbox:latest"
+    memory_limit: str = "512m"
+    cpu_limit: float = 1.0
+    network_disabled: bool = True
+    extra_mounts: dict[str, str] = field(default_factory=dict)
+
+
+class DockerSandbox(SandboxExecutor):
+    """Sandbox that runs agent in a Docker container with IPC via bind-mounted socket.
+
+    Lifecycle:
+    1. start() → create IPC socket on host, start IPC server, run container
+       with bind mounts for workspace + IPC socket
+    2. Container runs python -m everstaff.sandbox.entry
+    3. Container connects to host IPC socket, authenticates, runs AgentRuntime
+    4. stop() → docker rm -f container, cleanup socket
+    """
+
+    def __init__(
+        self,
+        workdir: Path,
+        secret_store: "SecretStore",
+        config: DockerSandboxConfig | None = None,
+    ) -> None:
+        self._workdir = workdir
+        self._secret_store = secret_store
+        self._config = config or DockerSandboxConfig()
+        self._session_id: str = ""
+        self._alive: bool = False
+        self._started_at: float = 0.0
+        self._container_id: str | None = None
+
+        # IPC state (same pattern as ProcessSandbox)
+        self._ipc_socket_path: str | None = None
+        self._ipc_server: asyncio.AbstractServer | None = None
+        self._ipc_handler: IpcServerHandler | None = None
+        self._ephemeral_token: str | None = None
+        self._token_store: EphemeralTokenStore | None = None
+        self._client_writer: asyncio.StreamWriter | None = None
+
+    async def start(self, session_id: str) -> None:
+        self._session_id = session_id
+        self._workdir.mkdir(parents=True, exist_ok=True)
+
+        # Create IPC socket on host
+        tmpdir = tempfile.mkdtemp(prefix="everstaff-docker-ipc-")
+        self._ipc_socket_path = os.path.join(tmpdir, f"{session_id}.sock")
+
+        # Generate ephemeral token
+        self._token_store = EphemeralTokenStore()
+        self._ephemeral_token = self._token_store.create(session_id, ttl_seconds=60)
+
+        # Start IPC server on host
+        self._ipc_handler = IpcServerHandler(
+            token_store=self._token_store,
+            secret_store=self._secret_store,
+        )
+        self._ipc_server = await asyncio.start_unix_server(
+            self._handle_connection,
+            path=self._ipc_socket_path,
+        )
+
+        # Run Docker container
+        ipc_dir = str(Path(self._ipc_socket_path).parent)
+        cmd = [
+            "docker", "run", "-d",
+            "--name", f"everstaff-{session_id}",
+            "-v", f"{self._workdir}:/work",
+            "-v", f"{ipc_dir}:/ipc",
+            "-m", self._config.memory_limit,
+            f"--cpus={self._config.cpu_limit}",
+        ]
+        if self._config.network_disabled:
+            cmd.append("--network=none")
+        for host_path, container_path in self._config.extra_mounts.items():
+            cmd.extend(["-v", f"{host_path}:{container_path}"])
+        cmd.extend([
+            self._config.image,
+            "python", "-m", "everstaff.sandbox.entry",
+            "--socket-path", f"/ipc/{session_id}.sock",
+            "--token", self._ephemeral_token,
+            "--session-id", session_id,
+            "--agent-spec", "{}",  # Will be provided by orchestrator
+            "--workspace-dir", "/work",
+        ])
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(f"Docker run failed: {stderr.decode()}")
+
+        self._container_id = stdout.decode().strip()
+        self._alive = True
+        self._started_at = time.monotonic()
+        logger.info("DockerSandbox started container %s for session %s",
+                     self._container_id, session_id)
+
+    async def _handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        self._client_writer = writer
+        try:
+            async for line in reader:
+                msg = json.loads(line)
+                response = await self._ipc_handler.handle_message(msg)
+                if response is not None:
+                    writer.write(json.dumps(response).encode() + b"\n")
+                    await writer.drain()
+        except Exception as e:
+            logger.debug("Docker IPC connection closed: %s", e)
+        finally:
+            self._client_writer = None
+            writer.close()
+
+    async def execute(self, command: SandboxCommand) -> SandboxResult:
+        """Execute command inside Docker container via docker exec."""
+        if not self._alive or not self._container_id:
+            return SandboxResult(success=False, error="Sandbox not running")
+
+        if command.type == "bash":
+            return await self._exec_bash_docker(command.payload)
+        return SandboxResult(success=False, error=f"Unknown command type: {command.type}")
+
+    async def stop(self) -> None:
+        # Stop and remove container
+        if self._container_id:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "rm", "-f", self._container_id,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+            except Exception as e:
+                logger.warning("Failed to remove container %s: %s", self._container_id, e)
+            self._container_id = None
+
+        # Close IPC server
+        if self._ipc_server is not None:
+            self._ipc_server.close()
+            await self._ipc_server.wait_closed()
+            self._ipc_server = None
+
+        if self._client_writer is not None:
+            self._client_writer.close()
+            self._client_writer = None
+
+        # Clean up socket
+        if self._ipc_socket_path and Path(self._ipc_socket_path).exists():
+            Path(self._ipc_socket_path).unlink(missing_ok=True)
+            parent = Path(self._ipc_socket_path).parent
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+            self._ipc_socket_path = None
+
+        self._alive = False
+        logger.info("DockerSandbox stopped for session %s", self._session_id)
+
+    async def status(self) -> SandboxStatus:
+        uptime = time.monotonic() - self._started_at if self._alive else 0.0
+        return SandboxStatus(
+            alive=self._alive,
+            session_id=self._session_id,
+            uptime_seconds=uptime,
+        )
+
+    @property
+    def is_alive(self) -> bool:
+        return self._alive
+
+    async def push_cancel(self) -> None:
+        await self._push_message("cancel", {"session_id": self._session_id})
+
+    async def push_hitl_resolution(
+        self, hitl_id: str, decision: str, comment: str = ""
+    ) -> None:
+        await self._push_message("hitl.resolution", {
+            "hitl_id": hitl_id,
+            "decision": decision,
+            "comment": comment,
+        })
+
+    async def _push_message(self, method: str, params: dict) -> None:
+        if self._client_writer is None:
+            return
+        try:
+            msg = {"jsonrpc": "2.0", "method": method, "params": params}
+            self._client_writer.write(json.dumps(msg).encode() + b"\n")
+            await self._client_writer.drain()
+        except Exception as e:
+            logger.warning("Failed to push %s to docker sandbox: %s", method, e)
+
+    async def _exec_bash_docker(self, payload: dict) -> SandboxResult:
+        """Execute bash command inside Docker container."""
+        cmd_str = payload.get("command", "")
+        timeout = min(max(payload.get("timeout", 300), 1), 3600)
+        started_at = time.monotonic()
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "docker", "exec", self._container_id, "sh", "-c", cmd_str,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=float(timeout)
+                )
+            except asyncio.TimeoutError:
+                # Kill the exec process
+                try:
+                    process.terminate()
+                    await process.wait()
+                except Exception:
+                    pass
+                return SandboxResult(
+                    success=False, exit_code=-1,
+                    error=f"Timeout: command exceeded {timeout} seconds",
+                    started_at=started_at, finished_at=time.monotonic(),
+                )
+
+            output = stdout.decode(errors="replace")
+            err = stderr.decode(errors="replace")
+            if err:
+                output += f"\n{err}"
+
+            return SandboxResult(
+                success=process.returncode == 0,
+                output=output.strip(),
+                exit_code=process.returncode or 0,
+                started_at=started_at, finished_at=time.monotonic(),
+            )
+        except Exception as e:
+            return SandboxResult(
+                success=False, error=str(e),
+                started_at=started_at, finished_at=time.monotonic(),
+            )
+```
+
+**Step 4: Run tests**
+
+Run: `uv run pytest tests/test_sandbox/test_docker_sandbox.py -v`
+Expected: All tests PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/everstaff/sandbox/docker_sandbox.py tests/test_sandbox/test_docker_sandbox.py
+git commit -m "feat: add DockerSandbox backend with IPC via bind-mounted socket"
+```
+
+---
+
+## Task 16: Full Integration Test Run
+
+**Step 1: Run all sandbox tests**
+
+Run: `uv run pytest tests/test_sandbox/ -v`
+Expected: All tests PASS
+
+**Step 2: Run all project tests (sanity check)**
+
+Run: `uv run pytest tests/test_core/ tests/test_sandbox/ tests/test_builtin_tools/ tests/test_mcp_client/ -v`
+Expected: All tests PASS (except pre-existing API test failures unrelated to our changes)
+
+**Step 3: Commit if any fixups needed**
+
+---
+
 ## Summary
 
-| Task | Component | Files Created/Modified |
-|------|-----------|----------------------|
-| 0 | SandboxResult timestamps | models.py, process_sandbox.py |
-| 1 | JSON-RPC protocol models | ipc/protocol.py |
-| 2 | IpcChannel ABC + EphemeralTokenStore | ipc/channel.py, token_store.py |
-| 3 | UnixSocketChannel + Server | ipc/unix_socket.py |
-| 4 | ProxyMemoryStore | proxy/memory_store.py |
-| 5 | ProxyTracer + ProxyFileStore | proxy/tracer.py, proxy/file_store.py |
-| 6 | SandboxEnvironment | environment.py |
-| 7 | IPC Server Handler | ipc/server_handler.py |
-| 8 | E2E Integration Test | test_integration.py |
-| 9 | ExecutorManager cancel support | manager.py |
-| 10 | Full test run | — |
-
-**Phase 6 (Docker Backend)** and **Sandbox Entry Point** are deferred — they require the full AgentBuilder integration which depends on real runtime testing beyond unit tests.
+| Task | Phase | Component | Files Created/Modified |
+|------|-------|-----------|----------------------|
+| 0 | 1-2 supplement | SandboxResult timestamps | models.py, process_sandbox.py |
+| 1 | 3 | JSON-RPC protocol models | ipc/protocol.py |
+| 2 | 3 | IpcChannel ABC + EphemeralTokenStore | ipc/channel.py, token_store.py |
+| 3 | 3 | UnixSocketChannel + Server | ipc/unix_socket.py |
+| 4 | 4 | ProxyMemoryStore | proxy/memory_store.py |
+| 5 | 4 | ProxyTracer + ProxyFileStore | proxy/tracer.py, proxy/file_store.py |
+| 6 | 4 | SandboxEnvironment | environment.py |
+| 7 | 5 | IPC Server Handler | ipc/server_handler.py |
+| 8 | 5 | E2E Integration Test | test_integration.py |
+| 9 | 5 | ExecutorManager cancel support | manager.py |
+| 10 | — | Checkpoint: full test run | — |
+| 11 | 5 | Sandbox Entry Point | entry.py |
+| 12 | 5 | ProcessSandbox IPC Integration | process_sandbox.py, executor.py |
+| 13 | 5 | HITL Resolution Push | server_handler.py, entry.py |
+| 14 | 5 | ExecutorManager Idle Timeout | manager.py |
+| 15 | 6 | DockerSandbox Backend | docker_sandbox.py |
+| 16 | — | Final full test run | — |
