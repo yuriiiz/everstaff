@@ -3,11 +3,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from everstaff.tools.native import tool
 
 logger = logging.getLogger(__name__)
+
+
+def _minimal_env() -> dict[str, str]:
+    """Build a minimal environment for subprocess execution.
+
+    Only includes PATH and HOME so basic commands work.
+    Does NOT inherit parent process secrets.
+    """
+    env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "USER", "LANG", "TERM"):
+        val = os.environ.get(key)
+        if val is not None:
+            env[key] = val
+    return env
 
 
 def _bash_permission_hint(args):
@@ -19,8 +34,22 @@ def _bash_permission_hint(args):
     return PermissionHint("command", f"{prefix} *")
 
 
-def make_bash_tool(workdir: Path):
-    """Return a Bash NativeTool scoped to *workdir*."""
+def make_bash_tool(workdir: Path, env: dict[str, str] | None = None):
+    """Return a Bash NativeTool scoped to *workdir*.
+
+    Parameters
+    ----------
+    workdir:
+        Working directory for command execution.
+    env:
+        Extra environment variables to inject into the subprocess.
+        These are merged on top of a minimal base env (PATH, HOME, etc.).
+        Parent ``os.environ`` is **never** inherited.
+    """
+    # Build subprocess environment: minimal base + caller extras
+    subprocess_env = _minimal_env()
+    if env:
+        subprocess_env.update(env)
 
     @tool(name="Bash", description="Execute a shell command and return stdout + stderr.",
           permission_hint=_bash_permission_hint)
@@ -33,6 +62,7 @@ def make_bash_tool(workdir: Path):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workdir,
+                env=subprocess_env,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=float(timeout))

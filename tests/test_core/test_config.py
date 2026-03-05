@@ -1,7 +1,9 @@
-"""Tests for DaemonConfig and memory_dir in FrameworkConfig."""
+"""Tests for DaemonConfig, memory_dir, and SandboxConfig in FrameworkConfig."""
 from __future__ import annotations
 
-from everstaff.core.config import FrameworkConfig, _load_from_dir
+import pytest
+
+from everstaff.core.config import FrameworkConfig, SandboxConfig, _load_from_dir
 
 
 def test_framework_config_daemon_defaults():
@@ -52,3 +54,39 @@ def test_daemon_config_absent_from_yaml(tmp_path):
     cfg = _load_from_dir(tmp_path)
     assert cfg.daemon.enabled is False
     assert cfg.memory_dir == ".agent/memory"
+
+
+class TestSandboxConfig:
+    def test_default_sandbox_config(self):
+        cfg = FrameworkConfig()
+        assert cfg.sandbox is not None
+        assert cfg.sandbox.enabled is False
+        assert cfg.sandbox.type == "auto"
+        assert cfg.sandbox.idle_timeout == 300
+        assert cfg.sandbox.token_ttl == 30
+
+    def test_sandbox_config_from_dict(self):
+        cfg = FrameworkConfig(sandbox={"enabled": True, "type": "docker", "idle_timeout": 600})
+        assert cfg.sandbox.enabled is True
+        assert cfg.sandbox.type == "docker"
+        assert cfg.sandbox.idle_timeout == 600
+
+    def test_sandbox_docker_config(self):
+        cfg = FrameworkConfig(sandbox={
+            "enabled": True,
+            "type": "docker",
+            "docker": {"image": "custom:latest", "memory_limit": "1g"},
+        })
+        assert cfg.sandbox.docker.image == "custom:latest"
+        assert cfg.sandbox.docker.memory_limit == "1g"
+
+    def test_sandbox_extra_mounts(self):
+        cfg = FrameworkConfig(sandbox={
+            "enabled": True,
+            "extra_mounts": [
+                {"source": "/data/models", "target": "/mnt/models", "readonly": True}
+            ],
+        })
+        assert len(cfg.sandbox.extra_mounts) == 1
+        assert cfg.sandbox.extra_mounts[0].source == "/data/models"
+        assert cfg.sandbox.extra_mounts[0].readonly is True
