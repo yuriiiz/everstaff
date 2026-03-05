@@ -38,19 +38,24 @@ def _now() -> str:
 
 
 def _drop_dangling_tool_calls(messages: "list[Message]") -> "list[Message]":
-    """Remove trailing assistant message(s) whose tool_calls have no matching tool results.
+    """Fix trailing assistant message(s) whose tool_calls have no matching tool results.
 
     When a session is saved mid-execution (after the LLM emitted tool_calls but
-    before all tool results were appended), the history ends with an assistant
-    message carrying unresolved tool_calls.  Resuming with a new user message
-    would then produce the sequence:
+    before all tool results were appended), the history may contain an assistant
+    message with partially or fully unresolved tool_calls.  This can happen when:
 
-        assistant(tool_calls=[...]) → user(...)
+    1. The session was saved before all tool results were appended (no tool results
+       follow the assistant message).
+    2. HITL interrupted a multi-tool-call batch: some tool calls completed, HITL
+       resolved one, but remaining calls were never executed.  The assistant
+       message references N tool_calls but only M < N results exist.
 
-    which violates the OpenAI/Anthropic/Minimax protocol and triggers error 2013.
+    Sending such messages to the LLM violates the OpenAI/Anthropic protocol.
 
-    This function truncates the history back to the last fully-completed turn so
-    the resumed session starts from a clean state.
+    This function handles both cases:
+    - Fully unresolved: drops the trailing assistant message entirely.
+    - Partially resolved: injects error tool-result messages for unfulfilled calls
+      so the LLM can see what happened and decide whether to retry.
     """
     if not messages:
         return messages
@@ -61,24 +66,52 @@ def _drop_dangling_tool_calls(messages: "list[Message]") -> "list[Message]":
         if m.role == "tool" and m.tool_call_id:
             fulfilled.add(m.tool_call_id)
 
-    # Walk backward; remove any trailing assistant+tool_calls whose calls are
-    # all unfulfilled (i.e. no corresponding tool result appears after them).
     result = list(messages)
+
+    # Phase 1: Drop trailing assistant messages with zero fulfilled tool calls.
     while result:
         last = result[-1]
         if last.role == "assistant" and last.tool_calls:
             call_ids = {tc["id"] for tc in last.tool_calls if isinstance(tc, dict) and "id" in tc}
             if not call_ids or not call_ids.issubset(fulfilled):
-                # This assistant turn has no (or incomplete) tool results — drop it
-                logger.warning(
-                    "Dropping dangling assistant+tool_calls from history "
-                    "(session was saved before tool results were appended). "
-                    "Affected call IDs: %s",
-                    call_ids - fulfilled,
-                )
-                result.pop()
-                continue
+                if not (call_ids & fulfilled):
+                    # Fully unresolved — drop the assistant message
+                    logger.warning(
+                        "Dropping dangling assistant+tool_calls from history "
+                        "(session was saved before tool results were appended). "
+                        "Affected call IDs: %s",
+                        call_ids - fulfilled,
+                    )
+                    result.pop()
+                    continue
         break
+
+    # Phase 2: Handle partially fulfilled tool calls.
+    # Walk backward to find the last assistant message with tool_calls.
+    # For unfulfilled calls, inject synthetic error tool-result messages
+    # so the protocol is satisfied and the LLM knows which calls were skipped.
+    for i in range(len(result) - 1, -1, -1):
+        msg = result[i]
+        if msg.role == "assistant" and msg.tool_calls:
+            call_ids = {tc["id"] for tc in msg.tool_calls if isinstance(tc, dict) and "id" in tc}
+            unfulfilled = call_ids - fulfilled
+            if unfulfilled:
+                logger.warning(
+                    "Injecting error results for %d unfulfilled tool call(s) "
+                    "out of %d total. Unfulfilled IDs: %s",
+                    len(unfulfilled), len(call_ids), unfulfilled,
+                )
+                # Inject a synthetic error tool result for each unfulfilled call
+                for tc in msg.tool_calls:
+                    if isinstance(tc, dict) and tc.get("id") in unfulfilled:
+                        result.append(Message(
+                            role="tool",
+                            content="[Tool call was not executed: session was interrupted before this call could run. You may retry if needed.]",
+                            tool_call_id=tc["id"],
+                        ))
+            break  # only fix the last assistant+tool_calls turn
+        elif msg.role not in ("tool",):
+            break  # stop scanning if we hit a non-tool message
 
     return result
 

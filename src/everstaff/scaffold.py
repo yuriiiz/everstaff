@@ -11,7 +11,7 @@ version = "0.1.0"
 description = ""
 requires-python = ">=3.11"
 dependencies = [
-    "everstaff>=0.1.0",
+    "everstaff>=0.1.2",
     "python-dotenv>=1.0.0",
 ]
 """,
@@ -247,6 +247,7 @@ COPY .agent/ .agent/
 COPY agents/ agents/
 COPY skills/ skills/
 COPY tools/ tools/
+COPY builtin_mcp_templates builtin_mcp_templates/
 COPY main.py .
 
 # Install dependencies
@@ -332,11 +333,12 @@ docker run -p 8000:8000 --env-file .env {project_name}
 ## Project Structure
 
 ```
-.agent/config.yaml   # Framework configuration
-main.py              # Service entry point (with pre_start hook)
-agents/              # YAML agent definitions
-skills/              # Custom skills
-tools/               # Custom Python tools
+.agent/config.yaml             # Framework configuration
+main.py                        # Service entry point (with pre_start hook)
+agents/                        # YAML agent definitions
+skills/                        # Custom skills
+tools/                         # Custom Python tools
+builtin_mcp_templates/         # Built-in MCP templates
 ```
 
 ## Configuration
@@ -361,6 +363,7 @@ DIRS = [
     "agents",
     "skills",
     "tools",
+    "builtin_mcp_templates",
 ]
 
 

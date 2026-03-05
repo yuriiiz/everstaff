@@ -1010,6 +1010,69 @@ async def test_runtime_preserves_fully_completed_tool_calls_on_load():
 
 
 @pytest.mark.asyncio
+async def test_runtime_injects_error_for_partially_fulfilled_tool_calls():
+    """When HITL resolves one tool call in a multi-call batch, unfulfilled calls
+    must get synthetic error results so the LLM can decide whether to retry."""
+    from everstaff.core.runtime import AgentRuntime, _drop_dangling_tool_calls
+    from everstaff.protocols import LLMResponse, Message
+    from everstaff.nulls import InMemoryStore
+
+    # Simulate HITL resume state: 3 tool calls, only A and B fulfilled
+    history = [
+        Message(role="user", content="do stuff"),
+        Message(role="assistant", content=None, tool_calls=[
+            {"id": "tc-A", "type": "function", "function": {"name": "toolA", "arguments": "{}"}},
+            {"id": "tc-B", "type": "function", "function": {"name": "toolB", "arguments": "{}"}},
+            {"id": "tc-C", "type": "function", "function": {"name": "toolC", "arguments": "{}"}},
+        ]),
+        Message(role="tool", tool_call_id="tc-A", content="result A"),
+        Message(role="tool", tool_call_id="tc-B", content="result B"),
+        # tc-C was never executed (HITL interrupted before it ran)
+    ]
+
+    # Unit test _drop_dangling_tool_calls directly
+    fixed = _drop_dangling_tool_calls(history)
+
+    # The assistant message should keep all 3 tool_calls (unchanged)
+    assistant_msgs = [m for m in fixed if m.role == "assistant" and m.tool_calls]
+    assert len(assistant_msgs) == 1
+    call_ids = {tc["id"] for tc in assistant_msgs[0].tool_calls}
+    assert call_ids == {"tc-A", "tc-B", "tc-C"}
+
+    # All 3 tool results should be present (A, B real + C synthetic error)
+    tool_msgs = [m for m in fixed if m.role == "tool"]
+    assert len(tool_msgs) == 3
+    tc_c_msg = [m for m in tool_msgs if m.tool_call_id == "tc-C"][0]
+    assert "not executed" in tc_c_msg.content
+
+    # Integration test: runtime should send valid messages to LLM
+    mem = InMemoryStore()
+    await mem.save("sess-partial", history)
+
+    received_messages = []
+
+    async def fake_complete(messages, tools, system=None):
+        received_messages.extend(messages)
+        return LLMResponse(content="ok", tool_calls=[])
+
+    llm = MagicMock()
+    llm.complete_stream = None
+    llm.complete = AsyncMock(side_effect=fake_complete)
+    llm.model_id = "gpt-4"
+
+    ctx = _make_ctx(memory=mem)
+    ctx.session_id = "sess-partial"
+    runtime = AgentRuntime(context=ctx, llm_client=llm)
+
+    await runtime.run("continue")
+
+    # LLM should see all 3 tool_calls with all 3 results (no protocol violation)
+    tool_results = [m for m in received_messages if m.role == "tool"]
+    result_ids = {m.tool_call_id for m in tool_results}
+    assert "tc-C" in result_ids, "tc-C error result was not sent to LLM"
+
+
+@pytest.mark.asyncio
 async def test_stats_accumulate_across_hitl_resumes():
     """Stats (tool_calls_count, own_calls) must accumulate across HITL resume cycles.
 
