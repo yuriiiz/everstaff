@@ -16,6 +16,8 @@ class SandboxResult(BaseModel):
     output: str = ""
     exit_code: int = 0
     error: str = ""
+    started_at: float | None = None
+    finished_at: float | None = None
 
 
 class SandboxStatus(BaseModel):

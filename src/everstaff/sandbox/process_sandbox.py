@@ -84,6 +84,7 @@ class ProcessSandbox(SandboxExecutor):
     async def _exec_bash(self, payload: dict) -> SandboxResult:
         cmd = payload.get("command", "")
         timeout = min(max(payload.get("timeout", 300), 1), 3600)
+        started_at = time.monotonic()
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -107,6 +108,8 @@ class ProcessSandbox(SandboxExecutor):
                     success=False,
                     exit_code=-1,
                     error=f"Timeout: command exceeded {timeout} seconds",
+                    started_at=started_at,
+                    finished_at=time.monotonic(),
                 )
 
             output = stdout.decode(errors="replace")
@@ -118,6 +121,13 @@ class ProcessSandbox(SandboxExecutor):
                 success=process.returncode == 0,
                 output=output.strip(),
                 exit_code=process.returncode or 0,
+                started_at=started_at,
+                finished_at=time.monotonic(),
             )
         except Exception as e:
-            return SandboxResult(success=False, error=str(e))
+            return SandboxResult(
+                success=False,
+                error=str(e),
+                started_at=started_at,
+                finished_at=time.monotonic(),
+            )
