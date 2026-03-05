@@ -80,6 +80,27 @@ class DaemonConfig(BaseModel):
     max_concurrent_loops: int = 10
 
 
+class SandboxMountConfig(BaseModel):
+    source: str
+    target: str
+    readonly: bool = True
+
+
+class SandboxDockerConfig(BaseModel):
+    image: str = "everstaff/executor:latest"
+    memory_limit: str = "512m"
+    cpu_limit: float = 1.0
+
+
+class SandboxConfig(BaseModel):
+    enabled: bool = False
+    type: Literal["auto", "process", "docker"] = "auto"
+    idle_timeout: int = 300
+    token_ttl: int = 30
+    docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
+    extra_mounts: list[SandboxMountConfig] = Field(default_factory=list)
+
+
 class FrameworkConfig(BaseModel):
     model_mappings: dict[str, ModelMapping] = Field(default_factory=dict)
     agents_dir: str = Field(default_factory=lambda: "./agents")
@@ -96,6 +117,7 @@ class FrameworkConfig(BaseModel):
     )
     web: WebConfig = Field(default_factory=WebConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     memory_dir: str = Field(default=".agent/memory")
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     auth: AuthConfig | None = None
