@@ -90,6 +90,43 @@ async def test_provider_disconnect_all_closes_connections():
 
 
 @pytest.mark.asyncio
+async def test_provider_connect_all_runs_in_parallel():
+    """connect_all() should connect to multiple servers concurrently, not sequentially."""
+    import asyncio
+    from everstaff.mcp_client.provider import DefaultMcpProvider
+
+    call_order = []
+
+    async def slow_connect(self_conn):
+        name = self_conn._spec.name
+        call_order.append(f"{name}_start")
+        await asyncio.sleep(0.05)
+        call_order.append(f"{name}_end")
+        return [_make_mock_tool(f"tool_{name}")]
+
+    specs = [_make_spec("srv1"), _make_spec("srv2"), _make_spec("srv3")]
+
+    with patch("everstaff.mcp_client.provider.MCPConnection") as MockConn:
+        instances = []
+        def make_conn(spec):
+            inst = AsyncMock()
+            inst._spec = spec
+            inst.connect = lambda: slow_connect(inst)
+            inst.disconnect = AsyncMock()
+            instances.append(inst)
+            return inst
+        MockConn.side_effect = make_conn
+
+        provider = DefaultMcpProvider(specs)
+        await provider.connect_all()
+
+    assert len(provider.get_tools()) == 3
+    starts = [i for i, x in enumerate(call_order) if x.endswith("_start")]
+    ends = [i for i, x in enumerate(call_order) if x.endswith("_end")]
+    assert max(starts) < min(ends), f"Expected parallel execution, got: {call_order}"
+
+
+@pytest.mark.asyncio
 async def test_provider_aclose_calls_disconnect_all():
     """aclose() must call disconnect_all() on the provider."""
     from everstaff.mcp_client.provider import DefaultMcpProvider

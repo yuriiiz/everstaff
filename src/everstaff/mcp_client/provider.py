@@ -23,17 +23,25 @@ class DefaultMcpProvider:
         self._tools: list[Tool] = []
 
     async def connect_all(self) -> None:
-        """Connect to all configured MCP servers and discover their tools."""
-        for spec in self._specs:
+        """Connect to all configured MCP servers in parallel and discover their tools."""
+        import asyncio
+
+        async def _connect_one(spec):
             conn = MCPConnection(spec)
             try:
                 tools = await conn.connect()
-                self._connections.append(conn)
-                self._tools.extend(tools)
+                return conn, tools
             except Exception as e:
                 logger.warning(
                     "Failed to connect to MCP server '%s': %s", spec.name, e
                 )
+                return None, []
+
+        results = await asyncio.gather(*[_connect_one(s) for s in self._specs])
+        for conn, tools in results:
+            if conn is not None:
+                self._connections.append(conn)
+                self._tools.extend(tools)
 
     async def disconnect_all(self) -> None:
         """Disconnect from all MCP servers."""
