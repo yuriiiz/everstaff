@@ -74,3 +74,12 @@ class TestExecutorManager:
         e2 = await mgr.get_or_create("session-1")
         assert e2.is_alive
         assert e1 is not e2  # New executor created
+
+    async def test_has_active(self):
+        """has_active returns True for running sessions."""
+        mgr = ExecutorManager(factory=lambda: FakeExecutor(), secret_store=SecretStore())
+        assert not mgr.has_active("s1")
+        await mgr.get_or_create("s1")
+        assert mgr.has_active("s1")
+        await mgr.destroy("s1")
+        assert not mgr.has_active("s1")

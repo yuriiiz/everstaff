@@ -47,6 +47,11 @@ class ExecutorManager:
         for session_id in list(self._executors):
             await self.destroy(session_id)
 
+    def has_active(self, session_id: str) -> bool:
+        """Check if a session has an active (alive) executor."""
+        executor = self._executors.get(session_id)
+        return executor is not None and executor.is_alive
+
     @property
     def active_sessions(self) -> list[str]:
         return list(self._executors.keys())
