@@ -56,51 +56,41 @@ export default function FileCard({ file, sessionId, onPreview }) {
     };
 
     return (
-        <div
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '8px 12px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                background: '#fafbfc',
-                cursor: 'pointer',
-                transition: 'border-color 0.15s',
-                fontSize: '12.5px',
-            }}
-            onClick={() => onPreview(file)}
-            onMouseEnter={e => e.currentTarget.style.borderColor = '#3b82f6'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-        >
-            <Icon size={16} style={{ color: '#6b7280', flexShrink: 0 }} />
-            <span style={{ fontWeight: 500, color: '#111827', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {file.file_name}
-            </span>
-            <span style={{ color: '#9ca3af', fontSize: '11px', flexShrink: 0 }}>
-                {formatSize(file.size)}
-            </span>
-            <button
-                onClick={(e) => { e.stopPropagation(); onPreview(file); }}
-                title="Preview"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#6b7280', display: 'flex' }}
-            >
-                <Eye size={14} />
-            </button>
-            <button
-                onClick={handleDownload}
-                title="Download"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#6b7280', display: 'flex' }}
-            >
-                <Download size={14} />
-            </button>
-            <button
-                onClick={handleCopyLink}
-                title="Copy link"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: copied ? '#10b981' : '#6b7280', display: 'flex', transition: 'color 0.2s' }}
-            >
-                {copied ? <Check size={14} /> : <Link size={14} />}
-            </button>
+        <div className="file-card file-card-entrance" onClick={() => onPreview(file)}>
+            <div className="file-card-icon">
+                <Icon size={18} />
+            </div>
+            <div className="file-card-info">
+                <div className="file-card-name" title={file.file_name}>
+                    {file.file_name}
+                </div>
+                <div className="file-card-meta">
+                    {formatSize(file.size)} • {file.mime_type.split('/')[1] || file.mime_type}
+                </div>
+            </div>
+            <div className="file-card-actions">
+                <button
+                    onClick={(e) => { e.stopPropagation(); onPreview(file); }}
+                    title="Preview"
+                    className="file-action-btn"
+                >
+                    <Eye size={16} />
+                </button>
+                <button
+                    onClick={handleDownload}
+                    title="Download"
+                    className="file-action-btn"
+                >
+                    <Download size={16} />
+                </button>
+                <button
+                    onClick={handleCopyLink}
+                    title="Copy link"
+                    className={`file-action-btn ${copied ? 'active' : ''}`}
+                >
+                    {copied ? <Check size={16} /> : <Link size={16} />}
+                </button>
+            </div>
         </div>
     );
 }

@@ -217,6 +217,7 @@ export default function FileBrowser({ sessionId, onPreview, refreshTrigger }) {
                                 <div
                                     key={idx}
                                     onClick={() => handleFileClick(file)}
+                                    className={`${(Date.now() - new Date(file.modified_at).getTime() < 30000) ? 'file-row-new' : ''}`}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -236,11 +237,17 @@ export default function FileBrowser({ sessionId, onPreview, refreshTrigger }) {
                                             fontSize: '12px',
                                             fontWeight: isDir ? 600 : 500,
                                             color: '#1f2937',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
                                             overflow: 'hidden',
                                             textOverflow: 'ellipsis',
                                             whiteSpace: 'nowrap'
                                         }}>
                                             {file.name}
+                                            {(Date.now() - new Date(file.modified_at).getTime() < 30000) && (
+                                                <span className="new-badge">New</span>
+                                            )}
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: '#9ca3af' }}>
                                             <span>{isDir ? 'Folder' : formatSize(file.size)}</span>
