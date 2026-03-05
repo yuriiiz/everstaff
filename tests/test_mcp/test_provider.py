@@ -142,3 +142,49 @@ async def test_provider_aclose_calls_disconnect_all():
         await provider.aclose()
 
         instance.disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pooled_provider_acquires_from_pool():
+    """PooledMcpProvider.connect_all() acquires connections from the pool."""
+    from everstaff.mcp_client.provider import PooledMcpProvider
+    from everstaff.mcp_client.pool import McpConnectionPool
+
+    pool = McpConnectionPool(idle_timeout=60)
+    tool = _make_mock_tool("pooled_tool")
+
+    with patch("everstaff.mcp_client.pool.MCPConnection") as MockConn:
+        inst = AsyncMock()
+        inst.connect = AsyncMock(return_value=[tool])
+        inst.disconnect = AsyncMock()
+        MockConn.return_value = inst
+
+        provider = PooledMcpProvider([_make_spec()], pool=pool)
+        await provider.connect_all()
+
+    tools = provider.get_tools()
+    assert len(tools) == 1
+    assert tools[0].definition.name == "pooled_tool"
+    assert pool.active_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pooled_provider_aclose_releases_to_pool():
+    """PooledMcpProvider.aclose() releases connections back to pool, not disconnects."""
+    from everstaff.mcp_client.provider import PooledMcpProvider
+    from everstaff.mcp_client.pool import McpConnectionPool
+
+    pool = McpConnectionPool(idle_timeout=60)
+
+    with patch("everstaff.mcp_client.pool.MCPConnection") as MockConn:
+        inst = AsyncMock()
+        inst.connect = AsyncMock(return_value=[])
+        inst.disconnect = AsyncMock()
+        MockConn.return_value = inst
+
+        provider = PooledMcpProvider([_make_spec()], pool=pool)
+        await provider.connect_all()
+        await provider.aclose()
+
+    assert pool.idle_count == 1
+    inst.disconnect.assert_not_awaited()

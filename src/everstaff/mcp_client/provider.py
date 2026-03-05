@@ -10,6 +10,7 @@ from .connection import MCPConnection
 
 if TYPE_CHECKING:
     from everstaff.schema.agent_spec import MCPServerSpec
+    from everstaff.mcp_client.pool import McpConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,60 @@ class DefaultMcpProvider:
     async def aclose(self) -> None:
         """Alias for disconnect_all(); satisfies McpProvider protocol."""
         await self.disconnect_all()
+
+    def get_tools(self) -> list[Tool]:
+        return list(self._tools)
+
+    def get_prompt_injection(self) -> str:
+        if not self._tools:
+            return ""
+        lines = ["## MCP Tools", ""]
+        for tool in self._tools:
+            defn = tool.definition
+            desc = defn.description or ""
+            lines.append(f"- **{defn.name}**: {desc}" if desc else f"- **{defn.name}**")
+        return "\n".join(lines)
+
+
+class PooledMcpProvider:
+    """MCP provider that borrows connections from a shared pool.
+
+    On connect_all(), acquires connections from the pool (parallel).
+    On aclose(), releases connections back to the pool (not disconnect).
+    """
+
+    def __init__(self, specs: list["MCPServerSpec"], pool: "McpConnectionPool") -> None:
+        self._specs = specs
+        self._pool = pool
+        self._connections: list = []
+        self._tools: list[Tool] = []
+
+    async def connect_all(self) -> None:
+        """Acquire connections from pool in parallel."""
+        import asyncio
+
+        async def _acquire_one(spec):
+            try:
+                conn, tools = await self._pool.acquire(spec)
+                return conn, tools
+            except Exception as e:
+                logger.warning(
+                    "Failed to acquire MCP connection for '%s': %s", spec.name, e
+                )
+                return None, []
+
+        results = await asyncio.gather(*[_acquire_one(s) for s in self._specs])
+        for conn, tools in results:
+            if conn is not None:
+                self._connections.append(conn)
+                self._tools.extend(tools)
+
+    async def aclose(self) -> None:
+        """Release connections back to the pool (not disconnect)."""
+        for conn in self._connections:
+            await self._pool.release(conn)
+        self._connections.clear()
+        self._tools.clear()
 
     def get_tools(self) -> list[Tool]:
         return list(self._tools)
