@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from everstaff.api.hitl import _resolve_hitl_internal
 from everstaff.api.sessions import _resume_session_task
 from everstaff.channels.websocket import WebSocketChannel
+from everstaff.session.index import SessionIndex
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def make_router(config) -> APIRouter:
                     _session_status = ""
                     try:
                         store = app.state.file_store
-                        raw_bytes = await store.read(f"{session_id}/session.json")
+                        raw_bytes = await store.read(SessionIndex.session_relpath(session_id, None))
                         session_raw = _json.loads(raw_bytes)
                         agent_name = session_raw.get("agent_name", "")
                         agent_uuid = session_raw.get("agent_uuid", "")
@@ -161,7 +162,7 @@ def make_router(config) -> APIRouter:
                         try:
                             store = app.state.file_store
                             await store.write(
-                                f"{session_id}/cancel.signal",
+                                SessionIndex.signal_relpath(session_id, None),
                                 _json.dumps({"force": False}).encode(),
                             )
                             logger.info("[WS] auto-stopping running session before resume  session=%s", _sid)

@@ -45,6 +45,16 @@ async def test_hitl_list_via_filestore(tmp_path):
     }
     await store.write("test-s1/session.json", json.dumps(session_data).encode())
 
+    # Register in session index so the HITL fast-path can find it
+    index = getattr(app.state, "session_index", None)
+    if index is not None:
+        from everstaff.session.index import IndexEntry
+        index.upsert(IndexEntry(
+            id="test-s1", root="test-s1", parent=None,
+            agent="test-agent", agent_uuid=None,
+            status="waiting_for_human", created_at=now, updated_at=now,
+        ))
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/hitl")
 

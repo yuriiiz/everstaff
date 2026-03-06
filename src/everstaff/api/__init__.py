@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,6 +110,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     channel_manager=cm,
                     channel_registry=channel_registry,
                     sessions_dir=config.sessions_dir,
+                    session_index=getattr(app.state, 'session_index', None),
                 )
                 await daemon.start()
                 app.state.daemon = daemon
@@ -150,6 +152,14 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     _sessions_path = sessions_dir or config.sessions_dir
     _file_store = build_file_store(config.storage, _sessions_path)
     app.state.file_store = _file_store
+
+    # Build and attach SessionIndex for fast session lookup
+    from everstaff.session.index import SessionIndex as _SessionIndex
+    _sessions_resolved = Path(_sessions_path).expanduser().resolve()
+    _session_index = _SessionIndex(_sessions_resolved)
+    if not _session_index._path.exists() and _sessions_resolved.exists():
+        _session_index.rebuild()
+    app.state.session_index = _session_index
 
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry

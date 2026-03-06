@@ -48,6 +48,7 @@ async def resolve_hitl(
     permission_pattern: str | None = None,
     *,
     file_store: "FileStore",
+    root_session_id: str | None = None,
 ) -> "HitlResolution":
     """The one and only resolve implementation.
 
@@ -55,8 +56,9 @@ async def resolve_hitl(
     Raises HitlNotFoundError, HitlAlreadyResolvedError, HitlExpiredError.
     """
     from everstaff.schema.api_models import HitlResolution
+    from everstaff.session.index import SessionIndex
 
-    session_path = f"{session_id}/session.json"
+    session_path = SessionIndex.session_relpath(session_id, root_session_id)
     raw = await file_store.read(session_path)
     session_data = json.loads(raw.decode())
 

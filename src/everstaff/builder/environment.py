@@ -44,7 +44,7 @@ class RuntimeEnvironment:
     def new_session_id(self) -> str:
         return str(uuid4())
 
-    def working_dir(self, session_id: str) -> Path:
+    def working_dir(self, session_id: str, root_session_id: str | None = None) -> Path:
         """Return per-session working directory for file tool operations."""
         return Path.cwd()
 
@@ -84,7 +84,9 @@ class DefaultEnvironment(RuntimeEnvironment):
         from everstaff.memory.file_store import FileMemoryStore
         from everstaff.memory.compressible_store import CompressibleMemoryStore
         from everstaff.memory.strategies import TruncationStrategy
-        store = FileMemoryStore(self.build_file_store())
+        from everstaff.session.index import SessionIndex
+        index = SessionIndex(Path(self._sessions_dir))
+        store = FileMemoryStore(self.build_file_store(), index=index)
         kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
         return CompressibleMemoryStore(store, TruncationStrategy(), **kwargs)
 
@@ -96,8 +98,9 @@ class DefaultEnvironment(RuntimeEnvironment):
     def new_session_id(self) -> str:
         return str(uuid4())
 
-    def working_dir(self, session_id: str) -> Path:
-        d = Path(self._sessions_dir) / session_id / "workspaces"
+    def working_dir(self, session_id: str, root_session_id: str | None = None) -> Path:
+        effective_root = root_session_id or session_id
+        d = Path(self._sessions_dir) / effective_root / "workspaces"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -133,7 +136,7 @@ class TestEnvironment(RuntimeEnvironment):
         client.complete = AsyncMock(return_value=LLMResponse(content="test response", tool_calls=[]))
         return client
 
-    def working_dir(self, session_id: str) -> Path:
+    def working_dir(self, session_id: str, root_session_id: str | None = None) -> Path:
         import tempfile
         return Path(tempfile.mkdtemp())
 

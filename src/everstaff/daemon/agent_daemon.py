@@ -57,6 +57,7 @@ class AgentDaemon:
         channel_manager: Any = None,
         channel_registry: dict[str, Any] | None = None,
         sessions_dir: str | Path | None = None,
+        session_index: Any = None,
     ) -> None:
         self._agents_dir = Path(agents_dir)
         self._memory = memory
@@ -66,6 +67,7 @@ class AgentDaemon:
         self._channel_manager = channel_manager
         self._channel_registry = channel_registry or {}
         self._sessions_dir = sessions_dir
+        self._session_index = session_index
         self._running = False
 
         from everstaff.daemon.event_bus import EventBus
@@ -178,6 +180,7 @@ class AgentDaemon:
             memory=self._memory,
             tracer=self._tracer,
             sessions_dir=self._sessions_dir,
+            session_index=self._session_index,
         )
 
         # Create per-agent runtime factory (closure captures agent spec)
@@ -202,6 +205,7 @@ class AgentDaemon:
             triggers=spec.autonomy.triggers,
             agent_hitl_channels=spec.hitl_channels,
             channel_registry=self._channel_registry,
+            session_index=self._session_index,
         )
 
         await self._loop_manager.start(loop)

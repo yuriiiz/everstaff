@@ -21,6 +21,7 @@ class DefaultSubAgentProvider:
         parent_cancellation: CancellationEvent | None = None,
         caller_span_id: str | None = None,
         parent_hooks: list[Hook] | None = None,
+        root_session_id: str | None = None,
     ) -> None:
         from everstaff.agents.delegate_task_tool import DelegateTaskTool
         self._env = env
@@ -29,6 +30,7 @@ class DefaultSubAgentProvider:
         self._parent_cancellation = parent_cancellation
         self._caller_span_id = caller_span_id
         self._parent_hooks = parent_hooks
+        self._root_session_id = root_session_id
         self._tool: DelegateTaskTool | None = None
         if specs:
             self._tool = DelegateTaskTool(
@@ -39,6 +41,7 @@ class DefaultSubAgentProvider:
                 parent_cancellation=parent_cancellation,
                 caller_span_id=caller_span_id,
                 parent_hooks=parent_hooks,
+                root_session_id=root_session_id,
             )
 
     def get_tools(self) -> list[Tool]:
@@ -109,5 +112,6 @@ class DefaultSubAgentProvider:
                 parent_cancellation=self._parent_cancellation,
                 caller_span_id=self._caller_span_id,
                 parent_hooks=self._parent_hooks,
+                root_session_id=self._root_session_id,
             )
         self._tool.register(name, spec)

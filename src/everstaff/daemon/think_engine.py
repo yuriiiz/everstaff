@@ -111,11 +111,12 @@ class ThinkEngine:
         Any object satisfying the ``TracingBackend`` protocol.
     """
 
-    def __init__(self, llm_client: Any, memory: Any, tracer: Any, sessions_dir: str | Path | None = None) -> None:
+    def __init__(self, llm_client: Any, memory: Any, tracer: Any, sessions_dir: str | Path | None = None, session_index: Any = None) -> None:
         self._llm = llm_client
         self._memory = memory
         self._tracer = tracer
         self._sessions_dir: Path | None = Path(sessions_dir) if sessions_dir else None
+        self._session_index = session_index
 
     # ------------------------------------------------------------------
     # Public API
@@ -262,7 +263,7 @@ class ThinkEngine:
         finally:
             # Always persist the think session, even if an exception occurred mid-loop
             final_decision = decision or Decision(action="skip", reasoning="Think loop interrupted")
-            self._finish_think_session(think_session_id, agent_name, messages, final_decision)
+            self._finish_think_session(think_session_id, agent_name, messages, final_decision, parent_session_id)
 
         return decision
 
@@ -271,12 +272,16 @@ class ThinkEngine:
     # ------------------------------------------------------------------
 
     def _write_think_session(self, session_id: str, agent_name: str, parent_session_id: str, now: str) -> None:
-        """Write an initial session.json for this think cycle."""
+        """Write an initial session file for this think cycle.
+
+        Think sessions are children of the loop session, stored under
+        ``{parent}/sub_sessions/{session_id}.json``.
+        """
         if self._sessions_dir is None:
             return
-        session_dir = self._sessions_dir / session_id
+        sub_dir = self._sessions_dir / parent_session_id / "sub_sessions"
         try:
-            session_dir.mkdir(parents=True, exist_ok=True)
+            sub_dir.mkdir(parents=True, exist_ok=True)
             data = {
                 "session_id": session_id,
                 "agent_name": agent_name,
@@ -284,19 +289,32 @@ class ThinkEngine:
                 "created_at": now,
                 "updated_at": now,
                 "parent_session_id": parent_session_id,
+                "root_session_id": parent_session_id,
                 "metadata": {"title": "Think"},
                 "messages": [],
                 "hitl_requests": [],
             }
-            (session_dir / "session.json").write_text(json.dumps(data, indent=2))
+            (sub_dir / f"{session_id}.json").write_text(json.dumps(data, indent=2))
+            if self._session_index is not None:
+                from everstaff.session.index import IndexEntry
+                self._session_index.upsert(IndexEntry(
+                    id=session_id, root=parent_session_id,
+                    parent=parent_session_id, agent=agent_name,
+                    agent_uuid=None, status="running",
+                    created_at=now, updated_at=now,
+                ))
         except Exception as exc:
             logger.warning("[Think:%s] Failed to write think session %s: %s", agent_name, session_id, exc)
 
-    def _finish_think_session(self, session_id: str, agent_name: str, messages: list[Message], decision: Decision) -> None:
+    def _finish_think_session(self, session_id: str, agent_name: str, messages: list[Message], decision: Decision, parent_session_id: str = "") -> None:
         """Save accumulated messages and decision into the think session."""
         if self._sessions_dir is None:
             return
-        meta_path = self._sessions_dir / session_id / "session.json"
+        # Nested path: {parent}/sub_sessions/{session_id}.json
+        if parent_session_id:
+            meta_path = self._sessions_dir / parent_session_id / "sub_sessions" / f"{session_id}.json"
+        else:
+            meta_path = self._sessions_dir / session_id / "session.json"
         if not meta_path.exists():
             return
         try:
@@ -310,6 +328,15 @@ class ThinkEngine:
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
+            if self._session_index is not None:
+                from everstaff.session.index import IndexEntry
+                self._session_index.upsert(IndexEntry(
+                    id=session_id, root=parent_session_id or session_id,
+                    parent=parent_session_id or None, agent=agent_name,
+                    agent_uuid=None, status="completed",
+                    created_at=data.get("created_at", ""),
+                    updated_at=data["updated_at"],
+                ))
         except Exception as exc:
             logger.warning("[Think:%s] Failed to finish think session %s: %s", agent_name, session_id, exc)
 

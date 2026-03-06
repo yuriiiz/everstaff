@@ -34,6 +34,7 @@ class AgentBuilder:
         caller_span_id: str | None = None,
         session_id: str | None = None,
         trigger: "AgentEvent | None" = None,
+        root_session_id: str | None = None,
     ) -> None:
         self._spec = spec
         self._env = env
@@ -44,6 +45,7 @@ class AgentBuilder:
         self._caller_span_id = caller_span_id
         self._session_id = session_id
         self._trigger = trigger
+        self._root_session_id = root_session_id
 
     def _resolve_model(self) -> str:
         """Resolve the concrete LiteLLM model string for this agent.
@@ -85,7 +87,13 @@ class AgentBuilder:
     async def build(self) -> tuple[AgentRuntime, AgentContext]:
         # 0. Generate session_id first so it can be passed to tracer
         session_id = self._session_id or self._env.new_session_id()
-        workdir = self._env.working_dir(session_id)
+
+        # Resolve root_session_id: explicit > parent > self (root)
+        root_session_id = self._root_session_id
+        if root_session_id is None:
+            root_session_id = self._parent_session_id if self._parent_session_id else session_id
+
+        workdir = self._env.working_dir(session_id, root_session_id=root_session_id)
         model_id = self._resolve_model()
 
         # Resolve cancellation FIRST so all children share the same event
@@ -96,10 +104,18 @@ class AgentBuilder:
             self._build_memory(session_id),
             self._build_tracer(session_id),
         )
+
+        # Register nested path for child sessions
+        if root_session_id != session_id:
+            from everstaff.session.index import SessionIndex
+            relpath = SessionIndex.session_relpath(session_id, root_session_id)
+            if hasattr(memory, "set_session_path"):
+                memory.set_session_path(session_id, relpath)
+
         tool_registry = self._build_tool_registry(workdir)
         skill_provider = await self._build_skill_provider()
         knowledge_provider = await self._build_knowledge_provider()
-        sub_agent_provider = self._build_sub_agent_provider(model_id, workdir, session_id, cancellation)
+        sub_agent_provider = self._build_sub_agent_provider(model_id, workdir, session_id, cancellation, root_session_id)
         mcp_provider = await self._build_mcp_provider()
 
         # Collect system tool names (framework + provider)
@@ -157,7 +173,7 @@ class AgentBuilder:
             tool_registry.register(tool)
 
         # 1c. Register DAGTool if workflow is configured
-        dag_tool = self._build_workflow_tool(session_id, model_id, cancellation, tracer, memory)
+        dag_tool = self._build_workflow_tool(session_id, model_id, cancellation, tracer, memory, root_session_id)
         if dag_tool:
             tool_registry.register_native(dag_tool)
 
@@ -190,6 +206,7 @@ class AgentBuilder:
             # Metadata & infrastructure
             session_id=session_id,
             parent_session_id=self._parent_session_id,
+            root_session_id=root_session_id,
             tracer=tracer,
             hooks=self._hooks,
             cancellation=cancellation,
@@ -304,7 +321,8 @@ class AgentBuilder:
             return []
         try:
             import json
-            path = f"{self._session_id}/session.json"
+            from everstaff.session.index import SessionIndex
+            path = SessionIndex.session_relpath(self._session_id, self._root_session_id)
             if not await file_store.exists(path):
                 return []
             raw = await file_store.read(path)
@@ -405,7 +423,7 @@ class AgentBuilder:
             from everstaff.nulls import NullKnowledgeProvider
             return NullKnowledgeProvider()
 
-    def _build_sub_agent_provider(self, model_id: str, workdir: Path, session_id: str, cancellation: "CancellationEvent"):
+    def _build_sub_agent_provider(self, model_id: str, workdir: Path, session_id: str, cancellation: "CancellationEvent", root_session_id: str | None = None):
         if not getattr(self._spec, "sub_agents", None):
             from everstaff.nulls import NullSubAgentProvider
             return NullSubAgentProvider()
@@ -424,6 +442,7 @@ class AgentBuilder:
             parent_session_id=session_id,
             parent_cancellation=cancellation,
             parent_hooks=self._hooks,
+            root_session_id=root_session_id,
         )
 
     async def _build_mcp_provider(self):
@@ -452,6 +471,7 @@ class AgentBuilder:
         cancellation: "CancellationEvent",
         tracer: Any,
         memory: Any = None,
+        root_session_id: str | None = None,
     ):
         if not getattr(self._spec, "workflow", None):
             return None
@@ -463,6 +483,7 @@ class AgentBuilder:
             parent_session_id=session_id,
             parent_cancellation=cancellation,
             parent_model_id=model_id,
+            root_session_id=root_session_id,
         )
         return DAGTool(
             factory=factory,

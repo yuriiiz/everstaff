@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from everstaff.schema.api_models import HitlResolution
+from everstaff.session.index import SessionIndex
 from everstaff.hitl.resolve import (
     resolve_hitl as canonical_resolve,
     all_hitls_settled,
@@ -44,11 +45,30 @@ def _is_expired(hitl_item: dict) -> bool:
         return False
 
 
-async def _find_hitl_in_sessions(store, hitl_id: str) -> tuple[str | None, dict | None, dict | None]:
+async def _find_hitl_in_sessions(store, hitl_id: str, index=None) -> tuple[str | None, dict | None, dict | None]:
     """Find a HITL request by hitl_id scanning session.json files.
 
     Returns (session_id, hitl_item, session_data) or (None, None, None).
     """
+    if index:
+        # Fast path: only check sessions with waiting_for_human status
+        for entry in index._entries.values():
+            if entry.status != "waiting_for_human":
+                continue
+            path = SessionIndex.session_relpath(
+                entry.id, entry.root if entry.root != entry.id else None,
+            )
+            try:
+                raw = await store.read(path)
+                session_data = json.loads(raw.decode())
+            except Exception:
+                continue
+            for item in session_data.get("hitl_requests", []):
+                if item.get("hitl_id") == hitl_id:
+                    return entry.id, item, session_data
+        return None, None, None
+
+    # Fallback: scan all session files
     try:
         paths = await store.list("")
     except Exception:
@@ -71,9 +91,16 @@ async def _find_hitl_in_sessions(store, hitl_id: str) -> tuple[str | None, dict 
     return None, None, None
 
 
-async def _save_session_json(store, session_id: str, session_data: dict) -> None:
+async def _save_session_json(store, session_id: str, session_data: dict, index=None) -> None:
     """Write updated session_data back to session.json."""
-    path = f"{session_id}/session.json"
+    if index:
+        entry = index.get(session_id)
+        if entry and entry.root != session_id:
+            path = SessionIndex.session_relpath(session_id, entry.root)
+        else:
+            path = f"{session_id}/session.json"
+    else:
+        path = f"{session_id}/session.json"
     await store.write(path, json.dumps(session_data, ensure_ascii=False, indent=2).encode())
 
 
@@ -82,8 +109,9 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
     store = app.state.file_store
     config = app.state.config
     channel_manager = getattr(app.state, "channel_manager", None)
+    index = getattr(app.state, "session_index", None)
 
-    session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id)
+    session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id, index=index)
     if session_id is None or hitl_item is None:
         return
     if hitl_item.get("status") != "pending":
@@ -105,8 +133,12 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
         return
 
     # Re-read session data to check settlement
+    session_path = SessionIndex.session_relpath(
+        session_id,
+        index.get(session_id).root if index and index.get(session_id) and index.get(session_id).root != session_id else None,
+    )
     try:
-        raw = await store.read(f"{session_id}/session.json")
+        raw = await store.read(session_path)
         session_data = json.loads(raw.decode())
     except Exception:
         return
@@ -128,46 +160,79 @@ def make_router(config) -> APIRouter:
     async def list_pending(request: Request) -> list[dict]:
         """List all pending HITL requests from session.json files."""
         store = request.app.state.file_store
+        index = getattr(request.app.state, "session_index", None)
         pending = []
-        try:
-            paths = await store.list("")
-        except Exception:
-            return pending
 
-        for path in paths:
-            if not path.endswith("/session.json"):
-                continue
-            try:
-                raw = await store.read(path)
-                session_data = json.loads(raw.decode())
-            except Exception:
-                continue
-
-            if session_data.get("status") != "waiting_for_human":
-                continue
-
-            session_dirty = False
-            for item in session_data.get("hitl_requests", []):
-                if item.get("status") != "pending":
+        if index:
+            # Fast path: only read sessions with waiting_for_human status
+            for entry in index._entries.values():
+                if entry.status != "waiting_for_human":
                     continue
-                if _is_expired(item):
-                    # Lazily mark expired items in session.json
-                    item["status"] = "expired"
-                    session_dirty = True
-                    continue
-                # Enrich with session metadata for callers
-                enriched = dict(item)
-                enriched.setdefault("session_id", session_data.get("session_id", ""))
-                enriched.setdefault("agent_name", session_data.get("agent_name", ""))
-                pending.append(enriched)
-
-            # Write back expired status changes
-            if session_dirty:
-                session_id = session_data.get("session_id", path.replace("/session.json", ""))
+                path = SessionIndex.session_relpath(
+                    entry.id, entry.root if entry.root != entry.id else None,
+                )
                 try:
-                    await _save_session_json(store, session_id, session_data)
+                    raw = await store.read(path)
+                    session_data = json.loads(raw.decode())
                 except Exception:
-                    pass
+                    continue
+
+                session_dirty = False
+                for item in session_data.get("hitl_requests", []):
+                    if item.get("status") != "pending":
+                        continue
+                    if _is_expired(item):
+                        item["status"] = "expired"
+                        session_dirty = True
+                        continue
+                    enriched = dict(item)
+                    enriched.setdefault("session_id", entry.id)
+                    enriched.setdefault("agent_name", entry.agent)
+                    pending.append(enriched)
+
+                if session_dirty:
+                    try:
+                        await _save_session_json(store, entry.id, session_data, index=index)
+                    except Exception:
+                        pass
+        else:
+            # Fallback: scan all session files
+            try:
+                paths = await store.list("")
+            except Exception:
+                return pending
+
+            for path in paths:
+                if not path.endswith("/session.json"):
+                    continue
+                try:
+                    raw = await store.read(path)
+                    session_data = json.loads(raw.decode())
+                except Exception:
+                    continue
+
+                if session_data.get("status") != "waiting_for_human":
+                    continue
+
+                session_dirty = False
+                for item in session_data.get("hitl_requests", []):
+                    if item.get("status") != "pending":
+                        continue
+                    if _is_expired(item):
+                        item["status"] = "expired"
+                        session_dirty = True
+                        continue
+                    enriched = dict(item)
+                    enriched.setdefault("session_id", session_data.get("session_id", ""))
+                    enriched.setdefault("agent_name", session_data.get("agent_name", ""))
+                    pending.append(enriched)
+
+                if session_dirty:
+                    session_id = session_data.get("session_id", path.replace("/session.json", ""))
+                    try:
+                        await _save_session_json(store, session_id, session_data)
+                    except Exception:
+                        pass
 
         return pending
 
@@ -175,7 +240,8 @@ def make_router(config) -> APIRouter:
     async def get_hitl_request(hitl_id: str, request: Request) -> dict:
         """Find a specific HITL request by hitl_id."""
         store = request.app.state.file_store
-        session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id)
+        index = getattr(request.app.state, "session_index", None)
+        session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id, index=index)
         if session_id is None:
             raise HTTPException(status_code=404, detail=f"HITL request '{hitl_id}' not found")
         enriched = dict(hitl_item)
@@ -192,8 +258,9 @@ def make_router(config) -> APIRouter:
     ) -> dict:
         """Submit a human decision. Resumes the session when all HITLs are settled."""
         store = request.app.state.file_store
+        index = getattr(request.app.state, "session_index", None)
 
-        session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id)
+        session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id, index=index)
         if session_id is None:
             raise HTTPException(status_code=404, detail=f"HITL request '{hitl_id}' not found")
 
@@ -216,7 +283,11 @@ def make_router(config) -> APIRouter:
             raise HTTPException(status_code=410, detail="HITL request has expired")
 
         # Re-read session data for updated hitl_item and settlement check
-        raw = await store.read(f"{session_id}/session.json")
+        session_path = SessionIndex.session_relpath(
+            session_id,
+            index.get(session_id).root if index and index.get(session_id) and index.get(session_id).root != session_id else None,
+        )
+        raw = await store.read(session_path)
         session_data = json.loads(raw.decode())
         updated_item = next(
             (i for i in session_data.get("hitl_requests", []) if i.get("hitl_id") == hitl_id),

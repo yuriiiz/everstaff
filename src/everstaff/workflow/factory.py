@@ -25,12 +25,14 @@ class WorkflowSubAgentFactory:
         parent_session_id: str,
         parent_cancellation: CancellationEvent,
         parent_model_id: str,
+        root_session_id: str | None = None,
     ) -> None:
         self._agents = available_agents
         self._env = env
         self._parent_session_id = parent_session_id
         self._cancellation = parent_cancellation
         self._parent_model_id = parent_model_id
+        self._root_session_id = root_session_id
 
     async def run(self, agent_name: str, prompt: str) -> str:
         """Run a sub-agent and return its text output (stats discarded)."""
@@ -63,6 +65,7 @@ class WorkflowSubAgentFactory:
             parent_model_id=self._parent_model_id,
             parent_session_id=self._parent_session_id,
             parent_cancellation=self._cancellation,
+            root_session_id=self._root_session_id,
         ).build()
         try:
             output = await runtime.run(prompt)
