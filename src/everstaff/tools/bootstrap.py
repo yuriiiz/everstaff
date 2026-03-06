@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import yaml
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -114,7 +115,7 @@ class CreateAgentTool:
                 tools=tools or "none", skills=skills or "none",
             )
             response = await self._llm.complete(
-                messages=[Message(role="user", content=prompt)],
+                messages=[Message(role="user", content=prompt, created_at=datetime.now(timezone.utc).isoformat())],
                 tools=[],
                 system=None,
             )

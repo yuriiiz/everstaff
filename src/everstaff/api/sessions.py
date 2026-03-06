@@ -178,7 +178,7 @@ async def _resume_session_task(
             from everstaff.protocols import Message
             mem = env.build_memory_store()
             messages = await mem.load(session_id)
-            messages.append(Message(role="tool", content=decision_text, tool_call_id=tool_call_id))
+            messages.append(Message(role="tool", content=decision_text, tool_call_id=tool_call_id, created_at=datetime.now(timezone.utc).isoformat()))
             await mem.save(session_id, messages)
             input_text = None
         elif not decision_text:
@@ -262,10 +262,10 @@ async def _resume_session_task(
                                             tool_call_id=tc_id,
                                         )
                                         result = await ctx.tool_pipeline.execute(tcc)
-                                        messages.append(Message(role="tool", content=result.content, tool_call_id=tc_id))
+                                        messages.append(Message(role="tool", content=result.content, tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
                                     except Exception as exec_err:
                                         logger.warning("[session] tool execution failed after HITL approval: %s", exec_err)
-                                        messages.append(Message(role="tool", content=f"Tool execution failed: {exec_err}", tool_call_id=tc_id))
+                                        messages.append(Message(role="tool", content=f"Tool execution failed: {exec_err}", tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
 
                                     # Remove temporary grant for "once" scope
                                     if grant_scope == "once":
@@ -293,11 +293,12 @@ async def _resume_session_task(
                                         role="tool",
                                         content=f"Permission denied: tool '{tool_name}' was rejected by the operator.",
                                         tool_call_id=tc_id,
+                                        created_at=datetime.now(timezone.utc).isoformat(),
                                     ))
                             else:
                                 # Non-tool_permission HITL: keep existing behavior
                                 dtxt = _format_decision_message(req, resp.get("decision", ""), resp.get("comment"))
-                                messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id))
+                                messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
 
                         await mem.save(session_id, messages)
                         if extra_perms:

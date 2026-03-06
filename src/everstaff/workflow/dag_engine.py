@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from everstaff.protocols import HumanApprovalRequired
@@ -450,8 +450,8 @@ class DAGEngine:
         )
 
         messages = [
-            Message(role="system", content="You are a task evaluator. Respond ONLY with a JSON object."),
-            Message(role="user", content=eval_prompt),
+            Message(role="system", content="You are a task evaluator. Respond ONLY with a JSON object.", created_at=datetime.now(timezone.utc).isoformat()),
+            Message(role="user", content=eval_prompt, created_at=datetime.now(timezone.utc).isoformat()),
         ]
 
         for attempt in range(3):
@@ -474,10 +474,11 @@ class DAGEngine:
                         "Evaluation: No JSON object found in response for task %s (Attempt %d). Raw: %s",
                         task.task_id, attempt + 1, eval_response[:500],
                     )
-                    messages.append(Message(role="assistant", content=eval_response))
+                    messages.append(Message(role="assistant", content=eval_response, created_at=datetime.now(timezone.utc).isoformat()))
                     messages.append(Message(
                         role="user",
                         content="Your response was not a valid JSON object. Please respond ONLY with a JSON object.",
+                        created_at=datetime.now(timezone.utc).isoformat(),
                     ))
 
             except Exception as e:

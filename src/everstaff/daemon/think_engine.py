@@ -161,6 +161,7 @@ class ThinkEngine:
                     f"Trigger received: {trigger.type} from {trigger.source}. "
                     f"Payload: {trigger.payload}. Decide what to do."
                 ),
+                created_at=datetime.now(timezone.utc).isoformat(),
             ),
         ]
 
@@ -177,7 +178,7 @@ class ThinkEngine:
                     logger.info("[Think:%s] No tool call from LLM — defaulting to skip", agent_name)
                     # Capture the LLM's response text before breaking
                     if response.content:
-                        messages.append(Message(role="assistant", thinking=response.thinking, content=response.content))
+                        messages.append(Message(role="assistant", thinking=response.thinking, content=response.content, created_at=datetime.now(timezone.utc).isoformat()))
                     decision = Decision(
                         action="skip",
                         reasoning=response.content or "No decision made",
@@ -197,6 +198,7 @@ class ThinkEngine:
                     role="assistant",
                     content=response.content,
                     tool_calls=assistant_tool_calls,
+                    created_at=datetime.now(timezone.utc).isoformat(),
                 ))
 
                 decided = False
@@ -215,6 +217,7 @@ class ThinkEngine:
                             role="tool",
                             content=f"Decision '{decision.action}' recorded.",
                             tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         ))
                         decided = True
 
@@ -226,6 +229,7 @@ class ThinkEngine:
                             role="tool",
                             content=content or "(empty)",
                             tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         ))
 
                     elif tc.name == "recall_recent_episodes":
@@ -243,6 +247,7 @@ class ThinkEngine:
                             role="tool",
                             content=ep_text,
                             tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         ))
 
                 if decided:

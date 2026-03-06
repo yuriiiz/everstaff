@@ -108,6 +108,7 @@ def _drop_dangling_tool_calls(messages: "list[Message]") -> "list[Message]":
                             role="tool",
                             content="[Tool call was not executed: session was interrupted before this call could run. You may retry if needed.]",
                             tool_call_id=tc["id"],
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         ))
             break  # only fix the last assistant+tool_calls turn
         elif msg.role not in ("tool",):
@@ -205,7 +206,7 @@ class AgentRuntime:
                 f"User: {user_input[:500]}\n"
                 f"Assistant: {first_reply[:500]}"
             )
-            messages = [Message(role="user", content=prompt)]
+            messages = [Message(role="user", content=prompt, created_at=datetime.now(timezone.utc).isoformat())]
             t0 = time.monotonic()
             self._emit("llm_start", {
                 "purpose": "title_generation",
@@ -285,7 +286,7 @@ class AgentRuntime:
         messages = await self._ctx.memory.load(self._ctx.session_id)
         messages = _drop_dangling_tool_calls(messages)
         if user_input is not None:
-            messages.append(Message(role="user", content=user_input))
+            messages.append(Message(role="user", content=user_input, created_at=datetime.now(timezone.utc).isoformat()))
             # Persist user message immediately so it survives page refresh
             await self._ctx.memory.save(
                 self._ctx.session_id,
@@ -303,7 +304,7 @@ class AgentRuntime:
             # prompt so the LLM message alternation (user → assistant) is preserved.
             last = messages[-1]
             if last.role == "assistant":
-                messages.append(Message(role="user", content="Continue."))
+                messages.append(Message(role="user", content="Continue.", created_at=datetime.now(timezone.utc).isoformat()))
             # If the last message is already from the user, the LLM will
             # simply re-process it — no injection needed.
 
@@ -449,6 +450,7 @@ class AgentRuntime:
                         role="assistant",
                         content=response.content,
                         thinking=response.thinking,
+                        created_at=datetime.now(timezone.utc).isoformat(),
                     ))
                     await self._ctx.memory.save(
                         self._ctx.session_id, messages,
@@ -495,6 +497,7 @@ class AgentRuntime:
                         for tc in response.tool_calls
                     ],
                     thinking=response.thinking,
+                    created_at=datetime.now(timezone.utc).isoformat(),
                 )
                 messages.append(assistant_msg)
                 # Incremental save: persist state after each LLM turn
@@ -596,7 +599,7 @@ class AgentRuntime:
                     if result.child_stats is not None:
                         stats.merge(result.child_stats)
                     yield ToolCallEnd(name=tool_call.name, result=result.content, is_error=result.is_error)
-                    messages.append(Message(role="tool", content=result.content, tool_call_id=tool_call.id))
+                    messages.append(Message(role="tool", content=result.content, tool_call_id=tool_call.id, created_at=datetime.now(timezone.utc).isoformat()))
                     # Track child HITL requests from delegate_task_to_subagent results
                     if hasattr(result, '_child_hitl_requests') and result._child_hitl_requests:
                         self._pending_child_hitls.extend(result._child_hitl_requests)
