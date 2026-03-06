@@ -1,6 +1,6 @@
 [project]
 name = "everstaff"
-version = "0.1.2"
+version = "0.1.3"
 description = "AI agents that know when to act and when to ask — autonomous by default, human-supervised when it counts."
 readme = "README.md"
 license = { text = "MIT" }

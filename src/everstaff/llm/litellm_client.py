@@ -8,12 +8,29 @@ from typing import Any
 from uuid import uuid4
 
 import litellm
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 
 from everstaff.protocols import LLMResponse, Message, ToolCallRequest, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
 # litellm._turn_on_debug()
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: LiteLLM's chunk_parser does chunk["id"] (hard key access)
+# which crashes on providers like MiniMax that omit "id" in some streaming
+# chunks (e.g. usage-only or heartbeat chunks).  Use .get() instead.
+# ---------------------------------------------------------------------------
+_original_chunk_parser = OpenAIChatCompletionStreamingHandler.chunk_parser
+
+
+def _safe_chunk_parser(self, chunk: dict):
+    if "id" not in chunk:
+        chunk["id"] = ""
+    return _original_chunk_parser(self, chunk)
+
+
+OpenAIChatCompletionStreamingHandler.chunk_parser = _safe_chunk_parser
 
 # ---------------------------------------------------------------------------
 # Fallback: extract tool calls from XML embedded in content text.

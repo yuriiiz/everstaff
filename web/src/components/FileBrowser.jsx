@@ -48,8 +48,8 @@ function guessMimeClient(filename) {
     return map[ext] || 'application/octet-stream';
 }
 
-export default function FileBrowser({ sessionId, onPreview, refreshTrigger }) {
-    const [path, setPath] = useState('');
+export default function FileBrowser({ sessionId, onPreview, refreshTrigger, initialPath = '' }) {
+    const [path, setPath] = useState(initialPath);
     const [files, setFiles] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -82,9 +82,10 @@ export default function FileBrowser({ sessionId, onPreview, refreshTrigger }) {
             // Only reset files and initial load flag when the session specifically changes
             setFiles([]);
             setIsInitialLoad(true);
-            fetchFiles('');
+            setPath(initialPath);
+            fetchFiles(initialPath);
         }
-    }, [sessionId]);
+    }, [sessionId, initialPath]);
 
     // Independent effect for refreshTrigger to fetch without resetting UI
     useEffect(() => {

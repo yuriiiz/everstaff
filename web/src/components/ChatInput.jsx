@@ -121,6 +121,52 @@ export const ChatInput = memo(({
                     autoFocus
                 />
 
+                {isWaitingForInput && currentHitlPayload?.type === 'approve_reject' && (
+                    <div style={{ display: 'flex', gap: '8px', padding: '0 8px' }}>
+                        <button
+                            className="hitl-quick-btn approve"
+                            onClick={() => onSendMessage('approved')}
+                            style={{
+                                background: '#10b981', color: 'white', border: 'none',
+                                padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                                cursor: 'pointer', transition: 'all 0.2s'
+                            }}
+                        >
+                            Approve
+                        </button>
+                        <button
+                            className="hitl-quick-btn reject"
+                            onClick={() => onSendMessage('rejected')}
+                            style={{
+                                background: 'transparent', color: '#ef4444', border: '1px solid #ef4444',
+                                padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                                cursor: 'pointer', transition: 'all 0.2s'
+                            }}
+                        >
+                            Reject
+                        </button>
+                    </div>
+                )}
+
+                {isWaitingForInput && (currentHitlPayload?.type === 'choose' || currentHitlPayload?.type === 'options') && currentHitlPayload?.options?.length > 0 && currentHitlPayload.options.length <= 3 && (
+                    <div style={{ display: 'flex', gap: '8px', padding: '0 8px' }}>
+                        {currentHitlPayload.options.map((opt, i) => (
+                            <button
+                                key={i}
+                                className="hitl-quick-btn choose"
+                                onClick={() => onSendMessage(opt)}
+                                style={{
+                                    background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0',
+                                    padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                                    cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap'
+                                }}
+                            >
+                                {opt}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 <button
                     className={`chat-send-btn ${isWaitingForInput ? (input.trim() ? 'active' : 'disabled') : ((isConnected || selectedSession?.isNew) && input.trim() && isAgentOnline ? 'active' : 'disabled')}`}
                     onClick={handleSend}

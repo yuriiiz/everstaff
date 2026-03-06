@@ -1142,10 +1142,20 @@ h3 {
 }
 
 .message-sender-name {
-  font-size: 12px;
+  font-size: 11px;
   color: #94a3b8;
-  font-weight: 500;
+  font-weight: 600;
   padding: 0 4px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.message-time {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.8;
 }
 
 .message-bubble {
@@ -1428,7 +1438,7 @@ details[open] .details-chevron {
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 6px;
+  margin-top: 10px;
 }
 
 .tool-call-pre {
@@ -1437,7 +1447,7 @@ details[open] .details-chevron {
   padding: 0;
   font-size: 12px;
   color: #64748b;
-  margin: 0;
+  margin-top: 2px;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1445,7 +1455,7 @@ details[open] .details-chevron {
 
 .tool-call-output {
   color: #475569;
-  margin-top: 12px;
+  margin-top: 2px;
 }
 
 /* File Artifacts Styles */
@@ -2052,27 +2062,10 @@ details[open] .details-chevron {
 }
 
 /* File Timeline Preview Styles */
-.message-row-file-event {
-  flex-direction: column !important;
-  align-items: center !important;
-  margin: 24px 0 !important;
-  gap: 12px !important;
-  width: 100% !important;
-}
-
-.file-event-timestamp {
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 600;
-  background: #f8fafc;
-  padding: 4px 12px;
-  border-radius: 20px;
-  border: 1px solid #e2e8f0;
-  letter-spacing: 0.02em;
-}
 
 .file-timeline-preview-card {
   width: 100%;
+  min-width: 300px;
   max-width: 550px;
   background: white;
   border: 1px solid #e2e8f0;

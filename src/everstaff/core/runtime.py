@@ -604,22 +604,39 @@ class AgentRuntime:
                     if hasattr(result, '_child_hitl_requests') and result._child_hitl_requests:
                         self._pending_child_hitls.extend(result._child_hitl_requests)
 
-                    # Detect new/modified files and emit FileCreatedEvent
+                    # Detect new/modified files and emit/persist events
                     if self._ctx.workdir and not result.is_error and _ws_before is not None:
                         _ws_after = snapshot_workspace(self._ctx.workdir)
                         _created, _modified = diff_snapshots(_ws_before, _ws_after)
                         for fp in _created + _modified:
                             try:
                                 full = self._ctx.workdir / fp
-                                is_dir = full.is_dir()
+                                if full.is_dir():
+                                    mime = "inode/directory"
+                                    sz = 0
+                                else:
+                                    mime = guess_mime(fp)
+                                    sz = full.stat().st_size
+                                
+                                # 1. Yield for live WS (吸附能力 in frontend)
                                 yield FileCreatedEvent(
-                                    file_path=fp,
+                                    file_path=str(fp),
                                     file_name=full.name,
-                                    size=0 if is_dir else full.stat().st_size,
-                                    mime_type="directory" if is_dir else guess_mime(fp),
+                                    size=sz,
+                                    mime_type=mime,
                                 )
                             except OSError:
                                 pass
+                        
+                        # Persist updated messages (with artifacts) after tool turn
+                        await self._ctx.memory.save(
+                            self._ctx.session_id,
+                            messages,
+                            agent_name=self._ctx.agent_name,
+                            agent_uuid=self._ctx.agent_uuid,
+                            status="running",
+                        )
+
 
         except HumanApprovalRequired as hitl_exc:
             # Checkpoint: embed hitl_requests in session.json and save

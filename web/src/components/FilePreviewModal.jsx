@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { X, Download, Link } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Download, Link, ChevronLeft } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import mermaid from 'mermaid';
+import { Excalidraw } from '@excalidraw/excalidraw';
+import "@excalidraw/excalidraw/index.css";
+import FileBrowser from './FileBrowser';
 
 const LANGUAGE_MAP = {
     'py': 'python', 'js': 'javascript', 'ts': 'typescript', 'jsx': 'javascript',
@@ -30,18 +34,55 @@ function isTextMime(mime) {
 let _MonacoEditor = null;
 let _monacoLoading = false;
 
+export function MermaidPreview({ chart, style = {} }) {
+    const [svg, setSvg] = useState('');
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        if (!chart) return;
+        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+        const renderChart = async () => {
+            try {
+                const id = `mermaid-svg-${Date.now()}`;
+                const { svg } = await mermaid.render(id, chart);
+                setSvg(svg);
+                setError(null);
+            } catch (err) {
+                setError(err.message);
+            }
+        };
+        renderChart();
+    }, [chart]);
+
+    if (error) {
+        return <div style={{ color: '#ef4444', padding: '20px' }}>Failed to render Mermaid chart: {error}</div>;
+    }
+    return (
+        <div
+            style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', width: '100%', height: '100%', overflow: 'auto', ...style }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+        />
+    );
+}
+
 export default function FilePreviewModal({ file, sessionId, onClose }) {
+    const [activeFile, setActiveFile] = useState(file);
     const [content, setContent] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [copied, setCopied] = useState(false);
     const [monacoReady, setMonacoReady] = useState(!!_MonacoEditor);
 
-    const fileUrl = `/api/sessions/${sessionId}/files/${encodeURIComponent(file.file_path)}`;
-    const mime = file.mime_type;
+    const fileUrl = `/api/sessions/${sessionId}/files/${encodeURIComponent(activeFile.file_path)}`;
+    const mime = activeFile.mime_type;
+    const isDir = mime === 'inode/directory';
 
     // Fetch text content
     useEffect(() => {
+        if (isDir) {
+            setLoading(false);
+            return;
+        }
         if (!isTextMime(mime) && mime !== 'application/pdf') {
             setLoading(false);
             return;
@@ -58,7 +99,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
             })
             .then(text => { setContent(text); setLoading(false); })
             .catch(err => { setError(err.message); setLoading(false); });
-    }, [fileUrl, mime]);
+    }, [fileUrl, mime, isDir]);
 
     // Lazy-load Monaco
     useEffect(() => {
@@ -82,7 +123,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
     const handleDownload = () => {
         const a = document.createElement('a');
         a.href = `${fileUrl}?download=true`;
-        a.download = file.file_name;
+        a.download = isDir ? `${activeFile.file_name}.zip` : activeFile.file_name;
         a.click();
     };
 
@@ -112,6 +153,40 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
             return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#ef4444' }}>Error: {error}</div>;
         }
 
+        // Folder
+        if (isDir) {
+            return (
+                <div style={{ height: '100%', background: '#fff' }}>
+                    <FileBrowser sessionId={sessionId} onPreview={setActiveFile} initialPath={activeFile.file_path} />
+                </div>
+            );
+        }
+
+        // Excalidraw
+        if (activeFile.file_name.endsWith('.excalidraw')) {
+            let initialData = null;
+            try {
+                if (content) {
+                    const parsed = JSON.parse(content);
+                    initialData = {
+                        elements: parsed.elements || [],
+                        appState: parsed.appState || {},
+                        files: parsed.files || {}
+                    };
+                }
+            } catch (e) { }
+            return (
+                <div style={{ height: '100%', width: '100%', position: 'relative' }}>
+                    {initialData ? <Excalidraw initialData={initialData} viewModeEnabled={true} UIOptions={{ canvasActions: { loadScene: false, export: false, saveAsImage: false } }} /> : <div>Parsing...</div>}
+                </div>
+            );
+        }
+
+        // Mermaid
+        if (activeFile.file_name.endsWith('.mermaid') || activeFile.file_name.endsWith('.mmd')) {
+            return <MermaidPreview chart={content} />;
+        }
+
         // Markdown
         if (mime === 'text/markdown') {
             return (
@@ -136,7 +211,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
                     sandbox="allow-scripts"
                     srcDoc={content}
                     style={{ width: '100%', height: '100%', border: 'none' }}
-                    title={file.file_name}
+                    title={activeFile.file_name}
                 />
             );
         }
@@ -145,7 +220,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
         if (mime.startsWith('image/')) {
             return (
                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', padding: '20px', overflow: 'auto' }}>
-                    <img src={fileUrl} alt={file.file_name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                    <img src={fileUrl} alt={activeFile.file_name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                 </div>
             );
         }
@@ -163,7 +238,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
 
         // PDF
         if (mime === 'application/pdf') {
-            return <iframe src={fileUrl} style={{ width: '100%', height: '100%', border: 'none' }} title={file.file_name} />;
+            return <iframe src={fileUrl} style={{ width: '100%', height: '100%', border: 'none' }} title={activeFile.file_name} />;
         }
 
         // Text / Code (Monaco)
@@ -172,7 +247,7 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
             return (
                 <MonacoEditor
                     height="100%"
-                    language={getLanguage(file.file_name)}
+                    language={getLanguage(activeFile.file_name)}
                     value={content || ''}
                     options={{
                         readOnly: true,
@@ -238,12 +313,21 @@ export default function FilePreviewModal({ file, sessionId, onClose }) {
                     backdropFilter: 'blur(8px)',
                     zIndex: 10,
                 }}>
+                    {activeFile.file_path !== file.file_path && (
+                        <button
+                            onClick={() => setActiveFile(file)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: '#6b7280', padding: 0 }}
+                            title="Back to root"
+                        >
+                            <ChevronLeft size={20} />
+                        </button>
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 600, fontSize: '14px', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {file.file_name}
+                            {activeFile.file_name}
                         </div>
                         <div style={{ fontSize: '11px', color: '#9ca3af' }}>
-                            {file.mime_type} • {file.size ? (file.size / 1024).toFixed(1) + ' KB' : '--'}
+                            {activeFile.mime_type} • {activeFile.size ? (activeFile.size / 1024).toFixed(1) + ' KB' : (isDir ? 'Folder' : '--')}
                         </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

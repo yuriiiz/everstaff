@@ -9,7 +9,7 @@ import FilePreviewModal from '../components/FilePreviewModal';
 import FileBrowser from '../components/FileBrowser';
 
 import { ChatInput, CREATOR_SUGGESTIONS } from '../components/ChatInput';
-import { MessageItem } from '../components/ChatMessages';
+import { MessageItem, HitlHistoryCard } from '../components/ChatMessages';
 import { SessionSidebar } from '../components/SessionSidebar';
 import { SessionDetails } from '../components/SessionDetails';
 
@@ -280,7 +280,7 @@ export default function SessionStore() {
                         if (last && last.role === 'assistant' && last.streaming) {
                             return [...prev.slice(0, -1), { ...last, content: last.content + data.content }];
                         }
-                        return [...prev, { role: 'assistant', content: data.content, streaming: true, timestamp: Date.now() }];
+                        return [...prev, { role: 'assistant', content: data.content, streaming: true, created_at: new Date().toISOString() }];
                     });
                 } else if (data.type === 'session_end') {
                     // Refresh metadata when interaction ends; clear live accumulator
@@ -302,7 +302,7 @@ export default function SessionStore() {
                         if (last && last.role === 'assistant' && last.streaming) {
                             return [...prev.slice(0, -1), { ...last, thinking: (last.thinking || '') + data.content }];
                         }
-                        return [...prev, { role: 'assistant', thinking: data.content, streaming: true, timestamp: Date.now(), content: '' }];
+                        return [...prev, { role: 'assistant', thinking: data.content, streaming: true, created_at: new Date().toISOString(), content: '' }];
                     });
                 } else if (data.type === 'turn_start') {
                     setIsProcessing(true);
@@ -330,7 +330,7 @@ export default function SessionStore() {
                             }
                         }
                         // No streaming assistant message found — start a new one
-                        return [...prev, { role: 'assistant', content: '', streaming: true, tool_calls: [pendingTC], timestamp: Date.now() }];
+                        return [...prev, { role: 'assistant', content: '', streaming: true, tool_calls: [pendingTC], created_at: new Date().toISOString() }];
                     });
                 } else if (data.type === 'tool_call_end') {
                     setStatusContent('');
@@ -361,23 +361,17 @@ export default function SessionStore() {
                         return prev;
                     });
                 } else if (data.type === 'file_created') {
-                    // Add to assistant artifacts (吸附能力)
-                    setMessages(prev => {
-                        let updated = [...prev];
-                        for (let i = updated.length - 1; i >= 0; i--) {
-                            if (updated[i].role === 'assistant') {
-                                const artifacts = [...(updated[i].fileArtifacts || []), {
-                                    file_path: data.file_path,
-                                    file_name: data.file_name,
-                                    size: data.size,
-                                    mime_type: data.mime_type,
-                                }];
-                                updated[i] = { ...updated[i], fileArtifacts: artifacts };
-                                break;
-                            }
+                    // Treat as standalone entry (merged via simplified timeline)
+                    setMessages(prev => [...prev, {
+                        role: 'file_event',
+                        created_at: new Date().toISOString(),
+                        file: {
+                            file_path: data.file_path,
+                            file_name: data.file_name,
+                            size: data.size,
+                            mime_type: data.mime_type,
                         }
-                        return updated;
-                    });
+                    }]);
                     // Increment new files count
                     setNewFilesCount(prev => prev + 1);
                     setFileRefreshTrigger(prev => prev + 1);
@@ -433,7 +427,7 @@ export default function SessionStore() {
                         setMessages(prev => [...prev, {
                             role: 'user',
                             content: data.content,
-                            timestamp: Date.now()
+                            created_at: data.created_at || new Date().toISOString()
                         }]);
                     }
                 }
@@ -582,125 +576,74 @@ export default function SessionStore() {
 
     const fetchMessages = (sid) => {
         if (!sid) return;
-        fetch(`/api/sessions/${sid}`)
-            .then(res => {
-                if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-                return res.json();
-            })
-            .then(data => {
-                // If the backend has no messages yet (just created), 
-                // but we already have optimistic messages locally, don't wipe them.
-                if ((!data.messages || data.messages.length === 0) && messages.length > 0 && selectedSession?.session_id === sid) {
-                    console.log(`[debug] Keeping local optimistic messages for ${sid}`);
-                } else {
-                    const baseMessages = data.messages || [];
 
-                    // Fetch files to merge into timeline/artifacts
-                    fetch(`/api/sessions/${sid}/files`)
-                        .then(r => r.ok ? r.json() : { files: [] })
-                        .then(fileData => {
-                            let mergedMessages = [...baseMessages];
-                            const workspaceFiles = fileData.files || [];
+        const guessMime = (name) => {
+            const ext = name.split('.').pop().toLowerCase();
+            const map = {
+                'mp4': 'video/mp4', 'mov': 'video/quicktime',
+                'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+                'pdf': 'application/pdf', 'md': 'text/markdown',
+                'html': 'text/html', 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'ppt': 'application/vnd.ms-powerpoint', 'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                'mermaid': 'text/x-mermaid', 'mmd': 'text/x-mermaid',
+                'excalidraw': 'application/json',
+                'mindmap': 'application/json'
+            };
+            return map[ext] || 'application/octet-stream';
+        };
 
-                            // Define guessMimeClient if not available (utility)
-                            const guessMime = (name) => {
-                                const ext = name.split('.').pop().toLowerCase();
-                                const map = {
-                                    'mp4': 'video/mp4', 'mov': 'video/quicktime',
-                                    'mp3': 'audio/mpeg', 'wav': 'audio/wav',
-                                    'pdf': 'application/pdf', 'md': 'text/markdown',
-                                    'html': 'text/html', 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg'
-                                };
-                                return map[ext] || 'application/octet-stream';
-                            };
+        Promise.all([
+            fetch(`/api/sessions/${sid}`).then(res => res.ok ? res.json() : { messages: [] }),
+            fetch(`/api/sessions/${sid}/files`).then(res => res.ok ? res.json() : { files: [] })
+        ]).then(([sessionData, fileData]) => {
+            const baseMessages = sessionData.messages || [];
+            const files = fileData.files || [];
 
-                            // 1. Try to associate files with assistant tool calls (best quality)
-                            workspaceFiles.forEach(file => {
-                                if (file.type !== 'file') return;
-
-                                for (let i = mergedMessages.length - 1; i >= 0; i--) {
-                                    const msg = mergedMessages[i];
-                                    if (msg.role === 'assistant' && msg.tool_calls) {
-                                        const hasMatchingTool = msg.tool_calls.some(tc => {
-                                            const func = tc.function || tc;
-                                            const args = typeof func.arguments === 'string' ? JSON.parse(func.arguments) : (func.args || {});
-                                            const pathArg = args.file_path || args.path || args.filename;
-                                            return pathArg === file.name || (pathArg && pathArg.endsWith('/' + file.name));
-                                        });
-                                        if (hasMatchingTool) {
-                                            msg.fileArtifacts = [...(msg.fileArtifacts || []), {
-                                                file_path: file.name,
-                                                file_name: file.name,
-                                                size: file.size,
-                                                mime_type: guessMime(file.name)
-                                            }];
-                                            file._assigned = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            });
-
-                            setMessages(mergedMessages);
-                        })
-                        .catch(err => {
-                            console.error("Failed to fetch session files for merging:", err);
-                            setMessages(baseMessages);
-                        });
-                }
-
-                // Preserve agent_uuid from previous state if backend hasn't written it yet
-                setSelectedSession(prev => ({
-                    ...data,
-                    agent_uuid: data.agent_uuid ?? prev?.agent_uuid,
+            // 1. Create message entries for files and directories
+            const fileEvents = files
+                .map(f => ({
+                    role: 'file_event',
+                    created_at: f.modified_at,
+                    file: {
+                        file_path: f.name,
+                        file_name: f.name,
+                        size: f.size,
+                        mime_type: f.type === 'directory' ? 'inode/directory' : guessMime(f.name)
+                    }
                 }));
 
-                // Manually calculate total token usage
-                let sum = 0;
-                const md = data.metadata || {};
-                const allCalls = [...(md.own_calls || []), ...(md.children_calls || [])];
-                for (const call of allCalls) {
-                    sum += (call.input_tokens || 0) + (call.output_tokens || 0);
-                }
-                setTokenUsage(sum);
-
-                setIsProcessing(data.status === 'running');
-                setStatusContent(data.status === 'running' ? 'Thinking...' : '');
-
-                // Fetch workspace files and attach to last assistant message
-                fetch(`/api/sessions/${sid}/files`)
-                    .then(r => r.ok ? r.json() : { files: [] })
-                    .then(fileData => {
-                        if (fileData.files && fileData.files.length > 0) {
-                            const artifacts = fileData.files
-                                .filter(f => f.type === 'file')
-                                .map(f => ({
-                                    file_path: f.name,
-                                    file_name: f.name,
-                                    size: f.size,
-                                    mime_type: guessMimeClient(f.name),
-                                }));
-                            if (artifacts.length > 0) {
-                                setMessages(prev => {
-                                    for (let i = prev.length - 1; i >= 0; i--) {
-                                        if (prev[i].role === 'assistant') {
-                                            return [
-                                                ...prev.slice(0, i),
-                                                { ...prev[i], fileArtifacts: artifacts },
-                                                ...prev.slice(i + 1),
-                                            ];
-                                        }
-                                    }
-                                    return prev;
-                                });
-                            }
-                        }
-                    })
-                    .catch(() => { });
-            })
-            .catch(err => {
-                console.warn(`[debug] fetchMessages failed for ${sid}: ${err.message}. Preserving state.`);
+            // 2. Merge and sort
+            const merged = [...baseMessages, ...fileEvents];
+            merged.sort((a, b) => {
+                const timeA = new Date(a.created_at || a.timestamp || 0).getTime();
+                const timeB = new Date(b.created_at || b.timestamp || 0).getTime();
+                return timeA - timeB;
             });
+
+            setMessages(merged);
+
+            // Update session meta
+            setSelectedSession(prev => ({
+                ...sessionData,
+                agent_uuid: sessionData.agent_uuid ?? prev?.agent_uuid,
+            }));
+
+            // Calculate tokens
+            let sum = 0;
+            const md = sessionData.metadata || {};
+            const allCalls = [...(md.own_calls || []), ...(md.children_calls || [])];
+            for (const call of allCalls) {
+                sum += (call.input_tokens || 0) + (call.output_tokens || 0);
+            }
+            setTokenUsage(sum);
+
+            setIsProcessing(sessionData.status === 'running');
+            setStatusContent(sessionData.status === 'running' ? 'Thinking...' : '');
+        }).catch(err => {
+            console.warn(`[debug] fetchMessages failed for ${sid}:`, err);
+        });
     };
 
     // connectWS is removed as it's now internal to the useEffect
@@ -894,20 +837,30 @@ export default function SessionStore() {
 
             // Check if this is an assistant message with tool_calls
             if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-                // Look ahead for corresponding tool outputs
-                const tools = [...msg.tool_calls];
-                const outputs = [];
+                const tools = [];
+                const filesInTurn = [];
                 let j = i + 1;
-                while (j < messages.length && messages[j].role === 'tool') {
-                    outputs.push(messages[j]);
+
+                // Collect ALL tool results and file events until the turn ends
+                // A turn ends when we hit a user message, another assistant message, or end of list
+                while (j < messages.length && (messages[j].role === 'tool' || messages[j].role === 'file_event')) {
+                    if (messages[j].role === 'tool') {
+                        tools.push(messages[j]);
+                    } else if (messages[j].role === 'file_event') {
+                        filesInTurn.push(messages[j]);
+                    }
                     j++;
                 }
-                rendered.push({ ...msg, relatedOutputs: outputs });
-                i = j; // Skip the tool outputs we just consumed
-            } else if (msg.role === 'tool') {
-                // Orphaned tool output (shouldn't really happen with this logic, but handle it)
-                rendered.push(msg);
-                i++;
+
+                // Add assistant message with its combined tool outputs
+                rendered.push({ ...msg, relatedOutputs: tools });
+
+                // Place all files created during this turn immediately after the assistant message
+                if (filesInTurn.length > 0) {
+                    rendered.push(...filesInTurn);
+                }
+
+                i = j;
             } else {
                 rendered.push(msg);
                 i++;
@@ -915,6 +868,7 @@ export default function SessionStore() {
         }
         return rendered;
     }, [greetingMessage, messages]);
+
 
     return (
         <div style={{ display: 'flex', height: '100%', background: '#f9fafb', overflow: 'hidden' }}>
@@ -1195,564 +1149,6 @@ const Modal = ({ isOpen, onClose, title, children, footer, width = '400px' }) =>
     );
 };
 
-
-const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, sessionStatus, toolCallId }) => {
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [userInput, setUserInput] = useState('');
-
-    const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
-    const { prompt, type, options, context } = parsedArgs || {};
-
-    let optionsArray = [];
-    if (Array.isArray(options)) optionsArray = options;
-    else if (typeof options === 'string') {
-        try { optionsArray = JSON.parse(options); } catch (e) { optionsArray = options.split(',').map(s => s.trim()); }
-    }
-
-    let pendingRequest = hitlRequests?.find(r => {
-        if ((r.origin_session_id || r.session_id) !== sessionId || (r.status !== 'pending' && r.status !== 'expired')) return false;
-
-        // 1. Match by tool_call_id (most reliable)
-        if (toolCallId && r.tool_call_id === toolCallId) return true;
-
-        // 2. Match by hitl_id if explicitly passed in args
-        if (parsedArgs?.hitl_id && r.hitl_id === parsedArgs.hitl_id) return true;
-
-        // 3. Match by prompt content (looser match)
-        if (prompt && r.request?.prompt) {
-            const p1 = String(prompt).trim();
-            const p2 = String(r.request.prompt).trim();
-            if (p1 === p2) return true;
-            // Also check if one is a substring of another to handle minor formatting differences
-            if (p1.includes(p2) || p2.includes(p1)) return true;
-        }
-
-        return false;
-    });
-
-    // 4. Fallback: If no direct match was found, but this session IS waiting for human AND 
-    // there is exactly ONE pending request for this session, assume it's the one.
-    if (!pendingRequest && sessionStatus === 'waiting_for_human') {
-        const pendingForSession = hitlRequests?.filter(req => req.session_id === sessionId && req.status === 'pending') || [];
-        if (pendingForSession.length === 1) {
-            pendingRequest = pendingForSession[0];
-        }
-    }
-
-    let resolution = null;
-    if (output) {
-        try {
-            resolution = JSON.parse(output.content);
-        } catch (e) {
-            // Check for legacy format
-            if (output.content.includes("Decision:") || output.content.includes("Decision Outcome")) {
-                const decisionLine = output.content.split('\n').find(l => l.includes("Decision:"));
-                const decision = decisionLine ? decisionLine.split(':')[1].trim() : output.content;
-                resolution = { decision };
-            } else {
-                resolution = { decision: output.content };
-            }
-        }
-    }
-
-    const isPending = !!pendingRequest && pendingRequest.status === 'pending' && !output;
-    const isExpired = !!pendingRequest && pendingRequest.status === 'expired' && !output;
-
-    const handleAction = async (decision, comment = "", extraFields = {}) => {
-        if (!isPending) return;
-        setIsSubmitting(true);
-        try {
-            // Priority for hitl_id: pendingRequest match > parsedArgs > live API fetch fallback
-            let hitlIdToResolve = pendingRequest?.hitl_id || parsedArgs?.hitl_id;
-
-            if (!hitlIdToResolve) {
-                // Fallback: fetch the latest HITL list and try matching again
-                try {
-                    const res = await fetch('/api/hitl');
-                    const freshRequests = await res.json();
-                    const match = freshRequests.find(r =>
-                        (r.origin_session_id || r.session_id) === sessionId && r.status === 'pending' &&
-                        (!toolCallId || r.tool_call_id === toolCallId)
-                    ) || freshRequests.find(r =>
-                        (r.origin_session_id || r.session_id) === sessionId && r.status === 'pending'
-                    );
-                    hitlIdToResolve = match?.hitl_id;
-                } catch (e) {
-                    console.error("Fallback HITL fetch failed:", e);
-                }
-            }
-
-            if (!hitlIdToResolve) {
-                console.error("Could not determine hitl_id to resolve", { toolCallId, prompt });
-                alert("Error: Could not identify the hitl_id for this request.");
-                return;
-            }
-
-            await onResolve(hitlIdToResolve, {
-                decision: decision,
-                comment: comment,
-                ...extraFields,
-            });
-        } catch (error) {
-            console.error("Failed to resolve HITL:", error);
-            alert("Failed to resolve: " + error.message);
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-
-
-    return (
-        <div style={{
-            background: isPending ? '#ffffff' : (isExpired ? '#fff1f2' : '#f8fafc'),
-            border: isPending ? '1px solid #3b82f6' : (isExpired ? '1px solid #fecdd3' : '1px solid #e2e8f0'),
-            borderRadius: '12px',
-            padding: '16px',
-            width: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px',
-            marginTop: '8px',
-            position: 'relative',
-            boxShadow: isPending ? '0 4px 20px -5px rgba(59, 130, 246, 0.15)' : 'none',
-            transition: 'all 0.3s ease'
-        }}>
-            {/* Header / Status */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    color: isPending ? '#2563eb' : (isExpired ? '#e11d48' : '#64748b')
-                }}>
-                    <UserCheck size={16} strokeWidth={2.5} />
-                    <span style={{
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.06em'
-                    }}>
-                        {isPending ? (type === 'tool_permission' ? 'Tool Permission Required' : 'Human Input Required') : (isExpired || output?.content === 'expired' ? 'Interaction Expired' : 'Interaction Resolved')}
-                    </span>
-                </div>
-                {isPending && (
-                    <div style={{
-                        fontSize: '10px',
-                        background: '#eff6ff',
-                        color: '#3b82f6',
-                        padding: '3px 10px',
-                        borderRadius: '20px',
-                        fontWeight: 700,
-                        border: '1px solid #dbeafe'
-                    }}>
-                        Active
-                    </div>
-                )}
-            </div>
-
-            {/* Context Content */}
-            {context && (
-                <div style={{
-                    fontSize: '13px',
-                    color: '#475569',
-                    background: isPending ? '#f1f5f9' : '#f8fafc',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    borderLeft: '3px solid #64748b',
-                    whiteSpace: 'pre-wrap',
-                    marginBottom: '-4px'
-                }}>
-                    {context}
-                </div>
-            )}
-
-            {/* Tool Permission Prompt */}
-            {type === 'tool_permission' && prompt && (
-                <div style={{
-                    fontSize: '13px',
-                    color: '#1e293b',
-                    lineHeight: '1.6',
-                    background: isPending ? '#fffbeb' : '#f8fafc',
-                    padding: '12px',
-                    borderRadius: '8px',
-                    border: isPending ? '1px solid #fde68a' : '1px solid #e2e8f0',
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-all',
-                }}>
-                    {prompt}
-                </div>
-            )}
-
-            {/* Prompt Content */}
-            {type !== 'notify' && type !== 'provide_input' && type !== 'tool_permission' && prompt && (
-                <div style={{
-                    fontSize: '14px',
-                    color: '#1e293b',
-                    fontWeight: 600,
-                    lineHeight: '1.6',
-                    background: isPending ? '#f8fafc' : 'transparent',
-                    padding: isPending ? '12px' : '0',
-                    borderRadius: '8px',
-                    border: isPending ? '1px solid #f1f5f9' : 'none'
-                }}>
-                    {prompt}
-                </div>
-            )}
-
-            {isPending ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {/* Interaction Types */}
-                    {type === 'tool_permission' && (() => {
-                        const structuredOpts = parsedArgs?.tool_permission_options
-                            || pendingRequest?.tool_permission_options
-                            || pendingRequest?.request?.tool_permission_options
-                            || [];
-                        const colorMap = {
-                            'reject': '#ef4444',
-                            'approve_once': '#10b981',
-                            'approve_session_narrow': '#3b82f6',
-                            'approve_session': '#3b82f6',
-                            'approve_permanent_narrow': '#6366f1',
-                            'approve_permanent': '#6366f1',
-                        };
-                        const buttons = structuredOpts.length > 0
-                            ? structuredOpts.map(opt => ({
-                                key: opt.id,
-                                label: opt.label,
-                                color: colorMap[opt.id] || '#3b82f6',
-                                primary: opt.id === 'approve_once',
-                                scope: opt.scope,
-                                pattern: opt.pattern,
-                            }))
-                            : [
-                                { key: 'approve_once', label: 'Allow Once', color: '#10b981', primary: true },
-                                { key: 'approve_session', label: 'Allow for Session', color: '#3b82f6', primary: false },
-                                { key: 'approve_permanent', label: 'Always Allow', color: '#6366f1', primary: false },
-                                { key: 'reject', label: 'Reject', color: '#ef4444', primary: false },
-                            ];
-                        return (
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                {buttons.map(btn => (
-                                    <button
-                                        key={btn.key}
-                                        disabled={isSubmitting}
-                                        onClick={() => handleAction(btn.key, "", {
-                                            grant_scope: btn.scope || undefined,
-                                            permission_pattern: btn.pattern || undefined,
-                                        })}
-                                        style={{
-                                            padding: '10px 16px',
-                                            background: isSubmitting ? '#f8fafc' : btn.primary ? btn.color : '#ffffff',
-                                            color: isSubmitting ? '#94a3b8' : btn.primary ? 'white' : btn.color,
-                                            border: btn.primary ? 'none' : `1px solid ${btn.color}30`,
-                                            borderRadius: '10px',
-                                            fontSize: '13px',
-                                            fontWeight: 700,
-                                            cursor: isSubmitting ? 'default' : 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '8px',
-                                            boxShadow: btn.primary && !isSubmitting ? `0 2px 4px ${btn.color}33` : 'none',
-                                            transition: 'all 0.2s'
-                                        }}
-                                        onMouseEnter={e => { if (!isSubmitting) { e.currentTarget.style.opacity = '0.85'; } }}
-                                        onMouseLeave={e => { if (!isSubmitting) { e.currentTarget.style.opacity = '1'; } }}
-                                    >
-                                        {isSubmitting ? (
-                                            <div style={{ width: '14px', height: '14px', border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                        ) : btn.key === 'reject' ? <X size={14} /> : <Check size={14} />}
-                                        {isSubmitting ? '...' : btn.label}
-                                    </button>
-                                ))}
-                            </div>
-                        );
-                    })()}
-
-                    {type === 'approve_reject' && (
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <button
-                                disabled={isSubmitting}
-                                onClick={() => handleAction('approved')}
-                                style={{
-                                    flex: 1,
-                                    padding: '10px 16px',
-                                    background: isSubmitting ? '#94a3b8' : '#10b981',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '10px',
-                                    fontSize: '13px',
-                                    fontWeight: 700,
-                                    cursor: isSubmitting ? 'default' : 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    boxShadow: isSubmitting ? 'none' : '0 2px 4px rgba(16, 185, 129, 0.2)',
-                                    transition: 'transform 0.2s, background 0.2s'
-                                }}
-                                onMouseEnter={e => { if (!isSubmitting) e.currentTarget.style.background = '#059669'; }}
-                                onMouseLeave={e => { if (!isSubmitting) e.currentTarget.style.background = '#10b981'; }}
-                            >
-                                {isSubmitting ? (
-                                    <div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                ) : <Check size={16} />}
-                                {isSubmitting ? 'Processing...' : 'Approve'}
-                            </button>
-                            <button
-                                disabled={isSubmitting}
-                                onClick={() => handleAction('rejected')}
-                                style={{
-                                    flex: 1,
-                                    padding: '10px 16px',
-                                    background: isSubmitting ? '#f8fafc' : '#ffffff',
-                                    color: isSubmitting ? '#94a3b8' : '#ef4444',
-                                    border: '1px solid #fee2e2',
-                                    borderRadius: '10px',
-                                    fontSize: '13px',
-                                    fontWeight: 700,
-                                    cursor: isSubmitting ? 'default' : 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    transition: 'all 0.2s'
-                                }}
-                                onMouseEnter={e => {
-                                    if (!isSubmitting) {
-                                        e.currentTarget.style.background = '#fef2f2';
-                                        e.currentTarget.style.borderColor = '#ef4444';
-                                    }
-                                }}
-                                onMouseLeave={e => {
-                                    if (!isSubmitting) {
-                                        e.currentTarget.style.background = '#ffffff';
-                                        e.currentTarget.style.borderColor = '#fee2e2';
-                                    }
-                                }}
-                            >
-                                {isSubmitting ? (
-                                    <div style={{ width: '16px', height: '16px', border: '2px solid rgba(239,68,68,0.2)', borderTopColor: '#ef4444', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                ) : <X size={16} />}
-                                {isSubmitting ? '...' : 'Reject'}
-                            </button>
-                        </div>
-                    )}
-
-                    {type === 'choose' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {optionsArray?.map(opt => (
-                                <button
-                                    key={opt}
-                                    disabled={isSubmitting}
-                                    onClick={() => handleAction(opt)}
-                                    style={{
-                                        padding: '10px 14px',
-                                        background: isSubmitting ? '#f8fafc' : '#ffffff',
-                                        border: '1px solid #e2e8f0',
-                                        borderRadius: '10px',
-                                        fontSize: '13px',
-                                        fontWeight: 600,
-                                        color: isSubmitting ? '#94a3b8' : '#334155',
-                                        cursor: isSubmitting ? 'default' : 'pointer',
-                                        textAlign: 'left',
-                                        transition: 'all 0.2s',
-                                        boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '10px'
-                                    }}
-                                    onMouseEnter={e => {
-                                        if (!isSubmitting) {
-                                            e.currentTarget.style.borderColor = '#3b82f6';
-                                            e.currentTarget.style.background = '#eff6ff';
-                                            e.currentTarget.style.color = '#1d4ed8';
-                                        }
-                                    }}
-                                    onMouseLeave={e => {
-                                        if (!isSubmitting) {
-                                            e.currentTarget.style.borderColor = '#e2e8f0';
-                                            e.currentTarget.style.background = '#ffffff';
-                                            e.currentTarget.style.color = '#334155';
-                                        }
-                                    }}
-                                >
-                                    {isSubmitting && (
-                                        <div style={{ width: '12px', height: '12px', border: '2px solid rgba(59,130,246,0.1)', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                    )}
-                                    {opt}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
-                    {type === 'provide_input' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: isPending ? '#f8fafc' : 'transparent', padding: isPending ? '14px' : '0', borderRadius: '12px', border: isPending ? '1px solid #e2e8f0' : 'none' }}>
-                            {prompt && (
-                                <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b', marginBottom: '4px' }}>
-                                    {prompt}
-                                </div>
-                            )}
-                            <textarea
-                                value={userInput}
-                                onChange={e => setUserInput(e.target.value)}
-                                placeholder="Write your response or instructions..."
-                                disabled={isSubmitting}
-                                style={{
-                                    width: '100%',
-                                    minHeight: '100px',
-                                    padding: '14px',
-                                    borderRadius: '12px',
-                                    border: '1px solid #e2e8f0',
-                                    fontSize: '13.5px',
-                                    resize: 'none',
-                                    outline: 'none',
-                                    background: '#ffffff',
-                                    transition: 'all 0.2s',
-                                    lineHeight: '1.5'
-                                }}
-                                onFocus={e => {
-                                    e.currentTarget.style.borderColor = '#3b82f6';
-                                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
-                                }}
-                                onBlur={e => {
-                                    e.currentTarget.style.borderColor = '#e2e8f0';
-                                    e.currentTarget.style.boxShadow = 'none';
-                                }}
-                            />
-                            <button
-                                disabled={isSubmitting || !userInput.trim()}
-                                onClick={() => handleAction(userInput)}
-                                style={{
-                                    padding: '12px 20px',
-                                    background: isSubmitting || !userInput.trim() ? '#94a3b8' : '#111827',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '10px',
-                                    fontSize: '14px',
-                                    fontWeight: 700,
-                                    cursor: isSubmitting || !userInput.trim() ? 'default' : 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    boxShadow: (isSubmitting || !userInput.trim()) ? 'none' : '0 4px 6px -1px rgba(0,0,0,0.1)',
-                                    transition: 'all 0.2s'
-                                }}
-                                onMouseEnter={e => {
-                                    if (!isSubmitting && userInput.trim()) e.currentTarget.style.background = '#000000';
-                                }}
-                                onMouseLeave={e => {
-                                    if (!isSubmitting && userInput.trim()) e.currentTarget.style.background = '#111827';
-                                }}
-                            >
-                                {isSubmitting ? (
-                                    <div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                ) : <Send size={16} />}
-                                {isSubmitting ? 'Submitting...' : 'Submit Resolution'}
-                            </button>
-                        </div>
-                    )}
-
-                    {type === 'notify' && (
-                        <div style={{ display: 'flex' }}>
-                            <button
-                                disabled={isSubmitting}
-                                onClick={() => handleAction('acknowledged')}
-                                style={{
-                                    width: '100%',
-                                    padding: '10px 16px',
-                                    background: isSubmitting ? '#94a3b8' : '#3b82f6',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '10px',
-                                    fontSize: '13px',
-                                    fontWeight: 700,
-                                    cursor: isSubmitting ? 'default' : 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    transition: 'background 0.2s'
-                                }}
-                                onMouseEnter={e => { if (!isSubmitting) e.currentTarget.style.background = '#2563eb'; }}
-                                onMouseLeave={e => { if (!isSubmitting) e.currentTarget.style.background = '#3b82f6'; }}
-                            >
-                                {isSubmitting ? (
-                                    <div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                                ) : <Check size={16} />}
-                                {isSubmitting ? 'Confirming...' : 'Acknowledge'}
-                            </button>
-                        </div>
-                    )}
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <div style={{
-                            padding: '3px 10px',
-                            background: '#f1f5f9',
-                            borderRadius: '12px',
-                            fontSize: '10px',
-                            color: '#475569',
-                            fontWeight: 700,
-                            border: '1px solid #e2e8f0',
-                            textTransform: 'uppercase'
-                        }}>
-                            {type}
-                        </div>
-                    </div>
-
-                    {resolution && (
-                        <div style={{
-                            marginTop: '4px',
-                            padding: '14px',
-                            background: '#ffffff',
-                            borderRadius: '10px',
-                            border: '1px solid #e2e8f0',
-                            borderLeft: '4px solid #10b981',
-                            boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
-                        }}>
-                            <div style={{
-                                fontSize: '10px',
-                                color: '#94a3b8',
-                                fontWeight: 800,
-                                textTransform: 'uppercase',
-                                marginBottom: '6px',
-                                letterSpacing: '0.04em'
-                            }}>
-                                Decision Outcome
-                            </div>
-                            <div style={{
-                                fontSize: '14px',
-                                fontWeight: 700,
-                                color: '#0f172a',
-                                marginBottom: resolution.comment ? '8px' : '0'
-                            }}>
-                                {resolution.decision}
-                            </div>
-                            {resolution.comment && (
-                                <div style={{
-                                    fontSize: '13px',
-                                    color: '#64748b',
-                                    padding: '10px',
-                                    background: '#f8fafc',
-                                    borderRadius: '6px',
-                                    fontStyle: 'italic',
-                                    lineHeight: '1.5'
-                                }}>
-                                    "{resolution.comment}"
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-};
 
 
 

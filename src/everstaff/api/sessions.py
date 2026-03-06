@@ -710,12 +710,39 @@ def make_router(config) -> APIRouter:
     async def download_file(
         session_id: str,
         file_path: str,
+        background_tasks: BackgroundTasks,
         download: bool = Query(default=False),
     ):
         from fastapi.responses import FileResponse
+        import tempfile
+        import shutil
+        import os
+        
         target = _guard_workspace_path(session_id, file_path)
-        if not target.exists() or not target.is_file():
+        if not target.exists():
             raise HTTPException(status_code=404, detail="File not found")
+        
+        if target.is_dir():
+            if not download:
+                raise HTTPException(status_code=400, detail="Cannot preview a directory as a file")
+            
+            # Create a zip file
+            tmp_fd, tmp_zip = tempfile.mkstemp(suffix=".zip")
+            os.close(tmp_fd)
+            base_name = tmp_zip[:-4] # make_archive appends .zip automatically
+            shutil.make_archive(base_name, 'zip', str(target))
+            
+            def cleanup():
+                try: os.remove(tmp_zip)
+                except: pass
+                
+            background_tasks.add_task(cleanup)
+            return FileResponse(
+                path=tmp_zip,
+                filename=f"{target.name}.zip",
+                media_type="application/zip"
+            )
+
         if download:
             return FileResponse(
                 path=str(target),
