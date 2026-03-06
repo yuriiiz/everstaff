@@ -18,6 +18,31 @@ async def test_save_and_load_roundtrip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_message_created_at_roundtrip(tmp_path):
+    from everstaff.memory.file_store import FileMemoryStore
+    store = FileMemoryStore(base_dir=tmp_path)
+    msgs = [
+        Message(role="user", content="hello", created_at="2026-03-06T12:00:00+00:00"),
+        Message(role="assistant", content="hi", created_at="2026-03-06T12:00:01+00:00"),
+    ]
+    await store.save("sess-ts", msgs)
+    loaded = await store.load("sess-ts")
+    assert loaded[0].created_at == "2026-03-06T12:00:00+00:00"
+    assert loaded[1].created_at == "2026-03-06T12:00:01+00:00"
+
+
+@pytest.mark.asyncio
+async def test_message_created_at_backward_compat(tmp_path):
+    """Old sessions without created_at should load with None."""
+    from everstaff.memory.file_store import FileMemoryStore
+    store = FileMemoryStore(base_dir=tmp_path)
+    msgs = [Message(role="user", content="old msg")]  # no created_at
+    await store.save("sess-old", msgs)
+    loaded = await store.load("sess-old")
+    assert loaded[0].created_at is None
+
+
+@pytest.mark.asyncio
 async def test_load_nonexistent_returns_empty(tmp_path):
     from everstaff.memory.file_store import FileMemoryStore
     store = FileMemoryStore(base_dir=tmp_path)
