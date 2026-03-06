@@ -48,6 +48,7 @@ class Message:
     tool_call_id: str | None = None
     name: str | None = None
     thinking: str | None = None   # stored in history, stripped before LLM
+    created_at: str | None = None  # ISO 8601 UTC, stripped before LLM
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role}
@@ -61,6 +62,8 @@ class Message:
             d["name"] = self.name
         if self.thinking is not None:
             d["thinking"] = self.thinking
+        if self.created_at is not None:
+            d["created_at"] = self.created_at
         return d
 
 

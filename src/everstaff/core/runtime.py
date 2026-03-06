@@ -192,7 +192,8 @@ class AgentRuntime:
             hitl_tool = ctx.tool_registry._tools.get("request_human_input")
             if isinstance(hitl_tool, RequestHumanInputTool):
                 parts.append(hitl_tool.get_prompt_injection())
-        return "\n\n".join(parts) if parts else None
+        result = "\n\n".join(parts).strip()
+        return result if result else None
 
 
     async def _generate_title(self, user_input: str, first_reply: str) -> None:
@@ -607,11 +608,12 @@ class AgentRuntime:
                         for fp in _created + _modified:
                             try:
                                 full = self._ctx.workdir / fp
+                                is_dir = full.is_dir()
                                 yield FileCreatedEvent(
                                     file_path=fp,
-                                    file_name=Path(fp).name,
-                                    size=full.stat().st_size,
-                                    mime_type=guess_mime(fp),
+                                    file_name=full.name,
+                                    size=0 if is_dir else full.stat().st_size,
+                                    mime_type="directory" if is_dir else guess_mime(fp),
                                 )
                             except OSError:
                                 pass

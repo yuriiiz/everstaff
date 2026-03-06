@@ -16,6 +16,7 @@ export function extractThinkingFromContent(thinking, content) {
 
 export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, sessionStatus, toolCallId }) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submittingDecision, setSubmittingDecision] = useState(null);
     const [userInput, setUserInput] = useState('');
 
     const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
@@ -75,6 +76,7 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
     const handleAction = async (decision, comment = "", extraFields = {}) => {
         if (!isPending) return;
         setIsSubmitting(true);
+        setSubmittingDecision(decision);
         try {
             let hitlIdToResolve = pendingRequest?.hitl_id || parsedArgs?.hitl_id;
 
@@ -95,13 +97,19 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
 
             if (!hitlIdToResolve) throw new Error("Could not definitively identify which HITL request to resolve.");
 
-            await onResolve(hitlIdToResolve, decision, comment, { ...extraFields, tool_call_id: toolCallId });
+            await onResolve(hitlIdToResolve, {
+                decision,
+                comment,
+                ...extraFields,
+                tool_call_id: toolCallId
+            });
             setUserInput('');
         } catch (e) {
             console.error("Resolution error:", e);
             alert(`Failed to submit decision: ${e.message}`);
         } finally {
             setIsSubmitting(false);
+            setSubmittingDecision(null);
         }
     };
 
@@ -121,6 +129,12 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                 {resolution && <span className="hitl-badge-resolved">Resolved</span>}
                 {isExpired && <span className="hitl-badge-expired">Expired</span>}
                 {isPending && <span className="hitl-badge-pending">Pending</span>}
+                {isSubmitting && (
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#3b82f6', fontWeight: 600 }}>
+                        <div className="hitl-spinner" style={{ width: '10px', height: '10px' }} />
+                        <span>Sending...</span>
+                    </div>
+                )}
             </div>
 
             <div className="hitl-body">
@@ -150,8 +164,14 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                                         className="hitl-btn hitl-btn-primary"
                                         onClick={() => handleAction(opt)}
                                         disabled={isSubmitting}
+                                        style={{ opacity: isSubmitting && submittingDecision !== opt ? 0.6 : 1 }}
                                     >
-                                        {opt}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                            {isSubmitting && submittingDecision === opt && (
+                                                <div className="hitl-spinner" style={{ borderTopColor: 'white', width: '12px', height: '12px' }} />
+                                            )}
+                                            <span>{opt}</span>
+                                        </div>
                                     </button>
                                 ))}
                             </div>
@@ -171,10 +191,15 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                                 />
                                 <button
                                     className="hitl-btn hitl-btn-primary"
-                                    onClick={() => handleAction('provide_input', userInput.trim(), { input: userInput.trim() })}
+                                    onClick={() => handleAction('provide_input', userInput.trim(), { comment: userInput.trim(), input: userInput.trim() })}
                                     disabled={!userInput.trim() || isSubmitting}
                                 >
-                                    {isSubmitting ? 'Submitting...' : 'Submit'}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                        {isSubmitting && submittingDecision === 'provide_input' && (
+                                            <div className="hitl-spinner" style={{ borderTopColor: 'white', width: '12px', height: '12px' }} />
+                                        )}
+                                        <span>{isSubmitting && submittingDecision === 'provide_input' ? 'Submitting...' : 'Submit'}</span>
+                                    </div>
                                 </button>
                             </div>
                         )}
@@ -183,9 +208,17 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                             className="hitl-btn hitl-btn-danger"
                             onClick={() => handleAction('reject', 'User rejected the request')}
                             disabled={isSubmitting}
-                            style={{ marginTop: '8px' }}
+                            style={{
+                                marginTop: '8px',
+                                opacity: isSubmitting && submittingDecision !== 'reject' ? 0.6 : 1
+                            }}
                         >
-                            Decline / Cancel
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                {isSubmitting && submittingDecision === 'reject' && (
+                                    <div className="hitl-spinner" style={{ borderTopColor: 'white', width: '12px', height: '12px' }} />
+                                )}
+                                <span>{isSubmitting && submittingDecision === 'reject' ? 'Rejecting...' : 'Decline / Cancel'}</span>
+                            </div>
                         </button>
                     </div>
                 ) : null}
@@ -193,7 +226,6 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
         </div>
     );
 };
-
 export const MessageItem = memo(({ message, agentName, hitlRequests, onResolve, sessionId, sessionStatus, onPreviewFile }) => {
     const isUser = message.role === 'user';
     const hasTools = message.tool_calls && message.tool_calls.length > 0;

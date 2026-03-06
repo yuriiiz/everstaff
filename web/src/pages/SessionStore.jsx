@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
-import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal, Cpu, Bot, UserCheck, Check, Search, X, Sparkles, Zap, Filter, Folder, Square } from 'lucide-react';
+import { MessageSquare, User, Trash2, Send, ChevronRight, ChevronDown, Terminal, Cpu, Bot, UserCheck, Check, Search, X, Sparkles, Zap, Filter, Folder, Square, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HitlPanel } from './HitlComponents';
@@ -235,6 +235,13 @@ export default function SessionStore() {
         };
     }, []);
 
+    // Reset system prompt expansion when switching sessions
+    useEffect(() => {
+        if (selectedSession?.session_id) {
+            setShowSystemPrompt(false);
+        }
+    }, [selectedSession?.session_id]);
+
     // Session WebSocket connection (Unified)
     useEffect(() => {
         if (!selectedSession?.session_id) return;
@@ -354,23 +361,22 @@ export default function SessionStore() {
                         return prev;
                     });
                 } else if (data.type === 'file_created') {
+                    // Add to assistant artifacts (吸附能力)
                     setMessages(prev => {
-                        for (let i = prev.length - 1; i >= 0; i--) {
-                            if (prev[i].role === 'assistant') {
-                                const artifacts = [...(prev[i].fileArtifacts || []), {
+                        let updated = [...prev];
+                        for (let i = updated.length - 1; i >= 0; i--) {
+                            if (updated[i].role === 'assistant') {
+                                const artifacts = [...(updated[i].fileArtifacts || []), {
                                     file_path: data.file_path,
                                     file_name: data.file_name,
                                     size: data.size,
                                     mime_type: data.mime_type,
                                 }];
-                                return [
-                                    ...prev.slice(0, i),
-                                    { ...prev[i], fileArtifacts: artifacts },
-                                    ...prev.slice(i + 1),
-                                ];
+                                updated[i] = { ...updated[i], fileArtifacts: artifacts };
+                                break;
                             }
                         }
-                        return prev;
+                        return updated;
                     });
                     // Increment new files count
                     setNewFilesCount(prev => prev + 1);
@@ -587,7 +593,60 @@ export default function SessionStore() {
                 if ((!data.messages || data.messages.length === 0) && messages.length > 0 && selectedSession?.session_id === sid) {
                     console.log(`[debug] Keeping local optimistic messages for ${sid}`);
                 } else {
-                    setMessages(data.messages || []);
+                    const baseMessages = data.messages || [];
+
+                    // Fetch files to merge into timeline/artifacts
+                    fetch(`/api/sessions/${sid}/files`)
+                        .then(r => r.ok ? r.json() : { files: [] })
+                        .then(fileData => {
+                            let mergedMessages = [...baseMessages];
+                            const workspaceFiles = fileData.files || [];
+
+                            // Define guessMimeClient if not available (utility)
+                            const guessMime = (name) => {
+                                const ext = name.split('.').pop().toLowerCase();
+                                const map = {
+                                    'mp4': 'video/mp4', 'mov': 'video/quicktime',
+                                    'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+                                    'pdf': 'application/pdf', 'md': 'text/markdown',
+                                    'html': 'text/html', 'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg'
+                                };
+                                return map[ext] || 'application/octet-stream';
+                            };
+
+                            // 1. Try to associate files with assistant tool calls (best quality)
+                            workspaceFiles.forEach(file => {
+                                if (file.type !== 'file') return;
+
+                                for (let i = mergedMessages.length - 1; i >= 0; i--) {
+                                    const msg = mergedMessages[i];
+                                    if (msg.role === 'assistant' && msg.tool_calls) {
+                                        const hasMatchingTool = msg.tool_calls.some(tc => {
+                                            const func = tc.function || tc;
+                                            const args = typeof func.arguments === 'string' ? JSON.parse(func.arguments) : (func.args || {});
+                                            const pathArg = args.file_path || args.path || args.filename;
+                                            return pathArg === file.name || (pathArg && pathArg.endsWith('/' + file.name));
+                                        });
+                                        if (hasMatchingTool) {
+                                            msg.fileArtifacts = [...(msg.fileArtifacts || []), {
+                                                file_path: file.name,
+                                                file_name: file.name,
+                                                size: file.size,
+                                                mime_type: guessMime(file.name)
+                                            }];
+                                            file._assigned = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+
+                            setMessages(mergedMessages);
+                        })
+                        .catch(err => {
+                            console.error("Failed to fetch session files for merging:", err);
+                            setMessages(baseMessages);
+                        });
                 }
 
                 // Preserve agent_uuid from previous state if backend hasn't written it yet
@@ -607,7 +666,6 @@ export default function SessionStore() {
 
                 setIsProcessing(data.status === 'running');
                 setStatusContent(data.status === 'running' ? 'Thinking...' : '');
-                setShowSystemPrompt(false);
 
                 // Fetch workspace files and attach to last assistant message
                 fetch(`/api/sessions/${sid}/files`)
@@ -895,40 +953,51 @@ export default function SessionStore() {
 
                         {/* Messages List */}
                         <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }} ref={scrollRef}>
-                            {/* System Prompt (Folded) */}
-                            {selectedSession.metadata?.system_prompt && (
-                                <div className="system-prompt-wrapper">
-                                    <button
+                            {/* System Prompt (Native details for stability) */}
+                            {selectedSession.metadata?.system_prompt && String(selectedSession.metadata.system_prompt).trim() !== '' ? (
+                                <div className={`system-prompt-details ${showSystemPrompt ? 'is-open' : ''}`}>
+                                    <div
+                                        className="system-prompt-summary"
                                         onClick={() => setShowSystemPrompt(!showSystemPrompt)}
-                                        className="system-prompt-header"
                                     >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <Terminal size={14} />
-                                            <span>System Prompt</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <div style={{ padding: '4px', borderRadius: '6px', background: '#f1f5f9', color: '#64748b', display: 'flex' }}>
+                                                    <Settings size={14} />
+                                                </div>
+                                                <span style={{ fontWeight: 600 }}>System Prompt</span>
+                                            </div>
+                                            <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 400 }}>
+                                                {showSystemPrompt ? 'Click to collapse' : 'Click to expand'}
+                                            </span>
                                         </div>
-                                        <ChevronDown
-                                            size={14}
-                                            style={{
-                                                transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                                                transform: showSystemPrompt ? 'rotate(180deg)' : 'rotate(0deg)'
-                                            }}
-                                        />
-                                    </button>
-                                    <div className={`system-prompt-anim-container ${showSystemPrompt ? 'open' : ''}`}>
-                                        <div className="system-prompt-content-inner">
+                                    </div>
+                                    {showSystemPrompt && (
+                                        <div className="system-prompt-content" key="sp-content">
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
                                                 components={{
                                                     table: ({ node, ...props }) => <table style={{ borderCollapse: 'collapse', width: '100%', marginBottom: '16px', fontSize: '12px' }} {...props} />,
                                                     th: ({ node, ...props }) => <th style={{ border: '1px solid #e5e7eb', padding: '6px 10px', background: '#f9fafb', fontWeight: 600, textAlign: 'left' }} {...props} />,
                                                     td: ({ node, ...props }) => <td style={{ border: '1px solid #e5e7eb', padding: '6px 10px' }} {...props} />,
-                                                    p: ({ node, ...props }) => <p style={{ margin: '0 0 10px 0' }} {...props} />,
+                                                    p: ({ node, ...props }) => <p style={{ margin: '0 0 4px 0' }} {...props} />,
                                                     pre: ({ node, ...props }) => <pre style={{ background: '#f3f4f6', padding: '8px', borderRadius: '4px', overflowX: 'auto', maxWidth: '100%' }} {...props} />,
                                                     code: ({ node, inline, ...props }) => <code style={{ background: inline ? '#f3f4f6' : 'transparent', padding: inline ? '2px 4px' : '0', borderRadius: '2px', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }} {...props} />
                                                 }}
                                             >
-                                                {selectedSession.metadata?.system_prompt}
+                                                {String(selectedSession.metadata.system_prompt)}
                                             </ReactMarkdown>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="system-prompt-details">
+                                    <div className="system-prompt-summary">
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.6, width: '100%' }}>
+                                            <div style={{ padding: '4px', borderRadius: '6px', background: '#f1f5f9', color: '#64748b', display: 'flex' }}>
+                                                <Settings size={14} />
+                                            </div>
+                                            <span>System prompt is empty</span>
                                         </div>
                                     </div>
                                 </div>

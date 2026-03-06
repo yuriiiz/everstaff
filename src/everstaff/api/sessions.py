@@ -373,7 +373,16 @@ def _parse_session_metadata(raw_metadata: dict) -> SessionMetadata:
         return SessionMetadata.model_validate(raw_metadata)
     except Exception as exc:
         logger.debug("Failed to parse session metadata: %s", exc)
-        return SessionMetadata()
+        # Robust fallback: if validation fails, at least try to preserve the system_prompt
+        # if it's present and looks like a string.
+        meta = SessionMetadata()
+        if isinstance(raw_metadata, dict):
+            sp = raw_metadata.get("system_prompt")
+            if isinstance(sp, str):
+                meta.system_prompt = sp
+            if "title" in raw_metadata and isinstance(raw_metadata["title"], str):
+                meta.title = raw_metadata["title"]
+        return meta
 
 
 def make_router(config) -> APIRouter:

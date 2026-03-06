@@ -1537,51 +1537,144 @@ details[open] .details-chevron {
   color: #10b981;
 }
 
-/* System Prompt Wrapper for smooth height animation */
-.system-prompt-wrapper {
+/* System Prompt Details Component */
+.system-prompt-details {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: white;
-  overflow: hidden;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 8px;
+  background: #f8fafc;
+  margin-bottom: 8px;
+  /* Reduced since parent has gap */
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  min-height: 38px;
+  height: auto;
+  position: relative;
 }
 
-.system-prompt-header {
-  width: 100%;
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border: none;
+.system-prompt-details[open],
+.system-prompt-details.is-open {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  border-color: #3b82f6;
+  background: white;
+}
+
+.system-prompt-summary {
+  list-style: none;
+  padding: 0;
+  /* Padding moved to inner div for better flex control */
   background: #f8fafc;
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
+  border-radius: 8px;
   color: #475569;
+  user-select: none;
+  transition: background 0.2s;
+  min-height: 36px;
+  display: flex;
+  align-items: stretch;
 }
 
-.system-prompt-header:hover {
+.system-prompt-summary>div {
+  padding: 8px 12px;
+  width: 100%;
+}
+
+.system-prompt-summary::-webkit-details-marker {
+  display: none;
+}
+
+.system-prompt-summary:hover {
   background: #f1f5f9;
 }
 
-.system-prompt-anim-container {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.system-prompt-anim-container.open {
-  grid-template-rows: 1fr;
-}
-
-.system-prompt-content-inner {
-  min-height: 0;
+.system-prompt-content {
   border-top: 1px solid #f1f5f9;
-  padding: 16px;
-  font-size: 13px;
-  line-height: 1.6;
+  padding: 20px;
+  font-size: 12px;
+  line-height: 1.4;
   color: #334155;
   background: white;
+  min-height: 40px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: details-show 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.system-prompt-content p {
+  margin: 0 0 4px 0;
+}
+
+.system-prompt-content p:last-child {
+  margin-bottom: 0;
+}
+
+.system-prompt-content h1,
+.system-prompt-content h2,
+.system-prompt-content h3,
+.system-prompt-content h4,
+.system-prompt-content h5,
+.system-prompt-content h6 {
+  margin: 6px 0 2px 0;
+  line-height: 1.1;
+  font-weight: 700;
+}
+
+.system-prompt-content h1 {
+  font-size: 18px;
+  margin-top: 10px;
+}
+
+.system-prompt-content h2 {
+  font-size: 16px;
+  margin-top: 10px;
+}
+
+.system-prompt-content h3 {
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+.system-prompt-content h4,
+.system-prompt-content h5,
+.system-prompt-content h6 {
+  font-size: 12px;
+}
+
+.system-prompt-content h1:first-child,
+.system-prompt-content h2:first-child,
+.system-prompt-content h3:first-child {
+  margin-top: 10px;
+}
+
+.system-prompt-content ul,
+.system-prompt-content ol {
+  margin: 4px 0 0 10px;
+  padding: 0;
+}
+
+.system-prompt-content li {
+  margin-bottom: 0px;
+}
+
+.system-prompt-content pre {
+  margin: 8px 0;
+}
+
+@keyframes details-show {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* Custom Dropdown for Agent Filter */
@@ -1956,4 +2049,143 @@ details[open] .details-chevron {
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 1s linear infinite;
+}
+
+/* File Timeline Preview Styles */
+.message-row-file-event {
+  flex-direction: column !important;
+  align-items: center !important;
+  margin: 24px 0 !important;
+  gap: 12px !important;
+  width: 100% !important;
+}
+
+.file-event-timestamp {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+  background: #f8fafc;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  letter-spacing: 0.02em;
+}
+
+.file-timeline-preview-card {
+  width: 100%;
+  max-width: 550px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.file-timeline-preview-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.15);
+  border-color: #cbd5e1;
+}
+
+.file-timeline-preview-header {
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.file-timeline-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-timeline-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-timeline-size {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.file-timeline-open-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3b82f6;
+  background: white;
+  border: 1px solid #e2e8f0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.file-timeline-open-btn:hover {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  transform: scale(1.02);
+}
+
+.file-timeline-content {
+  width: 100%;
+  background: #fdfdfd;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 120px;
+  position: relative;
+}
+
+.file-timeline-img {
+  max-width: 100%;
+  max-height: 350px;
+  object-fit: cover;
+  cursor: pointer;
+  display: block;
+}
+
+.file-timeline-video {
+  width: 100%;
+  max-height: 300px;
+  background: #000;
+  display: block;
+}
+
+.file-timeline-audio {
+  width: 85%;
+  margin: 24px 0;
+}
+
+.file-timeline-placeholder {
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.2s;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.file-timeline-placeholder:hover {
+  background: #f1f5f9;
+}
+
+.file-timeline-placeholder span {
+  font-weight: 600;
+  color: #475569;
 }

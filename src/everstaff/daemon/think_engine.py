@@ -177,7 +177,7 @@ class ThinkEngine:
                     logger.info("[Think:%s] No tool call from LLM — defaulting to skip", agent_name)
                     # Capture the LLM's response text before breaking
                     if response.content:
-                        messages.append(Message(role="assistant", content=response.content))
+                        messages.append(Message(role="assistant", thinking=response.thinking, content=response.content))
                     decision = Decision(
                         action="skip",
                         reasoning=response.content or "No decision made",

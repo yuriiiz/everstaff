@@ -176,6 +176,32 @@ def test_decision_skip():
     assert d.priority == "normal"
 
 
+def test_message_created_at_field():
+    from everstaff.protocols import Message
+    msg = Message(role="user", content="hello", created_at="2026-03-06T12:00:00+00:00")
+    assert msg.created_at == "2026-03-06T12:00:00+00:00"
+
+
+def test_message_created_at_default_none():
+    from everstaff.protocols import Message
+    msg = Message(role="user", content="hello")
+    assert msg.created_at is None
+
+
+def test_message_to_dict_includes_created_at():
+    from everstaff.protocols import Message
+    msg = Message(role="user", content="hello", created_at="2026-03-06T12:00:00+00:00")
+    d = msg.to_dict()
+    assert d["created_at"] == "2026-03-06T12:00:00+00:00"
+
+
+def test_message_to_dict_excludes_created_at_when_none():
+    from everstaff.protocols import Message
+    msg = Message(role="user", content="hello")
+    d = msg.to_dict()
+    assert "created_at" not in d
+
+
 import pytest
 
 @pytest.mark.asyncio

@@ -16,16 +16,26 @@ _EXTRA_MIME: dict[str, str] = {
     ".yml": "text/yaml",
     ".toml": "application/toml",
     ".jsonl": "application/jsonlines",
+    ".mp4": "video/mp4",
 }
 
 
 def snapshot_workspace(workdir: Path) -> Snapshot:
-    """Return {relative_path: (size, mtime_ns)} for all files under workdir."""
+    """Return {relative_path: (size_bytes, mtime_ns)} for all files and directories under workdir."""
     if not workdir.exists():
         return {}
     result: Snapshot = {}
     root = str(workdir)
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Include directories (excluding root)
+        for dname in dirnames:
+            full = os.path.join(dirpath, dname)
+            rel = os.path.relpath(full, root)
+            try:
+                st = os.stat(full)
+                result[rel] = (0, st.st_mtime_ns)  # Size 0 for directories
+            except OSError:
+                pass
         for fname in filenames:
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, root)
@@ -46,6 +56,8 @@ def diff_snapshots(before: Snapshot, after: Snapshot) -> tuple[list[str], list[s
             created.append(path)
         else:
             old_size, old_mtime = before[path]
+            # For directories (size 0), we only care about mtime (though mtime changes when children change)
+            # For files, we care about size and mtime.
             if size != old_size or mtime != old_mtime:
                 modified.append(path)
     return created, modified
