@@ -202,6 +202,32 @@ def test_message_to_dict_excludes_created_at_when_none():
     assert "created_at" not in d
 
 
+def test_message_created_at_stripped_for_llm():
+    """Simulates the runtime strip pattern — created_at must not survive."""
+    from everstaff.protocols import Message
+    original = Message(
+        role="assistant",
+        content="hello",
+        thinking="let me think",
+        created_at="2026-03-06T12:00:00+00:00",
+    )
+    # This is the exact pattern from runtime.py:345-355
+    stripped = Message(
+        role=original.role,
+        content=original.content,
+        tool_calls=original.tool_calls,
+        tool_call_id=original.tool_call_id,
+        name=original.name,
+        # thinking intentionally omitted
+        # created_at intentionally omitted
+    )
+    assert stripped.thinking is None
+    assert stripped.created_at is None
+    d = stripped.to_dict()
+    assert "thinking" not in d
+    assert "created_at" not in d
+
+
 import pytest
 
 @pytest.mark.asyncio
