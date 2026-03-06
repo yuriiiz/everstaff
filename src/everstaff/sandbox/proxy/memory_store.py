@@ -27,6 +27,7 @@ class ProxyMemoryStore:
                 tool_call_id=m.get("tool_call_id"),
                 name=m.get("name"),
                 thinking=m.get("thinking"),
+                created_at=m.get("created_at"),
             )
             for m in result.get("messages", [])
         ]
