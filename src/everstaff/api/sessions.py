@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from everstaff.schema.memory import Session
 from everstaff.schema.api_models import SessionMetadata
 from everstaff.core.constants import STALE_SESSION_THRESHOLD_SECONDS
+from everstaff.session.index import SessionIndex
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ async def _resume_session_task(
     channel_manager=None,  # ChannelManager for HITL broadcast
     agent_uuid: str = "",
     mcp_pool=None,  # McpConnectionPool for cross-session connection reuse
+    root_session_id: str | None = None,  # root of session tree; None for root sessions
+    session_index=None,  # shared SessionIndex for index updates
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -123,13 +126,14 @@ async def _resume_session_task(
         config=config,
         channel_manager=channel_manager,
         mcp_pool=mcp_pool,
+        session_index=session_index,
     )
     _sid = session_id[:8]
 
     # Clear any leftover cancel.signal before building the runtime.
     # This prevents the new runtime from immediately self-cancelling
     # when resumed right after a stop (before the old runtime cleaned up).
-    _cancel_file = sessions_dir / session_id / "cancel.signal"
+    _cancel_file = sessions_dir / SessionIndex.signal_relpath(session_id, root_session_id)
     try:
         if _cancel_file.exists():
             _cancel_file.unlink()
@@ -141,22 +145,22 @@ async def _resume_session_task(
 
     # Ensure session.json exists and status is "running" BEFORE build(),
     # so the session is always visible in the UI — even if build() crashes.
-    _session_dir = sessions_dir / session_id
-    _session_dir.mkdir(parents=True, exist_ok=True)
-    _meta = _session_dir / "session.json"
+    _session_meta_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
+    _session_meta_path.parent.mkdir(parents=True, exist_ok=True)
+    _meta = _session_meta_path
+    _now = datetime.now(timezone.utc).isoformat()
     if _meta.exists():
         # Resume: reset status to "running" and clear previous error.
         try:
             _existing = json.loads(_meta.read_text())
             _existing["status"] = "running"
-            _existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _existing["updated_at"] = _now
             _existing.pop("error", None)
             _meta.write_text(json.dumps(_existing, indent=2))
         except Exception:
             pass
     else:
         # New session: write initial session.json.
-        _now = datetime.now(timezone.utc).isoformat()
         _meta.write_text(json.dumps({
             "session_id": session_id,
             "agent_name": agent_name,
@@ -169,6 +173,20 @@ async def _resume_session_task(
             "messages": [],
             "hitl_requests": [],
         }, indent=2))
+
+    # Keep the shared index in sync with the direct file write above
+    if session_index:
+        from everstaff.session.index import IndexEntry
+        session_index.upsert(IndexEntry(
+            id=session_id,
+            root=root_session_id or session_id,
+            parent=None,
+            agent=agent_name,
+            agent_uuid=agent_uuid,
+            status="running",
+            created_at=_now,
+            updated_at=_now,
+        ))
 
     ctx = None
     try:
@@ -183,7 +201,7 @@ async def _resume_session_task(
             input_text = None
         elif not decision_text:
             # New path: read all resolved HITL responses from session.json
-            session_path = sessions_dir / session_id / "session.json"
+            session_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
             input_text = None
             if session_path.exists():
                 try:
@@ -328,7 +346,7 @@ async def _resume_session_task(
         logger.error("[session] error agent=%s session=%s err=%s", agent_name, _sid, e)
         # Mark session as failed with error details so the UI shows why.
         try:
-            _fail_meta = sessions_dir / session_id / "session.json"
+            _fail_meta = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
             if _fail_meta.exists():
                 _fail_data = json.loads(_fail_meta.read_text())
             else:
@@ -389,6 +407,26 @@ def _parse_session_metadata(raw_metadata: dict) -> SessionMetadata:
 def make_router(config) -> APIRouter:
     sessions_dir = Path(config.sessions_dir).expanduser().resolve()
     router = APIRouter(tags=["sessions"])
+
+    def _get_index(request: Request):
+        return getattr(request.app.state, "session_index", None)
+
+    def _session_data_path(session_id: str, index=None) -> Path:
+        """Return filesystem path for the session data file."""
+        if index:
+            entry = index.get(session_id)
+            if entry and entry.root != session_id:
+                return sessions_dir / entry.root / "sub_sessions" / f"{session_id}.json"
+        return sessions_dir / session_id / "session.json"
+
+    def _root_dir(session_id: str, index=None) -> Path:
+        """Return root session directory (for workspace, cancel.signal)."""
+        root_id = session_id
+        if index:
+            entry = index.get(session_id)
+            if entry:
+                root_id = entry.root
+        return sessions_dir / root_id
 
     @router.post("/sessions", status_code=202)
     async def start_session(
@@ -459,6 +497,23 @@ def make_router(config) -> APIRouter:
             raise HTTPException(status_code=400, detail="agent_name or valid agent_uuid is required")
 
         session_id = str(uuid4())
+
+        # Early index upsert so the session is immediately discoverable
+        index = _get_index(request)
+        if index:
+            from everstaff.session.index import IndexEntry
+            _now = datetime.now(timezone.utc).isoformat()
+            index.upsert(IndexEntry(
+                id=session_id,
+                root=session_id,
+                parent=None,
+                agent=agent_name,
+                agent_uuid=agent_uuid,
+                status="running",
+                created_at=_now,
+                updated_at=_now,
+            ))
+
         cm = getattr(request.app.state, "channel_manager", None)
         broadcast_fn = _extract_broadcast_fn(cm) if cm is not None else None
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
@@ -468,31 +523,45 @@ def make_router(config) -> APIRouter:
             channel_manager=cm,
             agent_uuid=agent_uuid,
             mcp_pool=mcp_pool,
+            session_index=index,
         )
         return {"session_id": session_id, "status": "running"}
 
     @router.get("/sessions", response_model=list[Session])
     async def list_sessions(
+        request: Request,
         status: str | None = Query(default=None),
         agent_name: str | None = Query(default=None),
         agent_uuid: str | None = Query(default=None),
     ) -> list[Session]:
+        index = _get_index(request)
         sessions = []
         if not sessions_dir.exists():
             return sessions
-        for d in sorted(sessions_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            meta_path = d / "session.json"
-            if meta_path.exists():
+
+        if index:
+            # Fast path: use JSONL index to enumerate root sessions + their children
+            root_entries = index.list_roots(agent_uuid=agent_uuid, limit=10000)
+            # Collect all entries: roots + children of each root
+            all_entries = []
+            for root_entry in root_entries:
+                if agent_name is not None and root_entry.agent != agent_name:
+                    continue
+                all_entries.append(root_entry)
+                for child in index.children_of(root_entry.id):
+                    all_entries.append(child)
+
+            for entry in all_entries:
+                root_for_path = entry.root if entry.root != entry.id else None
+                meta_path = sessions_dir / SessionIndex.session_relpath(entry.id, root_for_path)
+                if not meta_path.exists():
+                    continue
                 try:
                     raw = json.loads(meta_path.read_text())
                     status_val = raw.get("status", "unknown")
-
-                    # Detect interrupted: running session with no active cancel.signal and stale
                     if status_val == "running":
-                        is_cancel_active = (d / "cancel.signal").exists()
-                        if not is_cancel_active:
+                        cancel_path = sessions_dir / SessionIndex.signal_relpath(entry.id, root_for_path)
+                        if not cancel_path.exists():
                             try:
                                 updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
                                 age = (datetime.now(timezone.utc) - updated_at).total_seconds()
@@ -500,19 +569,10 @@ def make_router(config) -> APIRouter:
                                     status_val = "interrupted"
                             except Exception:
                                 pass
-
-                    raw_agent_name = raw.get("agent_name", "")
-                    raw_agent_uuid = raw.get("agent_uuid") # May not exist in old sessions
-                    # Apply filters
                     if status is not None and status_val != status:
                         continue
-                    if agent_name is not None and raw_agent_name != agent_name:
-                        continue
-                    if agent_uuid is not None and raw_agent_uuid != agent_uuid:
-                        continue
-
-                    session_obj = Session(
-                        session_id=raw.get("session_id", d.name),
+                    sessions.append(Session(
+                        session_id=entry.id,
                         parent_session_id=raw.get("parent_session_id"),
                         agent_name=raw.get("agent_name", ""),
                         agent_uuid=raw.get("agent_uuid"),
@@ -523,18 +583,74 @@ def make_router(config) -> APIRouter:
                         metadata=_parse_session_metadata(raw.get("metadata", {})),
                         hitl_requests=raw.get("hitl_requests", []),
                         error=raw.get("error"),
-                    )
+                    ))
+                except Exception as exc:
+                    logger.debug("Failed to read session metadata %s: %s", entry.id, exc)
+            return sessions
 
-                    sessions.append(session_obj)
+        # Fallback: iterdir when no index available (root + sub_sessions)
+        def _append_session(raw: dict, fallback_id: str, root_dir: Path) -> None:
+            status_val = raw.get("status", "unknown")
+            if status_val == "running":
+                is_cancel_active = (root_dir / "cancel.signal").exists()
+                if not is_cancel_active:
+                    try:
+                        updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
+                        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+                        if age > STALE_SESSION_THRESHOLD_SECONDS:
+                            status_val = "interrupted"
+                    except Exception:
+                        pass
+            raw_agent_name = raw.get("agent_name", "")
+            raw_agent_uuid = raw.get("agent_uuid")
+            if status is not None and status_val != status:
+                return
+            if agent_name is not None and raw_agent_name != agent_name:
+                return
+            if agent_uuid is not None and raw_agent_uuid != agent_uuid:
+                return
+            sessions.append(Session(
+                session_id=raw.get("session_id", fallback_id),
+                parent_session_id=raw.get("parent_session_id"),
+                agent_name=raw.get("agent_name", ""),
+                agent_uuid=raw.get("agent_uuid"),
+                created_at=raw.get("created_at", ""),
+                updated_at=raw.get("updated_at", ""),
+                status=status_val,
+                active=False,
+                metadata=_parse_session_metadata(raw.get("metadata", {})),
+                hitl_requests=raw.get("hitl_requests", []),
+                error=raw.get("error"),
+            ))
+
+        for d in sorted(sessions_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            meta_path = d / "session.json"
+            if meta_path.exists():
+                try:
+                    raw = json.loads(meta_path.read_text())
+                    _append_session(raw, d.name, d)
                 except Exception as exc:
                     logger.debug("Failed to read session metadata %s: %s", d, exc)
+            # Also include child sessions from sub_sessions/
+            sub_dir = d / "sub_sessions"
+            if sub_dir.is_dir():
+                for sub_file in sorted(sub_dir.iterdir()):
+                    if sub_file.suffix == ".json" and sub_file.is_file():
+                        try:
+                            raw = json.loads(sub_file.read_text())
+                            _append_session(raw, sub_file.stem, d)
+                        except Exception as exc:
+                            logger.debug("Failed to read child session %s: %s", sub_file, exc)
 
         return sessions
 
     @router.get("/sessions/{session_id}", response_model=Session)
-    async def get_session(session_id: str) -> Session:
-        session_dir = _guard_session_id(sessions_dir, session_id)
-        meta_path = session_dir / "session.json"
+    async def get_session(request: Request, session_id: str) -> Session:
+        _guard_session_id(sessions_dir, session_id)
+        index = _get_index(request)
+        meta_path = _session_data_path(session_id, index)
         if not meta_path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
         try:
@@ -545,7 +661,8 @@ def make_router(config) -> APIRouter:
         # Detect interrupted status
         status_val = raw.get("status", "unknown")
         if status_val == "running":
-            is_cancel_active = (session_dir / "cancel.signal").exists()
+            root_d = _root_dir(session_id, index)
+            is_cancel_active = (root_d / "cancel.signal").exists()
             if not is_cancel_active:
                 try:
                     updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
@@ -571,35 +688,64 @@ def make_router(config) -> APIRouter:
         )
 
     @router.delete("/sessions/{session_id}", status_code=204)
-    async def delete_session(session_id: str) -> None:
-        d = _guard_session_id(sessions_dir, session_id)
-        if not d.exists():
-            raise HTTPException(status_code=404, detail="Session not found")
-        try:
-            shutil.rmtree(d)
-        except (FileNotFoundError, OSError) as e:
-            logger.warning("Failed to delete session %s: %s", session_id, e)
+    async def delete_session(request: Request, session_id: str) -> None:
+        _guard_session_id(sessions_dir, session_id)
+        index = _get_index(request)
+        entry = index.get(session_id) if index else None
+
+        if entry and entry.root != session_id:
+            # Child session: delete single .json file
+            child_path = _session_data_path(session_id, index)
+            if not child_path.exists():
+                raise HTTPException(status_code=404, detail="Session not found")
+            try:
+                child_path.unlink()
+            except (FileNotFoundError, OSError) as e:
+                logger.warning("Failed to delete child session %s: %s", session_id, e)
+        else:
+            # Root session: rmtree the whole directory (including sub_sessions/)
+            d = sessions_dir / session_id
+            if not d.exists():
+                raise HTTPException(status_code=404, detail="Session not found")
+            # Also remove all children from the index
+            if index:
+                for child in index.children_of(session_id):
+                    index.remove(child.id)
+            try:
+                shutil.rmtree(d)
+            except (FileNotFoundError, OSError) as e:
+                logger.warning("Failed to delete session %s: %s", session_id, e)
+
+        if index:
+            index.remove(session_id)
         logger.info("Deleted session %s", session_id)
 
     @router.post("/sessions/{session_id}/stop")
     async def stop_session(request: Request, session_id: str, force: bool = False) -> dict:
-        # Validate session exists before writing signal
-        session_dir = _guard_session_id(sessions_dir, session_id)
-        if not (session_dir / "session.json").exists():
+        _guard_session_id(sessions_dir, session_id)
+        index = _get_index(request)
+        # Validate session exists
+        meta_path = _session_data_path(session_id, index)
+        if not meta_path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
         store = request.app.state.file_store
-        signal_path = f"{session_id}/cancel.signal"
+        # Cancel signal always goes to root
+        root_id = _root_dir(session_id, index).name
+        signal_path = SessionIndex.signal_relpath(session_id, root_id)
         payload = json.dumps({"force": force}).encode()
         await store.write(signal_path, payload)
         # Update session status immediately so the UI sees "cancelled"
-        # even before the runtime checks the cancel signal.
-        session_path = f"{session_id}/session.json"
+        _entry = index.get(session_id) if index else None
+        session_relpath = SessionIndex.session_relpath(
+            session_id,
+            _entry.root if _entry and _entry.root != session_id else None,
+        )
         try:
-            raw = await store.read(session_path)
+            raw = await store.read(session_relpath)
             session_data = json.loads(raw.decode())
             if session_data.get("status") == "running":
                 session_data["status"] = "cancelled"
-                await store.write(session_path, json.dumps(session_data, ensure_ascii=False).encode())
+                await store.write(session_relpath, json.dumps(session_data, ensure_ascii=False).encode())
         except Exception:
             pass  # cancel.signal is the primary mechanism; this is best-effort
         return {"status": "cancelled", "force": force, "session_id": session_id}
@@ -611,7 +757,9 @@ def make_router(config) -> APIRouter:
         background_tasks: BackgroundTasks,
         body: ResumeRequest | None = None,
     ) -> dict:
-        session_path = _guard_session_id(sessions_dir, session_id) / "session.json"
+        _guard_session_id(sessions_dir, session_id)
+        index = _get_index(request)
+        session_path = _session_data_path(session_id, index)
 
         if not session_path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
@@ -621,8 +769,8 @@ def make_router(config) -> APIRouter:
 
         # Apply the same interrupted detection as list_sessions
         if current_status == "running":
-            session_dir_resume = _guard_session_id(sessions_dir, session_id)
-            is_cancel_active = (session_dir_resume / "cancel.signal").exists()
+            root_d = _root_dir(session_id, index)
+            is_cancel_active = (root_d / "cancel.signal").exists()
             if not is_cancel_active:
                 try:
                     updated_at = datetime.fromisoformat(session_raw.get("updated_at", ""))
@@ -646,12 +794,14 @@ def make_router(config) -> APIRouter:
         # For cancelled/failed/interrupted: resume with optional user input
         if current_status in ("cancelled", "failed", "interrupted"):
             user_input = (body.user_input if body else "") or ""
+            _idx = _get_index(request)
             background_tasks.add_task(
                 _resume_session_task, session_id, agent_name, user_input, config,
                 broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
                 channel_manager=cm,
                 agent_uuid=agent_uuid,
                 mcp_pool=mcp_pool,
+                session_index=_idx,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -664,21 +814,27 @@ def make_router(config) -> APIRouter:
                 detail=f"HITL request(s) not yet resolved ({len(pending)} pending). Call POST /hitl/{{hitl_id}}/resolve first",
             )
 
+        _idx = _get_index(request)
         background_tasks.add_task(
             _resume_session_task, session_id, agent_name, "", config,
             broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
             channel_manager=cm,
             agent_uuid=agent_uuid,
             mcp_pool=mcp_pool,
+            session_index=_idx,
         )
         return {"status": "resuming", "session_id": session_id}
 
-    def _guard_workspace_path(session_id: str, subpath: str = "") -> Path:
-        """Resolve workspace path and guard against traversal."""
-        session_dir = _guard_session_id(sessions_dir, session_id)
-        if not (session_dir / "session.json").exists():
+    def _guard_workspace_path(session_id: str, subpath: str = "", index=None) -> Path:
+        """Resolve workspace path and guard against traversal.
+
+        Workspaces are always under the root session directory.
+        """
+        _guard_session_id(sessions_dir, session_id)
+        root_d = _root_dir(session_id, index)
+        if not (root_d / "session.json").exists():
             raise HTTPException(status_code=404, detail="Session not found")
-        workspace = session_dir / "workspaces"
+        workspace = root_d / "workspaces"
         if not subpath:
             return workspace
         target = (workspace / subpath).resolve()
@@ -688,11 +844,13 @@ def make_router(config) -> APIRouter:
 
     @router.get("/sessions/{session_id}/files")
     async def list_files(
+        request: Request,
         session_id: str,
         path: str = Query(default=""),
     ) -> dict:
         from everstaff.schema.api_models import FileInfo, FileListResponse
-        target = _guard_workspace_path(session_id, path)
+        index = _get_index(request)
+        target = _guard_workspace_path(session_id, path, index=index)
         if not target.exists() or not target.is_dir():
             return FileListResponse(files=[], path=path).model_dump()
         files = []
@@ -708,6 +866,7 @@ def make_router(config) -> APIRouter:
 
     @router.get("/sessions/{session_id}/files/{file_path:path}")
     async def download_file(
+        request: Request,
         session_id: str,
         file_path: str,
         background_tasks: BackgroundTasks,
@@ -717,8 +876,9 @@ def make_router(config) -> APIRouter:
         import tempfile
         import shutil
         import os
-        
-        target = _guard_workspace_path(session_id, file_path)
+
+        index = _get_index(request)
+        target = _guard_workspace_path(session_id, file_path, index=index)
         if not target.exists():
             raise HTTPException(status_code=404, detail="File not found")
         

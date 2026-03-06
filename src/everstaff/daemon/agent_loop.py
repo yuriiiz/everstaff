@@ -66,6 +66,7 @@ class AgentLoop:
         triggers: list[Any] | None = None,           # list[TriggerConfig]
         agent_hitl_channels: list[Any] | None = None, # list[HitlChannelRef]
         channel_registry: dict[str, Any] | None = None, # dict[name → HitlChannel]
+        session_index: Any = None,
     ) -> None:
         self._agent_name = agent_name
         self._bus = event_bus
@@ -83,6 +84,7 @@ class AgentLoop:
         self._triggers = triggers or []
         self._agent_hitl_channels = agent_hitl_channels or []
         self._channel_registry = channel_registry or {}
+        self._session_index = session_index
 
     # ------------------------------------------------------------------
     # Properties
@@ -324,6 +326,13 @@ class AgentLoop:
                 "hitl_requests": [],
             }
             (session_dir / "session.json").write_text(json.dumps(data, indent=2))
+            if self._session_index is not None:
+                from everstaff.session.index import IndexEntry
+                self._session_index.upsert(IndexEntry(
+                    id=session_id, root=session_id, parent=None,
+                    agent=self._agent_name, agent_uuid=None,
+                    status="running", created_at=now, updated_at=now,
+                ))
         except Exception as exc:
             logger.warning("[Loop:%s] Failed to write loop session %s: %s", self._agent_name, session_id, exc)
 
@@ -349,6 +358,15 @@ class AgentLoop:
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
+            if self._session_index is not None:
+                from everstaff.session.index import IndexEntry
+                self._session_index.upsert(IndexEntry(
+                    id=session_id, root=session_id, parent=None,
+                    agent=self._agent_name, agent_uuid=None,
+                    status="completed",
+                    created_at=data.get("created_at", ""),
+                    updated_at=data["updated_at"],
+                ))
         except Exception as exc:
             logger.warning("[Loop:%s] Failed to finish loop session %s: %s", self._agent_name, session_id, exc)
 

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from everstaff.protocols import FileStore
     from everstaff.schema.api_models import HitlResolution
+
+logger = logging.getLogger(__name__)
 
 
 class HitlNotFoundError(Exception):
@@ -38,6 +41,46 @@ def _is_expired(hitl_item: dict) -> bool:
         return False
 
 
+async def _resolve_in_origin(
+    hitl_id: str,
+    origin_session_id: str,
+    resolution_dump: dict,
+    *,
+    file_store: "FileStore",
+    session_index=None,
+) -> None:
+    """Best-effort: also mark the HITL as resolved in the origin (child) session."""
+    from everstaff.session.index import SessionIndex
+
+    # Resolve root for path
+    origin_root = None
+    if session_index:
+        entry = session_index.get(origin_session_id)
+        if entry and entry.root != origin_session_id:
+            origin_root = entry.root
+
+    origin_path = SessionIndex.session_relpath(origin_session_id, origin_root)
+    try:
+        raw = await file_store.read(origin_path)
+        origin_data = json.loads(raw.decode())
+    except Exception:
+        return
+
+    changed = False
+    for item in origin_data.get("hitl_requests", []):
+        if item.get("hitl_id") == hitl_id and item.get("status") == "pending":
+            item["status"] = "resolved"
+            item["response"] = resolution_dump
+            changed = True
+            break
+
+    if changed:
+        await file_store.write(
+            origin_path,
+            json.dumps(origin_data, ensure_ascii=False, indent=2).encode(),
+        )
+
+
 async def resolve_hitl(
     session_id: str,
     hitl_id: str,
@@ -48,6 +91,8 @@ async def resolve_hitl(
     permission_pattern: str | None = None,
     *,
     file_store: "FileStore",
+    root_session_id: str | None = None,
+    session_index=None,
 ) -> "HitlResolution":
     """The one and only resolve implementation.
 
@@ -55,8 +100,9 @@ async def resolve_hitl(
     Raises HitlNotFoundError, HitlAlreadyResolvedError, HitlExpiredError.
     """
     from everstaff.schema.api_models import HitlResolution
+    from everstaff.session.index import SessionIndex
 
-    session_path = f"{session_id}/session.json"
+    session_path = SessionIndex.session_relpath(session_id, root_session_id)
     raw = await file_store.read(session_path)
     session_data = json.loads(raw.decode())
 
@@ -90,6 +136,18 @@ async def resolve_hitl(
         session_path,
         json.dumps(session_data, ensure_ascii=False, indent=2).encode(),
     )
+
+    # If this HITL was escalated from a child session, also resolve the
+    # child's copy so the UI shows it as resolved everywhere.
+    origin_sid = target.get("origin_session_id", "")
+    if origin_sid and origin_sid != session_id:
+        try:
+            await _resolve_in_origin(
+                hitl_id, origin_sid, resolution.model_dump(mode="json"),
+                file_store=file_store, session_index=session_index,
+            )
+        except Exception:
+            logger.debug("Failed to resolve origin HITL %s in %s", hitl_id, origin_sid, exc_info=True)
 
     return resolution
 

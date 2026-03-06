@@ -23,6 +23,7 @@ class FileMemoryStore:
         *,
         base_dir: "str | Path | None" = None,  # legacy alias
         memory_store: "FileStore | None" = None,
+        index: "Any | None" = None,  # SessionIndex (optional)
     ) -> None:
         if base_dir is not None and store_or_dir is None:
             store_or_dir = base_dir
@@ -40,6 +41,11 @@ class FileMemoryStore:
         # Memory store (optional, for L1/L2/L3)
         self._memory_store: "FileStore | None" = memory_store
 
+        # Path overrides for child sessions (session_id -> relpath)
+        self._path_overrides: dict[str, str] = {}
+        # Session index for fast listing (optional)
+        self._index = index
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -53,8 +59,12 @@ class FileMemoryStore:
     # L0: Session messages (unchanged, uses _session_store)
     # ------------------------------------------------------------------
 
+    def set_session_path(self, session_id: str, relpath: str) -> None:
+        """Register a custom path for a child session."""
+        self._path_overrides[session_id] = relpath
+
     def _session_path(self, session_id: str) -> str:
-        return f"{session_id}/session.json"
+        return self._path_overrides.get(session_id, f"{session_id}/session.json")
 
     async def load_stats(self, session_id: str) -> "SessionStats | None":
         """Load previously-saved SessionStats from the session file, or return None."""
@@ -112,6 +122,7 @@ class FileMemoryStore:
         agent_name: str | None = None,
         agent_uuid: str | None = None,
         parent_session_id: str | None = None,
+        root_session_id: str | None = None,
         stats: "SessionStats | None" = None,
         status: str | None = None,
         system_prompt: str | None = None,
@@ -180,13 +191,18 @@ class FileMemoryStore:
                 "trigger": resolved_trigger,
             }
 
+        resolved_root = root_session_id or existing_meta.get("root_session_id")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        created_at = existing_meta.get("created_at", now_iso)
+
         payload: dict[str, Any] = {
             "session_id": session_id,
             "parent_session_id": existing_meta.get("parent_session_id", parent_session_id),
+            "root_session_id": resolved_root,
             "agent_name": existing_meta.get("agent_name", agent_name),
             "agent_uuid": existing_meta.get("agent_uuid", agent_uuid),
-            "created_at": existing_meta.get("created_at", datetime.now(timezone.utc).isoformat()),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at,
+            "updated_at": now_iso,
             "status": status or existing_meta.get("status", "running"),
             "metadata": metadata,
             "messages": [m.to_dict() for m in messages],
@@ -194,6 +210,23 @@ class FileMemoryStore:
             "extra_permissions": extra_permissions if extra_permissions is not None else existing_meta.get("extra_permissions", []),
         }
         await self._session_store.write(path, json.dumps(payload, ensure_ascii=False, indent=2).encode())
+
+        # Upsert session index
+        if self._index is not None:
+            try:
+                from everstaff.session.index import IndexEntry
+                self._index.upsert(IndexEntry(
+                    id=session_id,
+                    root=resolved_root or session_id,
+                    parent=payload["parent_session_id"],
+                    agent=payload["agent_name"] or "",
+                    agent_uuid=payload["agent_uuid"],
+                    status=payload["status"],
+                    created_at=created_at,
+                    updated_at=now_iso,
+                ))
+            except Exception:
+                logger.debug("SessionIndex upsert failed for %s", session_id, exc_info=True)
 
     async def save_workflow(self, session_id: str, record: Any) -> None:
         """Upsert a WorkflowRecord into the session's 'workflows' array."""

@@ -41,6 +41,7 @@ class AgentContext:
     system_prompt: str | None = None
     session_id: str = field(default_factory=lambda: str(uuid4()))
     parent_session_id: str | None = None
+    root_session_id: str | None = None  # root of the session tree; == session_id for roots
     hooks: list[Hook] = field(default_factory=list)
     tracer: TracingBackend = field(default_factory=NullTracer)
     cancellation: CancellationEvent = field(default_factory=CancellationEvent)

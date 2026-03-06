@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from everstaff.core.context import AgentContext
+from everstaff.session.index import SessionIndex as _SI
 from everstaff.tools.pipeline import ToolCallContext
 from everstaff.protocols import HumanApprovalRequired, LLMClient, Message, TraceEvent
 from everstaff.utils.workspace_diff import snapshot_workspace, diff_snapshots, guess_mime
@@ -148,13 +149,18 @@ class AgentRuntime:
             except Exception as e:
                 logger.warning("Hook %s.%s raised: %s", type(hook).__name__, method, e)
 
+    async def _save_session(self, session_id: str, messages: list[Message], **kwargs) -> None:
+        """Wrapper around memory.save() that injects root_session_id."""
+        kwargs.setdefault("root_session_id", self._ctx.root_session_id)
+        await self._ctx.memory.save(session_id, messages, **kwargs)
+
     async def _is_cancelled(self) -> bool:
         """Check cancellation: file signal (stateless) or in-process flag."""
         if self._ctx.cancellation.is_cancelled:
             return True
         store = self._ctx.file_store
         if store is not None:
-            signal_path = f"{self._ctx.session_id}/cancel.signal"
+            signal_path = _SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id)
             try:
                 return await store.exists(signal_path)
             except Exception:
@@ -230,7 +236,7 @@ class AgentRuntime:
             title = (response.content or "").strip()
             if title:
                 existing_messages = await self._ctx.memory.load(self._ctx.session_id)
-                await self._ctx.memory.save(
+                await self._save_session(
                     self._ctx.session_id,
                     existing_messages,
                     agent_name=self._ctx.agent_name,
@@ -261,7 +267,7 @@ class AgentRuntime:
         # Load existing messages before creating the stub so we don't overwrite them
         messages = await self._ctx.memory.load(self._ctx.session_id)
         # Create session file immediately so it's visible during execution
-        await self._ctx.memory.save(
+        await self._save_session(
             self._ctx.session_id,
             messages,
             agent_name=self._ctx.agent_name,
@@ -288,7 +294,7 @@ class AgentRuntime:
         if user_input is not None:
             messages.append(Message(role="user", content=user_input, created_at=datetime.now(timezone.utc).isoformat()))
             # Persist user message immediately so it survives page refresh
-            await self._ctx.memory.save(
+            await self._save_session(
                 self._ctx.session_id,
                 messages,
                 agent_name=self._ctx.agent_name,
@@ -312,7 +318,7 @@ class AgentRuntime:
         try:
             while True:
                 if await self._is_cancelled():
-                    await self._ctx.memory.save(
+                    await self._save_session(
                         self._ctx.session_id,
                         messages,
                         agent_name=self._ctx.agent_name,
@@ -328,7 +334,7 @@ class AgentRuntime:
                     # Clean up cancel signal file
                     if self._ctx.file_store is not None:
                         try:
-                            await self._ctx.file_store.delete(f"{self._ctx.session_id}/cancel.signal")
+                            await self._ctx.file_store.delete(_SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id))
                         except Exception:
                             pass
                     yield SessionEnd(response=_STOPPED)
@@ -417,7 +423,7 @@ class AgentRuntime:
                 # Check cancel after LLM completes — covers the window
                 # where the user clicked stop while LLM was streaming.
                 if await self._is_cancelled():
-                    await self._ctx.memory.save(
+                    await self._save_session(
                         self._ctx.session_id,
                         messages,
                         agent_name=self._ctx.agent_name,
@@ -432,7 +438,7 @@ class AgentRuntime:
                     }, duration_ms=total_ms)
                     if self._ctx.file_store is not None:
                         try:
-                            await self._ctx.file_store.delete(f"{self._ctx.session_id}/cancel.signal")
+                            await self._ctx.file_store.delete(_SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id))
                         except Exception:
                             pass
                     yield SessionEnd(response=_STOPPED)
@@ -452,7 +458,7 @@ class AgentRuntime:
                         thinking=response.thinking,
                         created_at=datetime.now(timezone.utc).isoformat(),
                     ))
-                    await self._ctx.memory.save(
+                    await self._save_session(
                         self._ctx.session_id, messages,
                         agent_name=self._ctx.agent_name,
                         agent_uuid=self._ctx.agent_uuid,
@@ -475,7 +481,7 @@ class AgentRuntime:
                     # Clean up cancel signal file
                     if self._ctx.file_store is not None:
                         try:
-                            await self._ctx.file_store.delete(f"{self._ctx.session_id}/cancel.signal")
+                            await self._ctx.file_store.delete(_SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id))
                         except Exception:
                             pass
                     yield SessionEnd(response=response.content or "")
@@ -501,7 +507,7 @@ class AgentRuntime:
                 )
                 messages.append(assistant_msg)
                 # Incremental save: persist state after each LLM turn
-                await self._ctx.memory.save(
+                await self._save_session(
                     self._ctx.session_id,
                     messages,
                     agent_name=self._ctx.agent_name,
@@ -515,7 +521,7 @@ class AgentRuntime:
 
                 for tool_call in response.tool_calls:
                     if await self._is_cancelled():
-                        await self._ctx.memory.save(
+                        await self._save_session(
                             self._ctx.session_id,
                             messages,
                             agent_name=self._ctx.agent_name,
@@ -531,7 +537,7 @@ class AgentRuntime:
                         # Clean up cancel signal file
                         if self._ctx.file_store is not None:
                             try:
-                                await self._ctx.file_store.delete(f"{self._ctx.session_id}/cancel.signal")
+                                await self._ctx.file_store.delete(_SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id))
                             except Exception:
                                 pass
                         yield SessionEnd(response=_STOPPED)
@@ -671,14 +677,15 @@ class AgentRuntime:
                 import json as _json_mod
                 _store = getattr(self._ctx.memory, "_session_store", None) or getattr(self._ctx.memory, "_store", None)
                 if _store:
-                    raw = await _store.read(f"{self._ctx.session_id}/session.json")
+                    _sp = _SI.session_relpath(self._ctx.session_id, self._ctx.root_session_id)
+                    raw = await _store.read(_sp)
                     existing_hitls = _json_mod.loads(raw.decode()).get("hitl_requests", [])
             except Exception:
                 pass
             new_ids = {h["hitl_id"] for h in new_hitl_data}
             merged_hitls = [h for h in existing_hitls if h.get("hitl_id") not in new_ids] + new_hitl_data
 
-            await self._ctx.memory.save(
+            await self._save_session(
                 self._ctx.session_id,
                 messages,
                 agent_name=self._ctx.agent_name,
@@ -730,7 +737,7 @@ class AgentRuntime:
         except Exception as e:
             stats.record_error()
             try:
-                await self._ctx.memory.save(
+                await self._save_session(
                     self._ctx.session_id,
                     messages,
                     agent_name=self._ctx.agent_name,

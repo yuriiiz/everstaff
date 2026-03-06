@@ -52,6 +52,7 @@ async def test_resolve_child_hitl_calls_canonical():
             decision="approved",
             comment=None,
             file_store=file_store,
+            root_session_id=None,
         )
 
 
@@ -117,6 +118,7 @@ async def test_resolve_child_hitl_legacy_no_hitl_id():
             decision="approved",
             comment=None,
             file_store=file_store,
+            root_session_id=None,
         )
         mock.assert_any_call(
             session_id="child-sess",
@@ -124,6 +126,7 @@ async def test_resolve_child_hitl_legacy_no_hitl_id():
             decision="approved",
             comment=None,
             file_store=file_store,
+            root_session_id=None,
         )
 
 

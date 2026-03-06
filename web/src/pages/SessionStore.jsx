@@ -37,11 +37,13 @@ export default function SessionStore() {
     const [newFilesCount, setNewFilesCount] = useState(0);
     const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
     const wsRef = useRef(null);
+    const globalWsRef = useRef(null);
     const sseRef = useRef(null);
     const [isHitlModalOpen, setIsHitlModalOpen] = useState(false);
     const [previewFile, setPreviewFile] = useState(null);
     const scrollRef = useRef(null);
     const clientIdRef = useRef(crypto.randomUUID());
+    const skipFetchOnConnectRef = useRef(false);
     const [searchParams] = useSearchParams();
     const { sessionId } = useParams();
     const navigate = useNavigate();
@@ -222,7 +224,7 @@ export default function SessionStore() {
                 console.error("Global WS error:", e);
             }
         };
-        wsRef.current = ws;
+        globalWsRef.current = ws;
 
         // Initial HITL fetch
         fetch('/api/hitl')
@@ -258,8 +260,19 @@ export default function SessionStore() {
             console.log(`[debug] WS Connected to session: ${sessionId}`);
             setIsConnected(true);
             setIsConnecting(false);
-            // Refresh messages immediately on connection/reconnection to sync missed content
-            fetchMessages(sessionId);
+            // Skip fetch for brand-new sessions to preserve the optimistic user message
+            // (session.json is empty at this point; streaming WS events will populate messages)
+            if (skipFetchOnConnectRef.current) {
+                skipFetchOnConnectRef.current = false;
+            } else {
+                // Refresh messages on connection/reconnection to sync missed content
+                fetchMessages(sessionId);
+            }
+            // Refresh HITL requests to catch events missed during WS connect gap
+            fetch('/api/hitl')
+                .then(res => res.json())
+                .then(data => setHitlRequests(data))
+                .catch(() => {});
         };
 
         ws.onmessage = (event) => {
@@ -684,6 +697,10 @@ export default function SessionStore() {
                 });
                 const data = await res.json();
                 if (res.ok && data.session_id) {
+                    // Skip the fetchMessages call in the WS onopen handler
+                    // to prevent the optimistic user message from being overwritten
+                    // by empty server data (session.json hasn't saved messages yet).
+                    skipFetchOnConnectRef.current = true;
                     // Navigate immediately to the new session
                     const newSessionStub = {
                         ...data,

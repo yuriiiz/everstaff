@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from everstaff.api.hitl import _resolve_hitl_internal
 from everstaff.api.sessions import _resume_session_task
 from everstaff.channels.websocket import WebSocketChannel
+from everstaff.session.index import SessionIndex
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +117,12 @@ def make_router(config) -> APIRouter:
                     agent_uuid = ""
                     _has_pending_hitl = False
                     _session_status = ""
+                    _index = getattr(app.state, "session_index", None)
+                    _ws_entry = _index.get(session_id) if _index else None
+                    _ws_root = _ws_entry.root if _ws_entry and _ws_entry.root != session_id else None
                     try:
                         store = app.state.file_store
-                        raw_bytes = await store.read(f"{session_id}/session.json")
+                        raw_bytes = await store.read(SessionIndex.session_relpath(session_id, _ws_root))
                         session_raw = _json.loads(raw_bytes)
                         agent_name = session_raw.get("agent_name", "")
                         agent_uuid = session_raw.get("agent_uuid", "")
@@ -161,7 +165,7 @@ def make_router(config) -> APIRouter:
                         try:
                             store = app.state.file_store
                             await store.write(
-                                f"{session_id}/cancel.signal",
+                                SessionIndex.signal_relpath(session_id, _ws_root),
                                 _json.dumps({"force": False}).encode(),
                             )
                             logger.info("[WS] auto-stopping running session before resume  session=%s", _sid)
@@ -179,6 +183,8 @@ def make_router(config) -> APIRouter:
                             channel_manager=cm,
                             agent_uuid=agent_uuid,
                             mcp_pool=mcp_pool,
+                            root_session_id=_ws_root,
+                            session_index=_index,
                         )
                     )
 

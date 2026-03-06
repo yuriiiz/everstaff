@@ -31,6 +31,7 @@ class DelegateTaskTool:
         parent_cancellation: CancellationEvent | None = None,
         caller_span_id: str | None = None,
         parent_hooks: list[Hook] | None = None,
+        root_session_id: str | None = None,
     ) -> None:
         self._registry: dict[str, SubAgentSpec] = {s.name: s for s in specs}
         self._env = env
@@ -39,6 +40,7 @@ class DelegateTaskTool:
         self._parent_cancellation = parent_cancellation or CancellationEvent()
         self._caller_span_id = caller_span_id
         self._parent_hooks: list[Hook] = parent_hooks or []
+        self._root_session_id = root_session_id
 
     def register(self, name: str, spec: SubAgentSpec) -> None:
         """Dynamically add a new sub-agent. enum updates automatically (definition is a property)."""
@@ -137,11 +139,14 @@ class DelegateTaskTool:
         """Resolve child HITL via canonical function, then insert tool messages for resume."""
         import json
         from everstaff.api.sessions import _format_decision_message
+        from everstaff.session.index import SessionIndex
 
         file_store = self._env.build_file_store()
         hitl_id = hitl_response.get("hitl_id", "")
         decision = hitl_response.get("decision", "")
         comment = hitl_response.get("comment")
+
+        session_path = SessionIndex.session_relpath(session_id, self._root_session_id)
 
         # Step 1: Use canonical resolve for individual HITL (if hitl_id provided)
         if hitl_id:
@@ -152,12 +157,12 @@ class DelegateTaskTool:
                     decision=decision,
                     comment=comment,
                     file_store=file_store,
+                    root_session_id=self._root_session_id,
                 )
             except Exception:
                 pass  # Swallow -- legacy callers may pass invalid hitl_id
         else:
             # Legacy path: resolve ALL pending HITLs in the session
-            session_path = f"{session_id}/session.json"
             try:
                 raw = await file_store.read(session_path)
                 session_data = json.loads(raw.decode())
@@ -172,12 +177,12 @@ class DelegateTaskTool:
                             decision=decision,
                             comment=comment,
                             file_store=file_store,
+                            root_session_id=self._root_session_id,
                         )
                     except Exception:
                         pass
 
         # Step 2: Insert tool messages for resume
-        session_path = f"{session_id}/session.json"
         try:
             raw = await file_store.read(session_path)
             session_data = json.loads(raw.decode())
@@ -214,7 +219,8 @@ class DelegateTaskTool:
         4. Run with input_text=None so the LLM continues from the HITL tool response.
         """
         import json
-        session_path = f"{resume_session_id}/session.json"
+        from everstaff.session.index import SessionIndex
+        session_path = SessionIndex.session_relpath(resume_session_id, self._root_session_id)
         try:
             file_store = self._env.build_file_store()
             raw = await file_store.read(session_path)
@@ -255,6 +261,7 @@ class DelegateTaskTool:
             parent_cancellation=self._parent_cancellation,
             caller_span_id=self._caller_span_id,
             session_id=resume_session_id,
+            root_session_id=self._root_session_id,
         ).build()
 
         try:
@@ -314,6 +321,7 @@ class DelegateTaskTool:
             parent_session_id=self._parent_session_id,
             parent_cancellation=self._parent_cancellation,
             caller_span_id=self._caller_span_id,
+            root_session_id=self._root_session_id,
         ).build()
 
         try:

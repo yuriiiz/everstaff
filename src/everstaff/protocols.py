@@ -302,6 +302,7 @@ class MemoryStore(Protocol):
         agent_name: str | None = None,
         agent_uuid: str | None = None,
         parent_session_id: str | None = None,
+        root_session_id: str | None = None,
         stats: Any | None = None,
         status: str | None = None,
         system_prompt: str | None = None,

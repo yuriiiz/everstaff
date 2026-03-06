@@ -41,6 +41,11 @@ class CompressibleMemoryStore:
         self._strategy = strategy
         self._token_threshold = int(max_tokens * compression_ratio)
 
+    def set_session_path(self, session_id: str, relpath: str) -> None:
+        """Forward to inner store if it supports path overrides."""
+        if hasattr(self._store, "set_session_path"):
+            self._store.set_session_path(session_id, relpath)
+
     async def load(self, session_id: str) -> list[Message]:
         return await self._store.load(session_id)
 
