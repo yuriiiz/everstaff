@@ -191,6 +191,12 @@ async def _resume_session_task(
 
     # --- Sandbox path ---
     if config.sandbox.enabled and executor_manager is not None:
+        # Build a session-specific tracer for the IPC handler so trace
+        # events forwarded from the sandbox subprocess are persisted.
+        from everstaff.core.factories import build_file_store as _build_fs, build_tracer as _build_tr
+        _sb_file_store = _build_fs(config.storage, str(sessions_dir))
+        _sb_tracer = _build_tr(config.tracers, session_id, _sb_file_store)
+
         await _run_in_sandbox(
             executor_manager=executor_manager,
             session_id=session_id,
@@ -202,6 +208,7 @@ async def _resume_session_task(
             session_index=session_index,
             agent_name=agent_name,
             agent_uuid=agent_uuid,
+            tracer=_sb_tracer,
         )
         return
 
@@ -390,6 +397,7 @@ async def _run_in_sandbox(
     session_index,
     agent_name: str,
     agent_uuid: str,
+    tracer=None,
 ) -> None:
     """Run agent in sandbox subprocess via ExecutorManager."""
     _sid = session_id[:8]
@@ -404,9 +412,11 @@ async def _run_in_sandbox(
 
     executor = await executor_manager.get_or_create(session_id)
 
-    # Set stream callback on the executor's IPC handler
+    # Set stream callback and tracer on the executor's IPC handler
     if hasattr(executor, '_ipc_handler') and executor._ipc_handler:
         executor._ipc_handler._on_stream_event = _on_stream_event
+        if tracer is not None:
+            executor._ipc_handler._tracer = tracer
 
     try:
         await executor.spawn_agent(

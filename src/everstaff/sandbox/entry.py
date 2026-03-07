@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from everstaff.core.secret_store import SecretStore
+from everstaff.protocols import CancellationEvent
 from everstaff.sandbox.environment import SandboxEnvironment
 from everstaff.sandbox.ipc.unix_socket import UnixSocketChannel
 
@@ -58,11 +59,15 @@ async def sandbox_main(
             workspace_dir=workspace,
         )
 
-        # 3. Register cancel handler
-        _cancelled = asyncio.Event()
+        # 3. Shared cancellation event for the agent call tree
+        cancellation = CancellationEvent()
 
+        # Register cancel handler — triggers CancellationEvent so the
+        # AgentRuntime's polling loop (_is_cancelled) picks it up.
         async def _on_cancel(params):
-            _cancelled.set()
+            force = params.get("force", False) if isinstance(params, dict) else False
+            cancellation.cancel(force=force)
+            logger.info("Cancel received for session %s (force=%s)", session_id, force)
 
         channel.on_push("cancel", _on_cancel)
 
@@ -79,7 +84,7 @@ async def sandbox_main(
             env=env,
             session_id=session_id,
             agent_spec_json=agent_spec_json,
-            cancelled=_cancelled,
+            cancellation=cancellation,
             hitl_resolutions=_hitl_resolutions,
             channel=channel,
             user_input=user_input,
@@ -92,7 +97,7 @@ async def _run_agent(
     env: SandboxEnvironment,
     session_id: str,
     agent_spec_json: str,
-    cancelled: asyncio.Event,
+    cancellation: CancellationEvent,
     hitl_resolutions: asyncio.Queue,
     channel: UnixSocketChannel | None = None,
     user_input: str | None = None,
@@ -102,7 +107,9 @@ async def _run_agent(
     from everstaff.schema.agent_spec import AgentSpec
 
     spec = AgentSpec.model_validate_json(agent_spec_json)
-    builder = AgentBuilder(spec, env, session_id=session_id)
+    builder = AgentBuilder(
+        spec, env, session_id=session_id, parent_cancellation=cancellation,
+    )
     runtime, ctx = await builder.build()
 
     async for event in runtime.run_stream(user_input):

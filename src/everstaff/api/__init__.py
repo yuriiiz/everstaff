@@ -172,13 +172,16 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         from everstaff.sandbox.manager import ExecutorManager
         from everstaff.sandbox.process_sandbox import ProcessSandbox
         from everstaff.core.secret_store import SecretStore
+        from everstaff.core.factories import build_memory_store as _build_memory_store
 
         _secret_store = SecretStore.from_environ()
+        _sandbox_memory = _build_memory_store(config.storage, _sessions_path, config.memory_dir)
 
         def _sandbox_factory():
             return ProcessSandbox(
                 workdir=Path(_sessions_path).expanduser().resolve(),
                 secret_store=_secret_store,
+                memory_store=_sandbox_memory,
                 file_store=_file_store,
             )
 

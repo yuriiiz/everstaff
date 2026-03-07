@@ -123,7 +123,7 @@ async def test_run_agent_forwards_stream_events():
             env=env,
             session_id="s1",
             agent_spec_json='{"agent_name": "test"}',
-            cancelled=asyncio.Event(),
+            cancellation=MagicMock(),
             hitl_resolutions=asyncio.Queue(),
             channel=channel,
             user_input="hello",
@@ -135,6 +135,81 @@ async def test_run_agent_forwards_stream_events():
     assert stream_calls[0][0][1]["type"] == "text_delta"
     assert stream_calls[0][0][1]["session_id"] == "s1"
     assert stream_calls[1][0][1]["type"] == "session_end"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_passes_cancellation_to_builder():
+    """_run_agent should pass the cancellation event to AgentBuilder as parent_cancellation."""
+    from everstaff.protocols import CancellationEvent
+
+    cancellation = CancellationEvent()
+
+    mock_runtime = AsyncMock()
+
+    async def fake_stream(*args, **kwargs):
+        if False:
+            yield  # make it an async generator
+
+    mock_runtime.run_stream = fake_stream
+    mock_ctx = AsyncMock()
+
+    with patch("everstaff.builder.agent_builder.AgentBuilder") as MockBuilder:
+        MockBuilder.return_value.build = AsyncMock(return_value=(mock_runtime, mock_ctx))
+        env = MagicMock()
+        await _run_agent(
+            env=env,
+            session_id="s1",
+            agent_spec_json='{"agent_name": "test"}',
+            cancellation=cancellation,
+            hitl_resolutions=asyncio.Queue(),
+            channel=None,
+            user_input="hi",
+        )
+
+    # Verify AgentBuilder was constructed with parent_cancellation
+    call_kwargs = MockBuilder.call_args
+    assert call_kwargs.kwargs.get("parent_cancellation") is cancellation
+
+
+@pytest.mark.asyncio
+async def test_cancel_handler_triggers_cancellation_event(tmp_path):
+    """Cancel push handler should call cancel() on the shared CancellationEvent."""
+    mock_channel = MagicMock()
+    mock_channel.connect = AsyncMock()
+    mock_channel.send_request = AsyncMock(return_value={"secrets": {}})
+    mock_channel.close = AsyncMock()
+
+    # Capture the cancel handler registered via on_push
+    cancel_handler = None
+
+    def capture_on_push(method, handler):
+        nonlocal cancel_handler
+        if method == "cancel":
+            cancel_handler = handler
+
+    mock_channel.on_push = MagicMock(side_effect=capture_on_push)
+
+    with patch("everstaff.sandbox.entry.UnixSocketChannel", return_value=mock_channel), \
+         patch("everstaff.sandbox.entry._run_agent", new_callable=AsyncMock) as mock_run:
+        await sandbox_main(
+            socket_path="/tmp/test.sock",
+            token="t",
+            session_id="s1",
+            agent_spec_json='{"name":"test"}',
+            workspace_dir=str(tmp_path),
+        )
+
+    assert cancel_handler is not None, "cancel handler should have been registered"
+
+    # Verify the cancellation event was passed to _run_agent
+    call_kwargs = mock_run.call_args
+    cancellation_event = call_kwargs.kwargs.get("cancellation")
+    assert cancellation_event is not None
+    assert not cancellation_event.is_cancelled
+
+    # Trigger the cancel handler
+    await cancel_handler({"force": False})
+    assert cancellation_event.is_cancelled
 
 
 def test_parse_args_user_input():
