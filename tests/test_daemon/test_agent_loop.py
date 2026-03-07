@@ -351,3 +351,106 @@ async def test_loop_no_hitl_channels_passes_default_cm():
     await loop.run_once()
 
     assert received_cm[0] is default_cm
+
+
+# ---------------------------------------------------------------------------
+# Unified session tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_loop_writes_unified_session(tmp_path):
+    """Single session.json contains think messages + completion."""
+    import json
+    from everstaff.protocols import Message
+    bus = EventBus()
+    bus.subscribe("test-agent")
+    state_store = DaemonStateStore(InMemoryFileStore())
+
+    decision = Decision(action="execute", task_prompt="check email", reasoning="daily", priority="normal")
+    think_msgs = [
+        Message(role="user", content="Trigger received", created_at="2026-01-01T00:00:00Z"),
+        Message(role="assistant", content="thinking...", tool_calls=[{"id":"tc-1","type":"function","function":{"name":"make_decision","arguments":"{}"}}], created_at="2026-01-01T00:00:01Z"),
+        Message(role="tool", content="Decision 'execute' recorded.", tool_call_id="tc-1", created_at="2026-01-01T00:00:01Z"),
+    ]
+
+    class ThinkReturningMessages:
+        called = False
+        async def think(self, agent_name, trigger, pending_events, autonomy_goals):
+            self.called = True
+            return decision, think_msgs
+
+    think = ThinkReturningMessages()
+    runtime = MockRuntime("3 emails found")
+
+    loop = AgentLoop(
+        agent_name="test-agent",
+        event_bus=bus,
+        think_engine=think,
+        runtime_factory=lambda **kw: runtime,
+        daemon_state_store=state_store,
+        agent_uuid="test-uuid",
+        tracer=NullTracer(),
+        sessions_dir=str(tmp_path),
+    )
+
+    await bus.publish(AgentEvent(source="cron", type="cron.daily", target_agent="test-agent"))
+    await loop.run_once()
+
+    # Find the session directory
+    session_dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+    assert len(session_dirs) == 1
+    session_file = session_dirs[0] / "session.json"
+    assert session_file.exists()
+
+    data = json.loads(session_file.read_text())
+    assert data["status"] == "completed"
+    # Should contain: initial trigger msg + 3 think msgs + completion msg = 5
+    assert len(data["messages"]) >= 4
+    # No sub_sessions directory should exist
+    assert not (session_dirs[0] / "sub_sessions").exists()
+
+
+@pytest.mark.asyncio
+async def test_loop_skip_writes_session_with_think_messages(tmp_path):
+    """Skip/defer also produces a session with think messages."""
+    import json
+    from everstaff.protocols import Message
+    bus = EventBus()
+    bus.subscribe("test-agent")
+    state_store = DaemonStateStore(InMemoryFileStore())
+
+    decision = Decision(action="skip", reasoning="nothing to do")
+    think_msgs = [
+        Message(role="user", content="Trigger received", created_at="2026-01-01T00:00:00Z"),
+        Message(role="assistant", content="Nothing needed", created_at="2026-01-01T00:00:01Z"),
+    ]
+
+    class ThinkReturningSkip:
+        called = False
+        async def think(self, agent_name, trigger, pending_events, autonomy_goals):
+            self.called = True
+            return decision, think_msgs
+
+    think = ThinkReturningSkip()
+    runtime = MockRuntime()
+
+    loop = AgentLoop(
+        agent_name="test-agent",
+        event_bus=bus,
+        think_engine=think,
+        runtime_factory=lambda **kw: runtime,
+        daemon_state_store=state_store,
+        agent_uuid="test-uuid",
+        tracer=NullTracer(),
+        sessions_dir=str(tmp_path),
+    )
+
+    await bus.publish(AgentEvent(source="cron", type="tick", target_agent="test-agent"))
+    await loop.run_once()
+
+    session_dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+    assert len(session_dirs) == 1
+    data = json.loads((session_dirs[0] / "session.json").read_text())
+    assert data["status"] == "completed"
+    # Should have think messages even for skip
+    assert len(data["messages"]) >= 3  # initial trigger + 2 think msgs + completion

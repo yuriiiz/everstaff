@@ -46,8 +46,8 @@ class AgentLoop:
     3. **Act** -- if the decision is ``execute``, run the runtime.
     4. **Reflect** -- record the episode and update working memory.
 
-    The loop creates a parent session per cycle.  Think and act are child
-    sessions under that parent, enabling hierarchical tracing.
+    Each cycle produces a single unified session file containing think
+    messages, execution results, and completion summary.
     """
 
     def __init__(
@@ -182,6 +182,8 @@ class AgentLoop:
                      self._agent_name, decision.action, decision.task_prompt[:80] if decision.task_prompt else '-',
                      decision.reasoning[:80] if decision.reasoning else '-')
 
+        self._append_think_messages(loop_session_id, think_messages)
+
         self._tracer.on_event(TraceEvent(
             kind="loop_think_end",
             session_id=loop_session_id,
@@ -201,8 +203,7 @@ class AgentLoop:
 
             scoped_cm = self._resolve_channels(event)
             runtime = self._runtime_factory(
-                session_id=str(uuid4()),
-                parent_session_id=loop_session_id,
+                session_id=loop_session_id,
                 trigger=event,
                 channel_manager=scoped_cm,
             )
@@ -329,6 +330,23 @@ class AgentLoop:
         except Exception as exc:
             logger.warning("[Loop:%s] Failed to write loop session %s: %s", self._agent_name, session_id, exc)
 
+    def _append_think_messages(self, session_id: str, think_messages: list) -> None:
+        """Append think-phase messages to the loop session file."""
+        if self._sessions_dir is None:
+            return
+        meta_path = self._sessions_dir / session_id / "session.json"
+        if not meta_path.exists():
+            return
+        try:
+            data = json.loads(meta_path.read_text())
+            for msg in think_messages:
+                data["messages"].append(msg.to_dict() if hasattr(msg, 'to_dict') else msg)
+            data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            meta_path.write_text(json.dumps(data, indent=2))
+        except Exception as exc:
+            logger.warning("[Loop:%s] Failed to append think messages to session %s: %s",
+                           self._agent_name, session_id, exc)
+
     def _finish_loop_session(self, session_id: str, decision: Any, duration_ms: int, result: str = "") -> None:
         """Append a completion message and mark the loop session as completed."""
         if self._sessions_dir is None:
@@ -347,7 +365,7 @@ class AgentLoop:
                 content = f"Decision: skip\nReason: {decision.reasoning}"
             else:
                 content = f"Decision: {decision.action}\nReason: {decision.reasoning}"
-            data["messages"].append(Message(role="assistant", content=content, created_at=datetime.now(timezone.utc).isoformat()))
+            data["messages"].append({"role": "assistant", "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))

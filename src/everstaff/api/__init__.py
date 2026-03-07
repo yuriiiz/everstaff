@@ -66,7 +66,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 def _daemon_runtime_factory(*, agent_spec=None, **kw):
                     """Build a DaemonRuntimeProxy for the daemon Act phase.
 
-                    Called by AgentLoop with session_id and parent_session_id.
+                    Called by AgentLoop with session_id (the loop session id).
                     Returns a proxy whose .run(prompt) lazily builds and runs
                     a full AgentRuntime via AgentBuilder.
                     """
@@ -74,7 +74,6 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     from everstaff.builder.environment import DefaultEnvironment
 
                     session_id = kw.get("session_id", "")
-                    parent_session_id = kw.get("parent_session_id")
                     trigger = kw.get("trigger")
                     # Use scoped channel_manager from AgentLoop if provided, else fall back to global
                     scoped_cm = kw.get("channel_manager", cm)
@@ -93,7 +92,6 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     builder = AgentBuilder(
                         spec=agent_spec,
                         env=env,
-                        parent_session_id=parent_session_id,
                         trigger=trigger,
                     )
                     return _DaemonRuntimeProxy(builder)
