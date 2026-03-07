@@ -214,7 +214,7 @@ async def _resume_session_task(
 
     ctx = None
     try:
-        runtime, ctx = await AgentBuilder(spec, env, session_id=session_id).build()
+        runtime, ctx = await AgentBuilder(spec, env, session_id=session_id, user_input=decision_text or None).build()
         if tool_call_id:
             # Proper resume (single-HITL legacy path): insert HITL decision as a tool-role message.
             from everstaff.protocols import Message

@@ -280,6 +280,7 @@ class AgentRuntime:
             status="running",
             max_tokens=self._ctx.max_tokens,
             trigger=self._ctx.trigger,
+            system_prompt=self._build_system_prompt(),
         )
         self._emit("user_input", {"content": user_input or ""})
         if user_input is not None:
@@ -307,6 +308,7 @@ class AgentRuntime:
                 status="running",
                 max_tokens=self._ctx.max_tokens,
                 trigger=self._ctx.trigger,
+                system_prompt=self._build_system_prompt(),
             )
         elif messages:
             # Resume without new user input.
@@ -345,7 +347,7 @@ class AgentRuntime:
                     yield SessionEnd(response=_STOPPED)
                     return
 
-                yield TurnStart(turn=turns)
+                yield TurnStart(turn=turns, system_prompt=self._build_system_prompt())
 
                 llm_start = time.monotonic()
                 self._emit("llm_start", {

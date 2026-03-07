@@ -320,6 +320,15 @@ export default function SessionStore() {
                 } else if (data.type === 'turn_start') {
                     setIsProcessing(true);
                     setStatusContent('Thinking...');
+                    if (data.system_prompt !== undefined) {
+                        setSelectedSession(prev => prev ? {
+                            ...prev,
+                            metadata: {
+                                ...(prev.metadata || {}),
+                                system_prompt: data.system_prompt
+                            }
+                        } : prev);
+                    }
                 } else if (data.type === 'tool_call_start') {
                     setStatusContent(`Running: ${data.name}`);
                     // Add a pending tool call entry to the current streaming assistant message.

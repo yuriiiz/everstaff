@@ -60,11 +60,15 @@ class Mem0Hook:
     ) -> list[Message]:
         for m in reversed(messages):
             if m.role == "user" and m.content:
+                logger.debug("Mem0Hook.on_llm_start: query=%s", m.content[:100])
                 self._provider.set_query(m.content)
                 break
         else:
+            logger.debug("Mem0Hook.on_llm_start: no user message found, skipping")
             return messages
         await self._provider.refresh()
+        injection = self._provider.get_prompt_injection()
+        logger.debug("Mem0Hook.on_llm_start: injection length=%d", len(injection))
         return messages
 
     async def on_llm_end(

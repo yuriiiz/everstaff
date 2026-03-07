@@ -121,6 +121,7 @@ async def _run_agent(
     spec = AgentSpec.model_validate_json(agent_spec_json)
     builder = AgentBuilder(
         spec, env, session_id=session_id, parent_cancellation=cancellation,
+        user_input=user_input,
     )
     runtime, ctx = await builder.build()
 
@@ -146,6 +147,10 @@ async def _run_agent(
 def main() -> None:
     """CLI entry point: python -m everstaff.sandbox.entry"""
     import json as _json
+    import os as _os
+    from everstaff.utils.logging import setup_logging
+    setup_logging(console=True, level=_os.getenv("LOG_LEVEL", "INFO"))
+
     args = parse_args()
 
     agent_spec_json = args.agent_spec or "{}"

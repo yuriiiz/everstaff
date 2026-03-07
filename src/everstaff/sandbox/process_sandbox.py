@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _minimal_env() -> dict[str, str]:
     """Minimal environment for subprocess execution."""
     env: dict[str, str] = {}
-    for key in ("PATH", "HOME", "USER", "LANG", "TERM"):
+    for key in ("PATH", "HOME", "USER", "LANG", "TERM", "LOG_LEVEL"):
         val = os.environ.get(key)
         if val is not None:
             env[key] = val

@@ -51,21 +51,24 @@ class MCPConnection:
         return resolved
 
     def _tool_definition(self, t: Any) -> ToolDefinition:
-        """Convert MCP tool schema to ToolDefinition with parameters as dict."""
+        """Convert MCP tool schema to ToolDefinition with parameters as dict.
+
+        The MCP inputSchema is already a valid JSON Schema object, so we
+        pass it through directly rather than converting to a lossy custom
+        format.
+        """
         input_schema = getattr(t, "inputSchema", None) or {}
-        parameters: dict[str, Any] = {}
-        if isinstance(input_schema, dict) and "properties" in input_schema:
-            required_set = set(input_schema.get("required", []))
-            for pname, pschema in input_schema["properties"].items():
-                parameters[pname] = {
-                    "type": pschema.get("type", "string"),
-                    "description": pschema.get("description", ""),
-                    "required": pname in required_set,
-                }
+        if not isinstance(input_schema, dict):
+            input_schema = {}
+        # Ensure it's a valid JSON Schema object
+        if "type" not in input_schema:
+            input_schema = {**input_schema, "type": "object"}
+        if "properties" not in input_schema:
+            input_schema = {**input_schema, "properties": {}}
         return ToolDefinition(
             name=t.name,
             description=getattr(t, "description", "") or "",
-            parameters=parameters,
+            parameters=input_schema,
         )
 
     async def _discover_tools(self, session: Any) -> list["MCPTool"]:

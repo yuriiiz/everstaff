@@ -11,8 +11,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 try:
+    import litellm
     from mem0 import Memory
 except ImportError:
+    litellm = None  # type: ignore[assignment]
     Memory = None  # type: ignore[assignment,misc]
 
 
@@ -38,6 +40,11 @@ class Mem0Client:
         embedder_config: dict = {"model": embed_model}
         if embedder_api_key:
             embedder_config["api_key"] = embedder_api_key
+        # mem0's litellm provider passes top_p unconditionally, which some
+        # newer models reject.  Setting drop_params lets litellm silently
+        # strip unsupported parameters instead of raising.
+        litellm.drop_params = True
+
         self._memory = Memory.from_config({
             "llm": {
                 "provider": "litellm",

@@ -171,6 +171,13 @@ def _params_to_json_schema(t: Any) -> dict[str, Any]:
     """
     params = t.parameters
     if isinstance(params, dict):
+        # Ensure the schema always has "type": "object" — some MCP tools
+        # return an empty or minimal inputSchema that lacks it, causing
+        # OpenAI API rejections.
+        if "type" not in params:
+            params = {**params, "type": "object"}
+        if "properties" not in params:
+            params = {**params, "properties": {}}
         return params
     # list[ToolParameter] — convert to JSON Schema object
     if hasattr(t, "json_schema") and t.json_schema:

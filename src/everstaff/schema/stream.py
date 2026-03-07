@@ -31,6 +31,7 @@ class ToolCallEnd(BaseModel):
 class TurnStart(BaseModel):
     type: Literal["turn_start"] = "turn_start"
     turn: int
+    system_prompt: str | None = None
 
 
 class SessionEnd(BaseModel):

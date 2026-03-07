@@ -54,6 +54,10 @@ class Message:
         d: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             d["content"] = self.content
+        elif self.role == "assistant":
+            # OpenAI requires "content" on assistant messages (even with
+            # tool_calls); omitting it causes a 400 error.
+            d["content"] = ""
         if self.tool_calls is not None:
             d["tool_calls"] = self.tool_calls
         if self.tool_call_id is not None:

@@ -36,6 +36,7 @@ class AgentBuilder:
         session_id: str | None = None,
         trigger: "AgentEvent | None" = None,
         root_session_id: str | None = None,
+        user_input: str | None = None,
     ) -> None:
         self._spec = spec
         self._env = env
@@ -47,6 +48,7 @@ class AgentBuilder:
         self._session_id = session_id
         self._trigger = trigger
         self._root_session_id = root_session_id
+        self._user_input = user_input
 
     def _resolve_model(self) -> str:
         """Resolve the concrete LiteLLM model string for this agent.
@@ -125,16 +127,24 @@ class AgentBuilder:
                 memory.set_session_path(session_id, relpath)
 
         tool_registry = self._build_tool_registry(workdir)
-        skill_provider = await self._build_skill_provider()
-        knowledge_provider = await self._build_knowledge_provider()
         sub_agent_provider = self._build_sub_agent_provider(model_id, workdir, session_id, cancellation, root_session_id)
-        mcp_provider = await self._build_mcp_provider()
 
-        # Build mem0 provider and hook
+        # Build mem0 provider early so we can prefetch in parallel
         extra_providers = []
         mem0_provider = self._env.build_mem0_provider(**mem0_scope)
         if mem0_provider is not None:
             extra_providers.append(mem0_provider)
+            # Start mem0 search in background — runs concurrently with the
+            # gather below (MCP connect, skill/knowledge loading).
+            if self._user_input:
+                mem0_provider.start_prefetch(self._user_input)
+
+        # Build skill, knowledge, and MCP providers in parallel
+        skill_provider, knowledge_provider, mcp_provider = await asyncio.gather(
+            self._build_skill_provider(),
+            self._build_knowledge_provider(),
+            self._build_mcp_provider(),
+        )
 
         hooks = list(self._hooks)
         if mem0_provider is not None:
