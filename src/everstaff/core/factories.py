@@ -8,15 +8,11 @@ if TYPE_CHECKING:
     from everstaff.protocols import FileStore, TracingBackend, HitlChannel
 
 
-def build_memory_store(cfg: "StorageConfig", sessions_dir: str, memory_dir: str):
-    """Construct a FileMemoryStore with dual FileStore (session + memory)."""
+def build_memory_store(cfg: "StorageConfig", sessions_dir: str):
+    """Construct a FileMemoryStore."""
     from everstaff.memory.file_store import FileMemoryStore
     session_store = build_file_store(cfg, sessions_dir)
-    try:
-        memory_store = build_file_store(cfg, memory_dir)
-    except Exception:
-        memory_store = None
-    return FileMemoryStore(session_store, memory_store=memory_store)
+    return FileMemoryStore(session_store)
 
 
 def build_file_store(cfg: "StorageConfig", sessions_dir: str) -> "FileStore":

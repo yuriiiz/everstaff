@@ -1,4 +1,4 @@
-"""Tests for DaemonConfig, memory_dir, and SandboxConfig in FrameworkConfig."""
+"""Tests for DaemonConfig, MemoryConfig, and SandboxConfig in FrameworkConfig."""
 from __future__ import annotations
 
 import pytest
@@ -14,9 +14,10 @@ def test_framework_config_daemon_defaults():
     assert cfg.daemon.max_concurrent_loops == 10
 
 
-def test_framework_config_memory_dir_default():
+def test_framework_config_memory_defaults():
     cfg = FrameworkConfig()
-    assert cfg.memory_dir == ".agent/memory"
+    assert cfg.memory.enabled is False
+    assert cfg.memory.vector_store_path == ".agent/memory/vectors"
 
 
 def test_framework_config_from_yaml(tmp_path):
@@ -25,12 +26,15 @@ def test_framework_config_from_yaml(tmp_path):
 daemon:
   enabled: true
   max_concurrent_loops: 5
-memory_dir: /custom/memory
+memory:
+  enabled: true
+  vector_store: chroma
 """)
     cfg = _load_from_dir(tmp_path)
     assert cfg.daemon.enabled is True
     assert cfg.daemon.max_concurrent_loops == 5
-    assert cfg.memory_dir == "/custom/memory"
+    assert cfg.memory.enabled is True
+    assert cfg.memory.vector_store == "chroma"
 
 
 def test_daemon_config_partial_yaml(tmp_path):
@@ -53,7 +57,7 @@ def test_daemon_config_absent_from_yaml(tmp_path):
     config_yaml.write_text("agents_dir: /tmp\n")
     cfg = _load_from_dir(tmp_path)
     assert cfg.daemon.enabled is False
-    assert cfg.memory_dir == ".agent/memory"
+    assert cfg.memory.enabled is False
 
 
 class TestSandboxConfig:
