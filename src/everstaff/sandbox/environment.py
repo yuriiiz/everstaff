@@ -16,18 +16,10 @@ if TYPE_CHECKING:
     from everstaff.sandbox.ipc.channel import IpcChannel
 
 
-_EMBEDDER_API_KEY_MAP = {
-    "openai": "OPENAI_API_KEY",
-    "azure_openai": "AZURE_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "together": "TOGETHER_API_KEY",
-}
-
-
 class SandboxEnvironment(RuntimeEnvironment):
     """RuntimeEnvironment for sandbox processes.
 
-    All infrastructure (memory, tracer, file store) is proxied over IPC
+    All infrastructure (memory, tracer, file store, mem0) is proxied over IPC
     to the orchestrator. LLM calls execute directly in sandbox.
     """
 
@@ -64,20 +56,12 @@ class SandboxEnvironment(RuntimeEnvironment):
     def secret_store(self) -> "SecretStore":
         return self._secret_store
 
-    # --- mem0 integration (runs directly in sandbox, no IPC needed) ---
+    # --- mem0 integration (proxied to orchestrator via IPC) ---
 
     def _get_or_create_mem0_client(self):
         if not hasattr(self, "_mem0_client"):
-            from everstaff.memory.mem0_client import Mem0Client
-            mem = self._config.memory
-            llm_model_id = self._config.resolve_model(mem.llm_model_kind).model_id
-            embed_model_id = self._config.resolve_model(mem.embedding_model_kind).model_id
-            embed_provider, _ = Mem0Client._parse_embedding_model(embed_model_id)
-            embedder_api_key = self._secret_store.get(
-                _EMBEDDER_API_KEY_MAP.get(embed_provider, f"{embed_provider.upper()}_API_KEY")
-            )
-            self._mem0_client = Mem0Client(mem, llm_model_id, embed_model_id,
-                                           embedder_api_key=embedder_api_key)
+            from everstaff.sandbox.proxy.mem0_client import ProxyMem0Client
+            self._mem0_client = ProxyMem0Client(self._channel)
         return self._mem0_client
 
     def build_mem0_provider(self, **mem0_scope):
