@@ -32,8 +32,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
         # Startup: optionally start daemon
         if config.daemon.enabled:
-            _logger.info("Daemon enabled — initializing AgentDaemon (agents_dir=%s, memory_dir=%s)",
-                         config.agents_dir, config.memory_dir)
+            _logger.info("Daemon enabled — initializing AgentDaemon (agents_dir=%s)", config.agents_dir)
             try:
                 from everstaff.daemon.agent_daemon import AgentDaemon
                 from everstaff.core.factories import build_memory_store
@@ -43,7 +42,6 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 memory_store = build_memory_store(
                     config.storage,
                     config.sessions_dir,
-                    config.memory_dir,
                 )
 
                 def _daemon_llm_factory(*, model_kind: str = "fast", **kw):
@@ -175,7 +173,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         from everstaff.core.factories import build_memory_store as _build_memory_store
 
         _secret_store = SecretStore.from_environ()
-        _sandbox_memory = _build_memory_store(config.storage, _sessions_path, config.memory_dir)
+        _sandbox_memory = _build_memory_store(config.storage, _sessions_path)
         _sandbox_memory._index = _session_index
         _sessions_resolved = Path(_sessions_path).expanduser().resolve()
 

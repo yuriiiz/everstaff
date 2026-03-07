@@ -37,16 +37,13 @@ async def test_daemon_disabled_by_default():
 
 @pytest.mark.asyncio
 async def test_build_memory_store(tmp_path):
-    """build_memory_store creates a FileMemoryStore with dual FileStore."""
+    """build_memory_store creates a FileMemoryStore with a session FileStore."""
     from everstaff.core.config import StorageConfig
     from everstaff.core.factories import build_memory_store
     from everstaff.memory.file_store import FileMemoryStore
 
     sessions = str(tmp_path / "sessions")
-    memory = str(tmp_path / "memory")
 
-    store = build_memory_store(StorageConfig(), sessions, memory)
+    store = build_memory_store(StorageConfig(), sessions)
     assert isinstance(store, FileMemoryStore)
-    # Verify dual stores are wired
     assert store._session_store is not None
-    assert store._memory_store is not None

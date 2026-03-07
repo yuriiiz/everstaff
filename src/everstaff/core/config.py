@@ -101,6 +101,16 @@ class SandboxConfig(BaseModel):
     extra_mounts: list[SandboxMountConfig] = Field(default_factory=list)
 
 
+class MemoryConfig(BaseModel):
+    enabled: bool = False
+    model_kind: str = "fast"
+    embedding_model: str = "text-embedding-3-small"
+    vector_store: Literal["faiss", "chroma", "qdrant"] = "faiss"
+    vector_store_path: str = ".agent/memory/vectors"
+    search_top_k: int = 10
+    search_threshold: float = 0.3
+
+
 class FrameworkConfig(BaseModel):
     model_mappings: dict[str, ModelMapping] = Field(default_factory=dict)
     agents_dir: str = Field(default_factory=lambda: "./agents")
@@ -118,7 +128,7 @@ class FrameworkConfig(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
-    memory_dir: str = Field(default=".agent/memory")
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     auth: AuthConfig | None = None
 

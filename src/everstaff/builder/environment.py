@@ -28,7 +28,7 @@ class RuntimeEnvironment:
     def channel_manager(self) -> Any:
         return self._channel_manager
 
-    def build_memory_store(self, max_tokens: int | None = None) -> MemoryStore:
+    def build_memory_store(self, max_tokens: int | None = None, **mem0_scope) -> MemoryStore:
         raise NotImplementedError
 
     def build_file_store(self) -> "FileStore":
@@ -82,15 +82,47 @@ class DefaultEnvironment(RuntimeEnvironment):
         from everstaff.core.factories import build_file_store as _build_file_store
         return _build_file_store(self.config.storage, self._sessions_dir)
 
-    def build_memory_store(self, max_tokens: int | None = None) -> MemoryStore:
+    def build_memory_store(self, max_tokens: int | None = None, **mem0_scope) -> MemoryStore:
         from everstaff.memory.file_store import FileMemoryStore
         from everstaff.memory.compressible_store import CompressibleMemoryStore
-        from everstaff.memory.strategies import TruncationStrategy
         from everstaff.session.index import SessionIndex
         index = self._session_index or SessionIndex(Path(self._sessions_dir))
         store = FileMemoryStore(self.build_file_store(), index=index)
+
+        if self._config.memory.enabled:
+            from everstaff.memory.strategies import Mem0ExtractionStrategy
+            client = self._get_or_create_mem0_client()
+            strategy = Mem0ExtractionStrategy(client, **mem0_scope)
+        else:
+            from everstaff.memory.strategies import TruncationStrategy
+            strategy = TruncationStrategy()
+
         kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
-        return CompressibleMemoryStore(store, TruncationStrategy(), **kwargs)
+        return CompressibleMemoryStore(store, strategy, **kwargs)
+
+    def build_mem0_provider(self, **mem0_scope):
+        if not self._config.memory.enabled:
+            return None
+        from everstaff.memory.mem0_provider import Mem0Provider
+        return Mem0Provider(self._get_or_create_mem0_client(), **mem0_scope)
+
+    def build_mem0_hook(self, provider, memory_store, **mem0_scope):
+        if not self._config.memory.enabled:
+            return None
+        from everstaff.memory.mem0_hook import Mem0Hook
+        return Mem0Hook(
+            mem0_provider=provider,
+            mem0_client=self._get_or_create_mem0_client(),
+            memory_store=memory_store,
+            **mem0_scope,
+        )
+
+    def _get_or_create_mem0_client(self):
+        if not hasattr(self, "_mem0_client"):
+            from everstaff.memory.mem0_client import Mem0Client
+            mapping = self._config.resolve_model(self._config.memory.model_kind)
+            self._mem0_client = Mem0Client(self._config.memory, mapping)
+        return self._mem0_client
 
     def build_tracer(self, session_id: str = "") -> TracingBackend:
         from everstaff.core.factories import build_tracer as _build_tracer

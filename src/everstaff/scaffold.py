@@ -36,7 +36,14 @@ tools_dirs:
 
 sessions_dir: ".agent/sessions"
 
-memory_dir: ".agent/memory"
+# ---------------------------------------------------------------------------
+# Memory — long-term memory powered by mem0
+# ---------------------------------------------------------------------------
+# memory:
+#   enabled: true
+#   model_kind: fast
+#   vector_store: faiss
+#   search_top_k: 10
 
 # ---------------------------------------------------------------------------
 # Project Context
