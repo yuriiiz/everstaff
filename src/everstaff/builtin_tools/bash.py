@@ -84,7 +84,7 @@ def make_bash_tool(workdir: Path, env: dict[str, str] | None = None):
             return output.strip() if output.strip() else "(Command executed with no output)"
 
         except Exception as e:
-            logger.error("Bash command failed: %s — %s", command[:200], e)
+            logger.error("bash command failed command=%s err=%s", command[:200], e, exc_info=True)
             return f"Error: {e}"
 
     return bash

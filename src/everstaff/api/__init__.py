@@ -185,7 +185,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 _embed_model_id = config.resolve_model(config.memory.embedding_model_kind).model_id
                 _mem0_client = Mem0Client(config.memory, _llm_model_id, _embed_model_id)
             except Exception as _exc:
-                logger.warning("failed to create Mem0Client for sandbox err=%s", _exc)
+                logger.warning("failed to create Mem0Client for sandbox err=%s", _exc, exc_info=True)
 
         _executor_manager = ExecutorManager(
             factory=_sandbox_factory,
@@ -207,7 +207,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             _api_embed = config.resolve_model(config.memory.embedding_model_kind).model_id
             app.state.mem0_client = _MemClient(config.memory, _api_llm, _api_embed)
         except Exception as _exc:
-            logger.warning("failed to create shared Mem0Client err=%s", _exc)
+            logger.warning("failed to create shared Mem0Client err=%s", _exc, exc_info=True)
 
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry
@@ -261,7 +261,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 await ws.send_text(data)
             except Exception as e:
                 broadcast_logger.debug("send failed session=%s type=%s err=%s",
-                              (event_session_id or "")[:8] or "?", event_type, e)
+                              (event_session_id or "")[:8] or "?", event_type, e, exc_info=True)
 
         await asyncio.gather(*[_send(c) for c in connections], return_exceptions=True)
 
