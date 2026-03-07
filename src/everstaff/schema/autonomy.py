@@ -19,7 +19,6 @@ class TriggerConfig(BaseModel):
     schedule: str = ""        # cron expression (type=cron)
     every: int = 0            # seconds (type=interval)
     task: str = ""            # task description for cron/interval
-    hitl_channels: list[HitlChannelRef] | None = None
     # file_watch
     watch_paths: list[str] = Field(default_factory=list)
     # internal
