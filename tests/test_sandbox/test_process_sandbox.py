@@ -104,3 +104,17 @@ class TestProcessSandbox:
         await sandbox.stop()
         status = await sandbox.status()
         assert not status.alive
+
+    async def test_execute_bash_timestamps(self, tmp_path):
+        store = SecretStore()
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=store)
+        await sandbox.start("test-session")
+        try:
+            cmd = SandboxCommand(type="bash", payload={"command": "echo hello"})
+            result = await sandbox.execute(cmd)
+            assert result.success
+            assert result.started_at is not None
+            assert result.finished_at is not None
+            assert result.finished_at >= result.started_at
+        finally:
+            await sandbox.stop()
