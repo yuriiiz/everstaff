@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -61,6 +62,7 @@ class ProcessSandbox(SandboxExecutor):
         self._ephemeral_token: str | None = None
         self._token_store: EphemeralTokenStore | None = None
         self._client_writer: asyncio.StreamWriter | None = None
+        self._process: asyncio.subprocess.Process | None = None
 
     # -- SandboxExecutor interface --
 
@@ -120,6 +122,52 @@ class ProcessSandbox(SandboxExecutor):
             self._client_writer = None
             writer.close()
 
+    async def spawn_agent(
+        self,
+        agent_spec_json: str,
+        user_input: str | None = None,
+    ) -> None:
+        """Spawn the sandbox subprocess running the agent."""
+        if not self._alive:
+            raise RuntimeError("Sandbox not started")
+        if self._process is not None:
+            raise RuntimeError("Agent already spawned")
+
+        cmd = [
+            sys.executable, "-m", "everstaff.sandbox.entry",
+            "--socket-path", self._ipc_socket_path,
+            "--token", self._ephemeral_token,
+            "--session-id", self._session_id,
+            "--agent-spec", agent_spec_json,
+            "--workspace-dir", str(self._workdir),
+        ]
+        if user_input is not None:
+            cmd.extend(["--user-input", user_input])
+
+        self._process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=self._subprocess_env,
+            cwd=self._workdir,
+        )
+        logger.info(
+            "Spawned sandbox subprocess pid=%s for session %s",
+            self._process.pid, self._session_id,
+        )
+
+    async def wait_finished(self, timeout: float | None = None) -> int:
+        """Wait for the sandbox subprocess to exit. Returns exit code."""
+        if self._process is None:
+            return -1
+        try:
+            if timeout:
+                await asyncio.wait_for(self._process.wait(), timeout)
+            else:
+                await self._process.wait()
+        except asyncio.TimeoutError:
+            self._process.terminate()
+            await self._process.wait()
+        return self._process.returncode or 0
+
     async def execute(self, command: SandboxCommand) -> SandboxResult:
         if not self._alive:
             return SandboxResult(success=False, error="Sandbox not running")
@@ -128,6 +176,19 @@ class ProcessSandbox(SandboxExecutor):
         return SandboxResult(success=False, error=f"Unknown command type: {command.type}")
 
     async def stop(self) -> None:
+        # Terminate subprocess if running
+        if self._process is not None:
+            try:
+                if self._process.returncode is None:
+                    self._process.terminate()
+                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
+
         # Close IPC server
         if self._ipc_server is not None:
             self._ipc_server.close()
