@@ -26,6 +26,7 @@ class IpcServerHandler:
         token_store: "EphemeralTokenStore | None" = None,
         secret_store: "SecretStore | None" = None,
         on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
+        on_stream_event: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         self._memory = memory_store
         self._tracer = tracer
@@ -33,6 +34,7 @@ class IpcServerHandler:
         self._token_store = token_store
         self._secret_store = secret_store
         self._on_hitl_detected = on_hitl_detected
+        self._on_stream_event = on_stream_event
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
         """Route a single IPC message to the appropriate handler."""
@@ -51,6 +53,8 @@ class IpcServerHandler:
                 return await self._handle_memory_load_workflows(params)
             elif method == "tracer.event":
                 return self._handle_tracer_event(params)
+            elif method == "stream.event":
+                return await self._handle_stream_event(params)
             elif method.startswith("file."):
                 return await self._handle_file_op(method, params)
             elif method.startswith("memory."):
@@ -139,6 +143,11 @@ class IpcServerHandler:
             parent_span_id=params.get("parent_span_id"),
         )
         self._tracer.on_event(event)
+        return {}
+
+    async def _handle_stream_event(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._on_stream_event:
+            await self._on_stream_event(params)
         return {}
 
     async def _handle_file_op(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
