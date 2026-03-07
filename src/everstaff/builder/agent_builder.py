@@ -37,6 +37,7 @@ class AgentBuilder:
         trigger: "AgentEvent | None" = None,
         root_session_id: str | None = None,
         user_input: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         self._spec = spec
         self._env = env
@@ -49,6 +50,7 @@ class AgentBuilder:
         self._trigger = trigger
         self._root_session_id = root_session_id
         self._user_input = user_input
+        self._user_id = user_id
 
     def _resolve_model(self) -> str:
         """Resolve the concrete LiteLLM model string for this agent.
@@ -111,7 +113,7 @@ class AgentBuilder:
         mem0_scope = {}
         if self._env.config.memory.enabled:
             mem0_scope["agent_id"] = self._spec.uuid or self._spec.agent_name
-            # user_id will be added when auth context is available
+            mem0_scope["user_id"] = self._user_id or "default"
 
         # 1. Build independent modules in parallel
         memory, tracer = await asyncio.gather(
