@@ -15,11 +15,16 @@ class HitlChannelRef(BaseModel):
 
 class TriggerConfig(BaseModel):
     id: str
-    type: str  # "cron" | "interval"
+    type: str  # "cron" | "interval" | "webhook" | "file_watch" | "internal"
     schedule: str = ""        # cron expression (type=cron)
     every: int = 0            # seconds (type=interval)
     task: str = ""            # task description for cron/interval
     hitl_channels: list[HitlChannelRef] | None = None
+    # file_watch
+    watch_paths: list[str] = Field(default_factory=list)
+    # internal
+    condition: str = ""         # "episode_count" | "goal_stale" | "error_rate"
+    threshold: int = 5          # minimum threshold before firing
 
 
 class GoalConfig(BaseModel):
