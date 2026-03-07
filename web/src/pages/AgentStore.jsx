@@ -1140,7 +1140,6 @@ export default function AgentStore() {
                                                             <div style={{ display: 'flex', gap: '8px' }}>
                                                                 {[
                                                                     { value: 'on_request', label: 'On Request', desc: 'Ask when needed' },
-                                                                    { value: 'always', label: 'Always', desc: 'Ask every turn' },
                                                                     { value: 'notify', label: 'Notify', desc: 'Notify only' },
                                                                     { value: 'never', label: 'Never', desc: 'Disable HITL' }
                                                                 ].map(opt => (
@@ -1182,7 +1181,7 @@ export default function AgentStore() {
                                                                     <HitlChannelCard
                                                                         key={idx}
                                                                         channel={channel}
-                                                                        availableRefs={[...new Set([...globalHitlChannels, ...(selectedAgent.autonomy?.triggers || []).flatMap(t => (t.hitl_channels || []).map(c => c.ref))])]}
+                                                                        availableRefs={globalHitlChannels}
                                                                         onUpdate={(val) => {
                                                                             const newChannels = [...selectedAgent.hitl_channels];
                                                                             newChannels[idx] = val;
@@ -1550,46 +1549,6 @@ export default function AgentStore() {
                                                                                 updateField('autonomy', { ...selectedAgent.autonomy, triggers: nt });
                                                                             }}
                                                                         />
-                                                                    </div>
-                                                                    <div style={{ marginTop: '12px' }}>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                                            <label style={{ fontSize: '9px', fontWeight: 600, color: '#94a3b8' }}>TRIGGER HITL CHANNELS</label>
-                                                                            <button
-                                                                                className="btn"
-                                                                                style={{ height: '24px', fontSize: '10px', padding: '0 8px', background: 'white' }}
-                                                                                onClick={() => {
-                                                                                    const nt = [...selectedAgent.autonomy.triggers];
-                                                                                    nt[idx].hitl_channels = [...(nt[idx].hitl_channels || []), { ref: 'new-channel', type: 'lark' }];
-                                                                                    updateField('autonomy', { ...selectedAgent.autonomy, triggers: nt });
-                                                                                }}
-                                                                            >
-                                                                                <Plus size={12} /> Add Channel
-                                                                            </button>
-                                                                        </div>
-                                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                                            {(trigger.hitl_channels || []).map((channel, cIdx) => (
-                                                                                <HitlChannelCard
-                                                                                    key={`trg_${idx}_ch_${cIdx}`}
-                                                                                    channel={channel}
-                                                                                    availableRefs={[...new Set([...globalHitlChannels, ...(selectedAgent.hitl_channels || []).map(c => c.ref)])]}
-                                                                                    onUpdate={(val) => {
-                                                                                        const nt = [...selectedAgent.autonomy.triggers];
-                                                                                        nt[idx].hitl_channels[cIdx] = val;
-                                                                                        updateField('autonomy', { ...selectedAgent.autonomy, triggers: nt });
-                                                                                    }}
-                                                                                    onDelete={() => {
-                                                                                        const nt = [...selectedAgent.autonomy.triggers];
-                                                                                        nt[idx].hitl_channels = nt[idx].hitl_channels.filter((_, i) => i !== cIdx);
-                                                                                        updateField('autonomy', { ...selectedAgent.autonomy, triggers: nt });
-                                                                                    }}
-                                                                                />
-                                                                            ))}
-                                                                            {(trigger.hitl_channels || []).length === 0 && (
-                                                                                <div style={{ padding: '8px', textAlign: 'center', color: '#94a3b8', fontSize: '10px', background: 'rgba(255,255,255,0.5)', borderRadius: '6px', border: '1px dashed #e2e8f0' }}>
-                                                                                    Defaults to agent's HITL channels or standard logic.
-                                                                                </div>
-                                                                            )}
-                                                                        </div>
                                                                     </div>
                                                                 </div>
                                                             ))}
