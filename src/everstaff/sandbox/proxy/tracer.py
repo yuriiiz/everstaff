@@ -41,7 +41,7 @@ class ProxyTracer:
         try:
             await self._channel.send_notification("tracer.event", params)
         except Exception:
-            logger.debug("Failed to send trace event via IPC", exc_info=True)
+            logger.debug("failed to send trace event via IPC", exc_info=True)
 
     async def aflush(self) -> None:
         """No-op: notifications are fire-and-forget."""

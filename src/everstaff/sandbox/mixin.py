@@ -74,6 +74,7 @@ class IpcSandboxMixin:
         self._ephemeral_token: str | None = None
         self._token_store: EphemeralTokenStore | None = None
         self._client_writer: asyncio.StreamWriter | None = None
+        self._connection_done: asyncio.Event = asyncio.Event()
 
     def set_session_callbacks(
         self,
@@ -99,13 +100,13 @@ class IpcSandboxMixin:
         await self._start_ipc(session_id)
         self._alive = True
         self._started_at = time.monotonic()
-        logger.info("Sandbox started for session %s at %s", session_id, workdir)
+        logger.info("sandbox started session=%s workdir=%s", session_id, workdir)
 
     async def stop(self) -> None:
         await self._kill()
         await self._stop_ipc()
         self._alive = False
-        logger.info("Sandbox stopped for session %s", self._session_id)
+        logger.info("sandbox stopped session=%s", self._session_id)
 
     async def status(self) -> SandboxStatus:
         uptime = time.monotonic() - self._started_at if self._alive else 0.0
@@ -188,7 +189,15 @@ class IpcSandboxMixin:
         args.extend(["--token", self._ephemeral_token])
         return args
 
+    async def wait_drained(self, timeout: float = 5.0) -> None:
+        """Wait for the IPC connection handler to finish processing all messages."""
+        try:
+            await asyncio.wait_for(self._connection_done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.debug("wait_drained timed out timeout=%.1fs session=%s", timeout, self._session_id)
+
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._connection_done.clear()
         self._client_writer = writer
         try:
             while True:
@@ -208,21 +217,22 @@ class IpcSandboxMixin:
         except (asyncio.CancelledError, ConnectionError):
             pass
         except Exception as e:
-            logger.debug("IPC connection closed: %s", e)
+            logger.debug("IPC connection closed error=%s", e)
         finally:
             self._client_writer = None
             writer.close()
+            self._connection_done.set()
 
     async def _push_message(self, method: str, params: dict) -> None:
         if self._client_writer is None:
-            logger.debug("No sandbox client connected, cannot push %s", method)
+            logger.debug("no sandbox client connected, cannot push method=%s", method)
             return
         try:
             msg = make_notification(method, params)
             self._client_writer.write(msg.model_dump_json().encode() + b"\n")
             await self._client_writer.drain()
         except Exception as e:
-            logger.warning("Failed to push %s to sandbox: %s", method, e)
+            logger.warning("failed to push to sandbox method=%s error=%s", method, e)
 
     # -- Hooks for subclasses --
 

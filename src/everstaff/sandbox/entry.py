@@ -79,7 +79,7 @@ async def sandbox_main(
         async def _on_cancel(params):
             force = params.get("force", False) if isinstance(params, dict) else False
             cancellation.cancel(force=force)
-            logger.info("Cancel received for session %s (force=%s)", session_id, force)
+            logger.info("cancel received session=%s force=%s", session_id, force)
 
         channel.on_push("cancel", _on_cancel)
 

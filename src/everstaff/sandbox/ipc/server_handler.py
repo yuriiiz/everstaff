@@ -68,7 +68,7 @@ class IpcServerHandler:
             else:
                 return {"error": f"Unknown method: {method}"}
         except Exception as e:
-            logger.exception("IPC handler error for method '%s'", method)
+            logger.exception("IPC handler error method=%s", method)
             return {"error": str(e)}
 
     def _handle_auth(self, params: dict[str, Any]) -> dict[str, Any]:
