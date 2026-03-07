@@ -99,9 +99,15 @@ class AgentBuilder:
         # Resolve cancellation FIRST so all children share the same event
         cancellation = self._parent_cancellation if self._parent_cancellation is not None else CancellationEvent()
 
+        # Determine mem0 scope
+        mem0_scope = {}
+        if self._env.config.memory.enabled:
+            mem0_scope["agent_id"] = self._spec.agent_name
+            # user_id will be added when auth context is available
+
         # 1. Build independent modules in parallel
         memory, tracer = await asyncio.gather(
-            self._build_memory(session_id),
+            self._build_memory(session_id, **mem0_scope),
             self._build_tracer(session_id),
         )
 
@@ -117,6 +123,18 @@ class AgentBuilder:
         knowledge_provider = await self._build_knowledge_provider()
         sub_agent_provider = self._build_sub_agent_provider(model_id, workdir, session_id, cancellation, root_session_id)
         mcp_provider = await self._build_mcp_provider()
+
+        # Build mem0 provider and hook
+        extra_providers = []
+        mem0_provider = self._env.build_mem0_provider(**mem0_scope) if hasattr(self._env, "build_mem0_provider") else None
+        if mem0_provider is not None:
+            extra_providers.append(mem0_provider)
+
+        hooks = list(self._hooks)
+        if mem0_provider is not None:
+            mem0_hook = self._env.build_mem0_hook(mem0_provider, memory, **mem0_scope) if hasattr(self._env, "build_mem0_hook") else None
+            if mem0_hook is not None:
+                hooks.append(mem0_hook)
 
         # Collect system tool names (framework + provider)
         def _tool_name(t) -> str:
@@ -208,7 +226,8 @@ class AgentBuilder:
             parent_session_id=self._parent_session_id,
             root_session_id=root_session_id,
             tracer=tracer,
-            hooks=self._hooks,
+            hooks=hooks,
+            extra_providers=extra_providers,
             cancellation=cancellation,
             caller_span_id=self._caller_span_id,
 
@@ -267,7 +286,7 @@ class AgentBuilder:
 
         return AgentRuntime(context=context, llm_client=llm_client), context
 
-    async def _build_memory(self, session_id: str = ""):
+    async def _build_memory(self, session_id: str = "", **mem0_scope):
         # Resolve the model's max_tokens so the memory store can set a
         # context-aware compression threshold (0.7 × max_tokens).
         kind = self._spec.adviced_model_kind
@@ -277,7 +296,7 @@ class AgentBuilder:
             model_max_tokens = self._env.config.resolve_model(kind).max_tokens
         except Exception:
             model_max_tokens = None
-        return self._env.build_memory_store(max_tokens=model_max_tokens)
+        return self._env.build_memory_store(max_tokens=model_max_tokens, **mem0_scope)
 
     async def _build_tracer(self, session_id: str = ""):
         return self._env.build_tracer(session_id)
