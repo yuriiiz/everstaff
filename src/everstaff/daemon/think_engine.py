@@ -2,14 +2,17 @@
 ThinkEngine — Tool-based decision making for the autonomous agent.
 
 The brain of the autonomous agent loop. When triggered, the ThinkEngine
-builds context from memory (working, episodic, semantic), presents it to
-an LLM along with tool definitions, and runs a tool loop until the LLM
-calls ``make_decision`` to produce a :class:`Decision`.
+builds context from DaemonStateStore (structured state) and optionally
+Mem0Client (long-term semantic memory), presents it to an LLM along with
+tool definitions, and runs a tool loop until the LLM calls ``make_decision``
+to produce a :class:`Decision`.
 
 Tools available to the LLM during thinking:
 - ``make_decision`` — commit to an action (execute / skip / defer)
-- ``recall_semantic_detail`` — read a specific semantic memory topic
-- ``recall_recent_episodes`` — query recent episodic memory
+- ``search_memory`` — search long-term memory via Mem0
+- ``break_down_goal`` — decompose a goal into sub-goals
+- ``update_goal_progress`` — update sub-goal status
+- ``record_learning_insight`` — persist a learning insight to long-term memory
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from everstaff.protocols import Decision, Message, ToolDefinition
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from everstaff.protocols import AgentEvent, Episode, WorkingState
+    from everstaff.protocols import AgentEvent
 
 # ---------------------------------------------------------------------------
 # Tool definitions exposed to the LLM during the think loop
@@ -62,36 +65,14 @@ THINK_TOOLS: list[ToolDefinition] = [
         },
     ),
     ToolDefinition(
-        name="recall_semantic_detail",
-        description="Read a specific semantic memory topic for more detail.",
+        name="search_memory",
+        description="Search long-term memory for relevant historical context (past episodes, patterns, insights).",
         parameters={
             "type": "object",
             "properties": {
-                "topic": {
-                    "type": "string",
-                    "description": "The topic to read",
-                },
+                "query": {"type": "string", "description": "What to search for"},
             },
-            "required": ["topic"],
-        },
-    ),
-    ToolDefinition(
-        name="recall_recent_episodes",
-        description="Recall recent episodes from episodic memory.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "How many days back to look",
-                    "default": 1,
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Filter by tags",
-                },
-            },
+            "required": ["query"],
         },
     ),
     ToolDefinition(
@@ -159,16 +140,22 @@ class ThinkEngine:
     ----------
     llm_client:
         Any object satisfying the ``LLMClient`` protocol.
-    memory:
-        Any object satisfying the ``MemoryStore`` protocol.
     tracer:
         Any object satisfying the ``TracingBackend`` protocol.
+    daemon_state_store:
+        A ``DaemonStateStore`` instance for structured state persistence.
+    agent_uuid:
+        The unique identifier for this agent.
+    mem0_client:
+        Optional ``Mem0Client`` for long-term semantic memory.
     """
 
-    def __init__(self, llm_client: Any, memory: Any, tracer: Any, sessions_dir: str | Path | None = None, session_index: Any = None) -> None:
+    def __init__(self, llm_client: Any, tracer: Any, daemon_state_store: Any, agent_uuid: str, mem0_client: Any = None, sessions_dir: str | Path | None = None, session_index: Any = None) -> None:
         self._llm = llm_client
-        self._memory = memory
         self._tracer = tracer
+        self._state_store = daemon_state_store
+        self._agent_uuid = agent_uuid
+        self._mem0 = mem0_client
         self._sessions_dir: Path | None = Path(sessions_dir) if sessions_dir else None
         self._session_index = session_index
 
@@ -197,17 +184,14 @@ class ThinkEngine:
         now = datetime.now(timezone.utc).isoformat()
         self._write_think_session(think_session_id, agent_name, parent_session_id, now)
 
-        # Gather context from memory layers
-        working: WorkingState = await self._memory.working_load(agent_name)
-        episodes: list[Episode] = await self._memory.episode_query(
-            agent_name, days=1, limit=10,
-        )
-        topics: list[str] = await self._memory.semantic_list(agent_name)
-        logger.debug("[Think:%s] Memory context — working_items=%d, episodes=%d, topics=%s",
-                      agent_name, len(working.pending_items), len(episodes), topics)
+        # Load structured state from DaemonStateStore
+        from everstaff.daemon.state_store import DaemonState
+        state: DaemonState = await self._state_store.load(self._agent_uuid)
+        logger.debug("[Think:%s] State loaded — goals=%d, decisions=%d",
+                      agent_name, len(state.goals_breakdown), len(state.recent_decisions))
 
         system_prompt = self._build_system_prompt(
-            agent_name, trigger, pending_events, working, episodes, topics, autonomy_goals,
+            agent_name, trigger, pending_events, state, autonomy_goals,
         )
         messages: list[Message] = [
             Message(
@@ -276,31 +260,22 @@ class ThinkEngine:
                         ))
                         decided = True
 
-                    elif tc.name == "recall_semantic_detail":
-                        topic = tc.args.get("topic", "index")
-                        logger.debug("[Think:%s] Tool call: recall_semantic_detail(topic=%s)", agent_name, topic)
-                        content = await self._memory.semantic_read(agent_name, topic)
+                    elif tc.name == "search_memory":
+                        query = tc.args.get("query", "")
+                        logger.debug("[Think:%s] Tool call: search_memory(query=%s)", agent_name, query[:80])
+                        if self._mem0 is None:
+                            content = "(memory not enabled)"
+                        else:
+                            results = await self._mem0.search(query, agent_id=agent_name)
+                            if results:
+                                content = "\n".join(
+                                    r.get("memory", str(r)) for r in results
+                                )
+                            else:
+                                content = "(no results)"
                         messages.append(Message(
                             role="tool",
-                            content=content or "(empty)",
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
-
-                    elif tc.name == "recall_recent_episodes":
-                        days = tc.args.get("days", 1)
-                        tags = tc.args.get("tags")
-                        logger.debug("[Think:%s] Tool call: recall_recent_episodes(days=%s, tags=%s)", agent_name, days, tags)
-                        eps = await self._memory.episode_query(
-                            agent_name, days=days, tags=tags,
-                        )
-                        ep_text = "\n".join(
-                            f"- [{e.timestamp}] {e.trigger}: {e.action} -> {e.result}"
-                            for e in eps
-                        ) or "(no episodes)"
-                        messages.append(Message(
-                            role="tool",
-                            content=ep_text,
+                            content=content,
                             tool_call_id=tc.id,
                             created_at=datetime.now(timezone.utc).isoformat(),
                         ))
@@ -318,8 +293,8 @@ class ThinkEngine:
                             for s in raw_subs
                         ]
                         gb = GoalBreakdown(goal_id=goal_id, sub_goals=sub_goals)
-                        working.custom.setdefault("goals_breakdown", {})[goal_id] = gb.model_dump()
-                        await self._memory.working_save(agent_name, working)
+                        state.goals_breakdown[goal_id] = gb
+                        await self._state_store.save(self._agent_uuid, state)
                         messages.append(Message(
                             role="tool",
                             content=f"Goal '{goal_id}' broken into {len(sub_goals)} sub-goals.",
@@ -334,19 +309,17 @@ class ThinkEngine:
                         note = tc.args.get("progress_note", "")
                         logger.debug("[Think:%s] Tool call: update_goal_progress(goal_id=%s, idx=%d, status=%s)",
                                      agent_name, goal_id, idx, status)
-                        breakdowns = working.custom.get("goals_breakdown", {})
-                        if goal_id not in breakdowns:
+                        if goal_id not in state.goals_breakdown:
                             result_text = f"Error: no breakdown for goal '{goal_id}'"
                         else:
-                            gb = GoalBreakdown.model_validate(breakdowns[goal_id])
+                            gb = state.goals_breakdown[goal_id]
                             if idx < 0 or idx >= len(gb.sub_goals):
                                 result_text = f"Error: sub_goal_index {idx} out of range (0-{len(gb.sub_goals) - 1})"
                             else:
                                 gb.sub_goals[idx].status = status
                                 if note:
                                     gb.sub_goals[idx].progress_note = note
-                                breakdowns[goal_id] = gb.model_dump()
-                                await self._memory.working_save(agent_name, working)
+                                await self._state_store.save(self._agent_uuid, state)
                                 result_text = f"Sub-goal {idx} of '{goal_id}' updated to '{status}'. Completion: {gb.completion_ratio:.0%}"
                         messages.append(Message(
                             role="tool",
@@ -359,15 +332,20 @@ class ThinkEngine:
                         args = tc.args
                         logger.debug("[Think:%s] Tool call: record_learning_insight(category=%s)",
                                      agent_name, args.get("category"))
-                        existing = await self._memory.semantic_read(agent_name, "learning_insights")
-                        entry = f"\n[{args['category']}] {args['insight']} (evidence: {args['evidence']})"
-                        if args.get("action"):
-                            entry += f" -> action: {args['action']}"
-                        updated = (existing + entry) if existing else entry
-                        await self._memory.semantic_write(agent_name, "learning_insights", updated)
+                        if self._mem0 is None:
+                            result_text = "(memory not enabled, insight not persisted)"
+                        else:
+                            content = f"[{args['category']}] {args['insight']} (evidence: {args['evidence']})"
+                            if args.get("action"):
+                                content += f" -> action: {args['action']}"
+                            await self._mem0.add(
+                                [{"role": "assistant", "content": content}],
+                                agent_id=agent_name,
+                            )
+                            result_text = "Insight recorded."
                         messages.append(Message(
                             role="tool",
-                            content="Insight recorded.",
+                            content=result_text,
                             tool_call_id=tc.id,
                             created_at=datetime.now(timezone.utc).isoformat(),
                         ))
@@ -470,9 +448,7 @@ class ThinkEngine:
         agent_name: str,
         trigger: AgentEvent,
         pending_events: list[AgentEvent],
-        working: WorkingState,
-        episodes: list[Episode],
-        topics: list[str],
+        state: Any,
         goals: list[Any],
     ) -> str:
         parts: list[str] = [
@@ -492,35 +468,20 @@ class ThinkEngine:
             for g in goals:
                 parts.append(f"- [{g.priority}] {g.description}")
 
-        if working.pending_items:
-            parts.append(f"\n## Pending items: {working.pending_items}")
-
-        if working.goals_progress:
-            parts.append(f"\n## Goal progress: {working.goals_progress}")
-
-        breakdowns = working.custom.get("goals_breakdown", {})
-        if breakdowns:
+        if state.goals_breakdown:
             parts.append("\n## Goal breakdowns:")
-            for gid, bd_data in breakdowns.items():
-                gb = GoalBreakdown.model_validate(bd_data)
+            for gid, gb in state.goals_breakdown.items():
                 parts.append(f"- Goal '{gid}' ({gb.completion_ratio:.0%} complete):")
                 for i, sg in enumerate(gb.sub_goals):
                     parts.append(f"  {i}. [{sg.status}] {sg.description}")
                     if sg.progress_note:
                         parts.append(f"     Note: {sg.progress_note}")
 
-        if episodes:
-            parts.append(f"\n## Recent episodes ({len(episodes)}):")
-            for ep in episodes[-5:]:
-                parts.append(f"- [{ep.timestamp}] {ep.action} -> {ep.result}")
+        if state.recent_decisions:
+            parts.append(f"\n## Recent decisions (last {min(5, len(state.recent_decisions))}):")
+            for d in state.recent_decisions[-5:]:
+                parts.append(f"- [{d.get('timestamp', '?')}] {d.get('action', '?')}: {d.get('task', '-')}")
 
-        if topics:
-            parts.append(f"\n## Semantic memory topics: {topics}")
-            parts.append("Use recall_semantic_detail tool to read any topic.")
-
-        if "learning_insights" in topics:
-            parts.append("\n## Learning Insights (from past reflections)")
-            parts.append("[Available via recall_semantic_detail tool with topic='learning_insights']")
-
-        parts.append("\nCall make_decision when you've decided what to do.")
+        parts.append("\nUse search_memory tool to retrieve historical context from long-term memory.")
+        parts.append("Call make_decision when you've decided what to do.")
         return "\n".join(parts)
