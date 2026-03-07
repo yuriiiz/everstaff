@@ -30,7 +30,7 @@ class WebSocketChannel:
     async def send_request(self, session_id: str, request: "HitlRequest") -> None:
         """Push HITL request event to all connected WebSocket clients."""
         from datetime import datetime, timezone
-        logger.info("[WS] → hitl_request  session=%s  hitl=%s  type=%s",
+        logger.info("hitl_request session=%s hitl=%s type=%s",
                     session_id[:8], request.hitl_id[:8], request.type)
         event = {
             "type": "hitl_request",
@@ -50,7 +50,7 @@ class WebSocketChannel:
 
     async def on_resolved(self, hitl_id: str, resolution: "HitlResolution") -> None:
         """Broadcast HITL resolved event to all connected WebSocket clients."""
-        logger.info("[WS] → hitl_resolved  hitl=%s  decision=%s  by=%s",
+        logger.info("hitl_resolved hitl=%s decision=%s by=%s",
                     hitl_id[:8], resolution.decision, resolution.resolved_by)
         event = {
             "type": "hitl_resolved",

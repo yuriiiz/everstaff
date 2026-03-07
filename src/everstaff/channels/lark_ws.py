@@ -83,14 +83,14 @@ class LarkWsChannel:
         url = f"{self._api_base}/im/v1/messages?receive_id_type=chat_id"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         body = {"receive_id": self._chat_id, "msg_type": "interactive", "content": json.dumps(card)}
-        logger.info("[LARK-OUT] POST %s\n  body=%s", url, json.dumps(body, ensure_ascii=False))
+        logger.info("POST url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
         async with aiohttp.ClientSession() as s:
             async with s.post(url, headers=headers, json=body) as r:
                 data = await r.json()
-                logger.info("[LARK-OUT] POST response status=%s\n  resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+                logger.info("POST response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
                 mid = data.get("data", {}).get("message_id", "")
                 if not mid:
-                    logger.error("[LARK-OUT] send failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                    logger.error("send failed code=%s msg=%s", data.get("code"), data.get("msg"))
                 return mid
 
     async def _update_card(self, token: str, message_id: str, card: dict) -> None:
@@ -99,11 +99,11 @@ class LarkWsChannel:
         url = f"{self._api_base}/im/v1/messages/{message_id}"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         body = {"msg_type": "interactive", "content": json.dumps(card)}
-        logger.info("[LARK-OUT] PATCH %s\n  body=%s", url, json.dumps(body, ensure_ascii=False))
+        logger.info("PATCH url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
         async with aiohttp.ClientSession() as s:
             async with s.patch(url, headers=headers, json=body) as r:
                 resp_data = await r.json()
-                logger.info("[LARK-OUT] PATCH response status=%s\n  resp=%s", r.status, json.dumps(resp_data, ensure_ascii=False))
+                logger.info("PATCH response status=%s resp=%s", r.status, json.dumps(resp_data, ensure_ascii=False))
 
     # ── Card builders ────────────────────────────────────────────
 
@@ -213,13 +213,13 @@ class LarkWsChannel:
     # ── HitlChannel protocol ────────────────────────────────────
 
     async def send_request(self, session_id: str, request: "HitlRequest") -> None:
-        logger.info("LarkWsChannel.send_request: session=%s hitl_id=%s type=%s", session_id, request.hitl_id, request.type)
+        logger.info("send_request session=%s hitl_id=%s type=%s", session_id, request.hitl_id, request.type)
         if request.type == "notify":
             try:
                 token = await self._get_access_token()
                 await self._send_card(token, self._build_notify_card(request))
             except Exception as exc:
-                logger.error("LarkWsChannel.send_request notify failed %s: %s", request.hitl_id, exc)
+                logger.error("send_request notify failed hitl_id=%s err=%s", request.hitl_id, exc)
             return
 
         self._hitl_requests[request.hitl_id] = request
@@ -234,14 +234,14 @@ class LarkWsChannel:
                     )
                 else:
                     self._hitl_message_ids[request.hitl_id] = mid
-                logger.info("LarkWsChannel: sent card %s mid=%s", request.hitl_id, mid)
+                logger.info("sent card hitl_id=%s mid=%s", request.hitl_id, mid)
             else:
-                logger.warning("LarkWsChannel: no message_id for %s", request.hitl_id)
+                logger.warning("no message_id for hitl_id=%s", request.hitl_id)
         except Exception as exc:
-            logger.error("LarkWsChannel.send_request failed %s: %s", request.hitl_id, exc)
+            logger.error("send_request failed hitl_id=%s err=%s", request.hitl_id, exc)
 
     async def on_resolved(self, hitl_id: str, resolution: "HitlResolution") -> None:
-        logger.info("LarkWsChannel.on_resolved: hitl_id=%s decision=%s", hitl_id, resolution.decision)
+        logger.info("on_resolved hitl_id=%s decision=%s", hitl_id, resolution.decision)
 
         # Look up the message_id for this HITL card
         message_id = None
@@ -249,15 +249,15 @@ class LarkWsChannel:
             try:
                 raw = await self._file_store.read(f"hitl-lark-ws/{hitl_id}.json")
                 message_id = json.loads(raw.decode()).get("message_id")
-                logger.info("LarkWsChannel.on_resolved: found mid=%s from file_store", message_id)
+                logger.info("on_resolved found mid=%s source=file_store", message_id)
             except Exception as exc:
-                logger.warning("LarkWsChannel.on_resolved: file_store read failed for %s: %s", hitl_id, exc)
+                logger.warning("on_resolved file_store read failed hitl_id=%s err=%s", hitl_id, exc)
         else:
             message_id = self._hitl_message_ids.get(hitl_id)
-            logger.info("LarkWsChannel.on_resolved: found mid=%s from memory", message_id)
+            logger.info("on_resolved found mid=%s source=memory", message_id)
 
         if not message_id:
-            logger.warning("LarkWsChannel.on_resolved: no message_id for %s, cannot update card", hitl_id)
+            logger.warning("on_resolved no message_id for hitl_id=%s, cannot update card", hitl_id)
             return
 
         try:
@@ -265,7 +265,7 @@ class LarkWsChannel:
             card = self._build_resolved_card(resolution.decision, resolution.resolved_by, self._hitl_requests.get(hitl_id))
             await self._update_card(token, message_id, card)
         except Exception as exc:
-            logger.error("LarkWsChannel.on_resolved: update card failed %s: %s", hitl_id, exc)
+            logger.error("on_resolved update card failed hitl_id=%s err=%s", hitl_id, exc)
         finally:
             if self._file_store is not None:
                 try:
@@ -286,13 +286,13 @@ class LarkWsChannel:
         event = getattr(data, "event", data)
         action = getattr(event, "action", None)
         if action is None:
-            logger.warning("[LARK-CB] _parse: no action field in event")
+            logger.warning("parse action: no action field in event")
             return "", "", "", None, None
 
         # Log raw fields for debugging
         raw_value = getattr(action, "value", None)
         raw_form = getattr(action, "form_value", None)
-        logger.info("[LARK-CB] _parse: action.value=%s action.form_value=%s", raw_value, raw_form)
+        logger.info("parse action value=%s form_value=%s", raw_value, raw_form)
 
         if isinstance(raw_value, str):
             try:
@@ -309,7 +309,7 @@ class LarkWsChannel:
         grant_scope = value.get("grant_scope")
         permission_pattern = value.get("permission_pattern")
         if not hitl_id or not decision:
-            logger.warning("[LARK-CB] _parse: missing hitl_id=%s or decision=%s in value=%s", hitl_id, decision, value)
+            logger.warning("parse action: missing hitl_id=%s or decision=%s value=%s", hitl_id, decision, value)
             return "", "", "", None, None
 
         if decision == "__input__":
@@ -323,17 +323,17 @@ class LarkWsChannel:
             else:
                 form_dict = {}
             decision = form_dict.get("user_input", "")
-            logger.info("[LARK-CB] _parse: form input resolved decision=%r", decision)
+            logger.info("parse action form input resolved decision=%r", decision)
 
         operator = getattr(event, "operator", None)
         resolved_by = getattr(operator, "open_id", "lark_user") if operator else "lark_user"
         resolved_by = resolved_by or "lark_user"
-        logger.info("[LARK-CB] _parse: hitl_id=%s decision=%r resolved_by=%s grant_scope=%s pattern=%s", hitl_id, decision, resolved_by, grant_scope, permission_pattern)
+        logger.info("parse action hitl_id=%s decision=%r resolved_by=%s grant_scope=%s pattern=%s", hitl_id, decision, resolved_by, grant_scope, permission_pattern)
         return hitl_id, decision, resolved_by, grant_scope, permission_pattern
 
     async def _handle_card_action(self, hitl_id: str, decision: str, resolved_by: str, grant_scope: str | None = None, permission_pattern: str | None = None) -> None:
         """Resolve HITL via channel_manager (broadcasts + persists)."""
-        logger.info("LarkWsChannel._handle_card_action: hitl_id=%s decision=%r by=%s grant_scope=%s pattern=%s", hitl_id, decision, resolved_by, grant_scope, permission_pattern)
+        logger.info("handle_card_action hitl_id=%s decision=%r by=%s grant_scope=%s pattern=%s", hitl_id, decision, resolved_by, grant_scope, permission_pattern)
         try:
             from everstaff.protocols import HitlResolution
             resolution = HitlResolution(
@@ -345,11 +345,11 @@ class LarkWsChannel:
             )
             if self._channel_manager is not None:
                 result = await self._channel_manager.resolve(hitl_id, resolution)
-                logger.info("LarkWsChannel._handle_card_action: channel_manager.resolve returned %s", result)
+                logger.info("handle_card_action channel_manager.resolve returned result=%s", result)
             else:
-                logger.warning("LarkWsChannel._handle_card_action: no channel_manager set")
+                logger.warning("handle_card_action no channel_manager set")
         except Exception as exc:
-            logger.error("LarkWsChannel._handle_card_action failed: %s", exc, exc_info=True)
+            logger.error("handle_card_action failed err=%s", exc, exc_info=True)
 
     # ── WS client setup ─────────────────────────────────────────
 
@@ -383,10 +383,10 @@ class LarkWsChannel:
 
             Card update is handled uniformly by on_resolved() via broadcast.
             """
-            logger.info("[LARK-CB] sync_card_handler ENTERED")
+            logger.info("sync_card_handler entered")
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
             if not hitl_id:
-                logger.warning("[LARK-CB] parse failed, returning empty response")
+                logger.warning("sync_card_handler parse failed, returning empty response")
                 return P2CardActionTriggerResponse({})
 
             # Dispatch backend processing (persist + resume) to app event loop
@@ -395,9 +395,9 @@ class LarkWsChannel:
                     self._handle_card_action(hitl_id, decision, resolved_by, grant_scope, permission_pattern),
                     self._app_loop,
                 )
-                logger.info("[LARK-CB] dispatched _handle_card_action to app loop")
+                logger.info("sync_card_handler dispatched handle_card_action to app loop")
             else:
-                logger.error("[LARK-CB] app loop unavailable, action dropped!")
+                logger.error("sync_card_handler app loop unavailable, action dropped")
 
             return P2CardActionTriggerResponse({})
 
@@ -430,7 +430,7 @@ class LarkWsChannel:
             msg_type = MessageType(type_)
 
             if msg_type not in (MessageType.EVENT, MessageType.CARD):
-                logger.debug("LarkWsChannel: ignoring frame type=%s", type_)
+                logger.debug("ignoring frame type=%s", type_)
                 return
 
             msg_id = _hdr(hs, HEADER_MESSAGE_ID)
@@ -447,9 +447,9 @@ class LarkWsChannel:
             # ── Log incoming event/callback ──
             try:
                 payload_str = pl.decode(UTF_8)
-                logger.info("[LARK-IN] %s msg_id=%s trace_id=%s\n  payload=%s", msg_type.value, msg_id, trace_id, payload_str)
+                logger.info("received type=%s msg_id=%s trace_id=%s payload=%s", msg_type.value, msg_id, trace_id, payload_str)
             except Exception:
-                logger.info("[LARK-IN] %s msg_id=%s trace_id=%s (payload decode failed)", msg_type.value, msg_id, trace_id)
+                logger.info("received type=%s msg_id=%s trace_id=%s (payload decode failed)", msg_type.value, msg_id, trace_id)
 
             resp = WsResp(code=http.HTTPStatus.OK)
             try:
@@ -461,19 +461,19 @@ class LarkWsChannel:
                 header.value = str(elapsed)
                 if result is not None:
                     marshaled = lark.JSON.marshal(result)
-                    logger.info("[LARK-IN] %s response type=%s rt=%dms\n  body=%s", msg_type.value, type(result).__name__, elapsed, marshaled)
+                    logger.info("response type=%s result_type=%s rt=%dms body=%s", msg_type.value, type(result).__name__, elapsed, marshaled)
                     resp.data = base64.b64encode(marshaled.encode(UTF_8))
                 else:
-                    logger.info("[LARK-IN] %s handler returned None rt=%dms", msg_type.value, elapsed)
+                    logger.info("handler returned None type=%s rt=%dms", msg_type.value, elapsed)
             except Exception as exc:
-                logger.error("[LARK-IN] %s handler error msg_id=%s: %s", msg_type.value, msg_id, exc, exc_info=True)
+                logger.error("handler error type=%s msg_id=%s err=%s", msg_type.value, msg_id, exc, exc_info=True)
                 resp = WsResp(code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
 
             frame.payload = lark.JSON.marshal(resp).encode(UTF_8)
             await client._write_message(frame.SerializeToString())
 
         client._handle_data_frame = _handle_data_frame
-        logger.info("LarkWsChannel: patched _handle_data_frame for EVENT+CARD")
+        logger.info("patched _handle_data_frame for EVENT+CARD")
         return client
 
     # ── Lifecycle ────────────────────────────────────────────────
@@ -501,15 +501,15 @@ class LarkWsChannel:
 
             try:
                 client = self._build_ws_client(loop)
-                logger.info("LarkWsChannel: WS client built, calling start()...")
+                logger.info("WS client built, calling start()")
                 client.start()
             except Exception as exc:
-                logger.error("LarkWsChannel WS thread failed: %s", exc, exc_info=True)
+                logger.error("WS thread failed err=%s", exc, exc_info=True)
 
         self._ws_thread = threading.Thread(target=_run_ws, daemon=True)
         self._ws_thread.start()
-        logger.info("LarkWsChannel started — WS long connection")
+        logger.info("started WS long connection")
 
     async def stop(self) -> None:
         self._started = False
-        logger.info("LarkWsChannel stopped")
+        logger.info("stopped")
