@@ -987,37 +987,6 @@ export default function SessionStore() {
                                 />
                             ))}
 
-                            {/* Inline tool permission HITL cards */}
-                            {hitlRequests
-                                .filter(r => (r.origin_session_id || r.session_id) === selectedSession.session_id && r.status === 'pending' && (r.hitl_type === 'tool_permission' || r.request?.type === 'tool_permission'))
-                                .map(r => (
-                                    <div key={r.hitl_id} style={{ display: 'flex', gap: '12px', padding: '8px 0' }}>
-                                        <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#eff6ff', color: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px', marginTop: '0px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-                                            <Bot size={16} />
-                                        </div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <HitlHistoryCard
-                                                args={{
-                                                    prompt: r.request?.prompt || r.prompt,
-                                                    type: 'tool_permission',
-                                                    options: r.request?.options || r.options || [],
-                                                    context: r.request?.context || r.context || '',
-                                                    hitl_id: r.hitl_id,
-                                                    tool_name: r.request?.tool_name || r.tool_name,
-                                                    tool_args: r.request?.tool_args || r.tool_args,
-                                                    tool_permission_options: r.request?.tool_permission_options || r.tool_permission_options || [],
-                                                }}
-                                                output={null}
-                                                hitlRequests={hitlRequests}
-                                                onResolve={handleHitlResolve}
-                                                sessionId={selectedSession.session_id}
-                                                sessionStatus={selectedSession.status}
-                                                toolCallId={r.tool_call_id}
-                                            />
-                                        </div>
-                                    </div>
-                                ))
-                            }
                         </div>
 
                         {/* Input Area */}

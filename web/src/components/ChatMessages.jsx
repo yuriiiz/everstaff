@@ -559,13 +559,23 @@ export const MessageItem = memo(({ message, agentName, hitlRequests, onResolve, 
                             const outputMsg = message.relatedOutputs?.find(o => o.tool_call_id === tc.id)
                                 || (message.relatedOutputs?.[i] && !message.relatedOutputs?.[i].tool_call_id ? message.relatedOutputs?.[i] : null);
 
-                            const isHitl = tc.name === 'request_human_input' || tc.function?.name === 'request_human_input';
+                            const hitlMatch = hitlRequests?.find(r => r.tool_call_id === tc.id);
+                            const isHitl = tc.name === 'request_human_input' || tc.function?.name === 'request_human_input' || !!hitlMatch;
 
                             if (isHitl) {
+                                let hitlArgs = tc.function?.arguments || tc.arguments || tc.args;
+                                if (hitlMatch && hitlMatch.request) {
+                                    try {
+                                        hitlArgs = typeof hitlMatch.request === 'string' ? JSON.parse(hitlMatch.request) : hitlMatch.request;
+                                    } catch (e) {
+                                        hitlArgs = hitlMatch.request;
+                                    }
+                                }
+
                                 return (
                                     <HitlHistoryCard
                                         key={i}
-                                        args={tc.function?.arguments || tc.arguments || tc.args}
+                                        args={hitlArgs}
                                         output={outputMsg}
                                         hitlRequests={hitlRequests}
                                         onResolve={onResolve}
