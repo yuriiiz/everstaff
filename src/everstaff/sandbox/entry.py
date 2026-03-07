@@ -51,6 +51,11 @@ async def sandbox_main(
         auth_result = await channel.send_request("auth", {"token": token})
         secret_store = SecretStore(auth_result.get("secrets", {}))
 
+        # Bridge SecretStore to litellm so LLM calls can find API keys
+        # without leaking them to os.environ.
+        from everstaff.llm.secret_bridge import install_secret_bridge
+        install_secret_bridge(secret_store)
+
         # Parse config from orchestrator
         from everstaff.core.config import FrameworkConfig
         config_data = auth_result.get("config", {})
