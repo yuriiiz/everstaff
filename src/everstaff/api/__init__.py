@@ -35,14 +35,13 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             _logger.info("Daemon enabled — initializing AgentDaemon (agents_dir=%s)", config.agents_dir)
             try:
                 from everstaff.daemon.agent_daemon import AgentDaemon
-                from everstaff.core.factories import build_memory_store
+                from everstaff.core.factories import build_file_store
+                from everstaff.daemon.state_store import DaemonStateStore
                 from everstaff.nulls import NullTracer
                 from everstaff.llm.litellm_client import LiteLLMClient
 
-                memory_store = build_memory_store(
-                    config.storage,
-                    config.sessions_dir,
-                )
+                file_store = build_file_store(config.storage, config.sessions_dir)
+                daemon_state_store = DaemonStateStore(file_store)
 
                 def _daemon_llm_factory(*, model_kind: str = "fast", **kw):
                     """Create a real LLM client for daemon ThinkEngine."""
@@ -101,7 +100,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
                 daemon = AgentDaemon(
                     agents_dir=config.agents_dir,
-                    memory=memory_store,
+                    daemon_state_store=daemon_state_store,
                     tracer=NullTracer(),
                     llm_factory=_daemon_llm_factory,
                     runtime_factory=_daemon_runtime_factory,
@@ -200,6 +199,17 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             mem0_client=_mem0_client,
         )
         app.state.executor_manager = _executor_manager
+
+    # Build shared Mem0Client for memories API
+    app.state.mem0_client = None
+    if config.memory.enabled:
+        try:
+            from everstaff.memory.mem0_client import Mem0Client as _MemClient
+            _api_llm = config.resolve_model(config.memory.llm_model_kind).model_id
+            _api_embed = config.resolve_model(config.memory.embedding_model_kind).model_id
+            app.state.mem0_client = _MemClient(config.memory, _api_llm, _api_embed)
+        except Exception as _exc:
+            _logger.warning("Failed to create shared Mem0Client: %s", _exc)
 
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry
@@ -355,6 +365,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     from everstaff.api.mcp_api import make_router as make_mcp_router
     from everstaff.api.webhooks import lark_router
     from everstaff.api.daemon import daemon_router
+    from everstaff.api.memories import make_router as make_memories_router
 
     app.include_router(make_agents_router(config), prefix="/api")
     app.include_router(make_sessions_router(config), prefix="/api")
@@ -368,6 +379,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.include_router(make_mcp_router(config), prefix="/api")
     app.include_router(lark_router, prefix="/api")
     app.include_router(daemon_router)
+    app.include_router(make_memories_router(), prefix="/api")
 
     # Mount frontend static files (must be LAST — after all API routers)
     if config.web.enabled:
