@@ -36,10 +36,6 @@ class GoalConfig(BaseModel):
 
 class AutonomyConfig(BaseModel):
     enabled: bool = False
-    level: str = "supervised"
-    # "autonomous"    — runs fully independently; no human notification
-    # "supervised"    — executes tasks, then notifies humans after completion (default)
-    # "collaborative" — requires human approval before executing each action
     tick_interval: int = 3600
     max_instances: int = 1
     instance_strategy: str = "queue"  # "queue" | "parallel" | "replace"
