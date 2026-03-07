@@ -19,13 +19,19 @@ class SecretStoreBridge(CustomSecretManager):
         super().__init__(secret_manager_name="everstaff")
         self._store = secret_store
 
+    def _read(self, secret_name: str) -> str:
+        value = self._store.get(secret_name)
+        if value is None:
+            raise KeyError(secret_name)
+        return value
+
     async def async_read_secret(
         self,
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> Optional[str]:
-        return self._store.get(secret_name)
+        return self._read(secret_name)
 
     def sync_read_secret(
         self,
@@ -33,7 +39,7 @@ class SecretStoreBridge(CustomSecretManager):
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> Optional[str]:
-        return self._store.get(secret_name)
+        return self._read(secret_name)
 
 
 def install_secret_bridge(secret_store: "SecretStore") -> None:

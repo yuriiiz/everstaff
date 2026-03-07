@@ -11,11 +11,12 @@ class TestSecretStoreBridge:
         bridge = SecretStoreBridge(store)
         assert bridge.sync_read_secret("OPENAI_API_KEY") == "sk-test-123"
 
-    def test_sync_read_missing_key(self):
+    def test_sync_read_missing_key_raises(self):
         from everstaff.llm.secret_bridge import SecretStoreBridge
         store = SecretStore({})
         bridge = SecretStoreBridge(store)
-        assert bridge.sync_read_secret("MISSING_KEY") is None
+        with pytest.raises(KeyError):
+            bridge.sync_read_secret("MISSING_KEY")
 
     @pytest.mark.asyncio
     async def test_async_read_existing_key(self):
