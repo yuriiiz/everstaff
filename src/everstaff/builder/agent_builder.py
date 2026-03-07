@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import datetime
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +80,12 @@ class AgentBuilder:
                 parts.append(proj)
         except Exception as exc:
             logger.debug("ProjectContextLoader unavailable: %s", exc)
-        # 2. Agent instructions
+            
+        # 2. Runtime environment context
+        now = datetime.datetime.now().astimezone()
+        parts.append(f"<EnvironmentVariables>\nCurrent local time: {now.strftime('%Y-%m-%dT%H:%M:%S%z')} ({now.tzname()})\n</EnvironmentVariables>")
+
+        # 3. Agent instructions
         if self._spec.instructions:
             parts.append(self._spec.instructions)
         return "\n\n".join(parts) if parts else None
@@ -126,13 +132,13 @@ class AgentBuilder:
 
         # Build mem0 provider and hook
         extra_providers = []
-        mem0_provider = self._env.build_mem0_provider(**mem0_scope) if hasattr(self._env, "build_mem0_provider") else None
+        mem0_provider = self._env.build_mem0_provider(**mem0_scope)
         if mem0_provider is not None:
             extra_providers.append(mem0_provider)
 
         hooks = list(self._hooks)
         if mem0_provider is not None:
-            mem0_hook = self._env.build_mem0_hook(mem0_provider, memory, **mem0_scope) if hasattr(self._env, "build_mem0_hook") else None
+            mem0_hook = self._env.build_mem0_hook(mem0_provider, memory, **mem0_scope)
             if mem0_hook is not None:
                 hooks.append(mem0_hook)
 
