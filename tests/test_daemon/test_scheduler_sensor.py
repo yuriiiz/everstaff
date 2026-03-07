@@ -1,8 +1,14 @@
 import asyncio
 import pytest
 from everstaff.daemon.event_bus import EventBus
+from everstaff.daemon.sensors.base import Sensor
 from everstaff.daemon.sensors.scheduler import SchedulerSensor
 from everstaff.schema.autonomy import TriggerConfig
+
+
+def test_scheduler_sensor_is_sensor_subclass():
+    sensor = SchedulerSensor(triggers=[], agent_name="test")
+    assert isinstance(sensor, Sensor)
 
 
 @pytest.mark.asyncio

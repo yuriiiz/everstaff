@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from everstaff.daemon.sensors.base import Sensor
+
 if TYPE_CHECKING:
     from everstaff.daemon.event_bus import EventBus
     from everstaff.schema.autonomy import TriggerConfig
@@ -25,7 +27,7 @@ def _parse_cron(expression: str) -> dict:
     }
 
 
-class SchedulerSensor:
+class SchedulerSensor(Sensor):
     """Converts cron/interval TriggerConfigs into AgentEvents on the EventBus.
 
     Uses APScheduler (v3) AsyncIOScheduler under the hood to fire jobs
