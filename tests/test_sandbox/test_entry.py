@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from everstaff.sandbox.entry import sandbox_main, parse_args
+from everstaff.sandbox.entry import sandbox_main, parse_args, _run_agent
 
 
 class TestParseArgs:
@@ -94,3 +94,62 @@ class TestSandboxMain:
                 )
 
         mock_channel.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_agent_forwards_stream_events():
+    """_run_agent sends stream events via IPC notification."""
+    channel = AsyncMock()
+    channel.send_notification = AsyncMock()
+
+    mock_event_1 = MagicMock()
+    mock_event_1.model_dump.return_value = {"type": "text_delta", "content": "hi"}
+    mock_event_2 = MagicMock()
+    mock_event_2.model_dump.return_value = {"type": "session_end", "response": "done"}
+
+    mock_runtime = AsyncMock()
+
+    async def fake_stream(*args, **kwargs):
+        yield mock_event_1
+        yield mock_event_2
+
+    mock_runtime.run_stream = fake_stream
+    mock_ctx = AsyncMock()
+
+    with patch("everstaff.builder.agent_builder.AgentBuilder") as MockBuilder:
+        MockBuilder.return_value.build = AsyncMock(return_value=(mock_runtime, mock_ctx))
+        env = MagicMock()
+        await _run_agent(
+            env=env,
+            session_id="s1",
+            agent_spec_json='{"agent_name": "test"}',
+            cancelled=asyncio.Event(),
+            hitl_resolutions=asyncio.Queue(),
+            channel=channel,
+            user_input="hello",
+        )
+
+    calls = channel.send_notification.call_args_list
+    stream_calls = [c for c in calls if c[0][0] == "stream.event"]
+    assert len(stream_calls) == 2
+    assert stream_calls[0][0][1]["type"] == "text_delta"
+    assert stream_calls[0][0][1]["session_id"] == "s1"
+    assert stream_calls[1][0][1]["type"] == "session_end"
+
+
+def test_parse_args_user_input():
+    """--user-input is parsed correctly."""
+    args = parse_args([
+        "--socket-path", "/tmp/s", "--token", "t", "--session-id", "s1",
+        "--agent-spec", "{}", "--user-input", "hello world",
+    ])
+    assert args.user_input == "hello world"
+
+
+def test_parse_args_user_input_default():
+    """--user-input defaults to None."""
+    args = parse_args([
+        "--socket-path", "/tmp/s", "--token", "t", "--session-id", "s1",
+        "--agent-spec", "{}",
+    ])
+    assert args.user_input is None

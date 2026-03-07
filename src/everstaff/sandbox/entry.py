@@ -28,6 +28,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--session-id", required=True, help="Session ID")
     parser.add_argument("--agent-spec", required=True, help="Agent spec JSON string")
     parser.add_argument("--workspace-dir", default="/work", help="Workspace directory")
+    parser.add_argument("--user-input", default=None, help="Initial user input text")
     return parser.parse_args(argv)
 
 
@@ -37,6 +38,7 @@ async def sandbox_main(
     session_id: str,
     agent_spec_json: str,
     workspace_dir: str,
+    user_input: str | None = None,
 ) -> None:
     """Entry point for sandbox process."""
     # 1. Connect and authenticate
@@ -79,6 +81,8 @@ async def sandbox_main(
             agent_spec_json=agent_spec_json,
             cancelled=_cancelled,
             hitl_resolutions=_hitl_resolutions,
+            channel=channel,
+            user_input=user_input,
         )
     finally:
         await channel.close()
@@ -90,6 +94,8 @@ async def _run_agent(
     agent_spec_json: str,
     cancelled: asyncio.Event,
     hitl_resolutions: asyncio.Queue,
+    channel: UnixSocketChannel | None = None,
+    user_input: str | None = None,
 ) -> None:
     """Build and run AgentRuntime. Separated for testability."""
     from everstaff.builder.agent_builder import AgentBuilder
@@ -99,8 +105,15 @@ async def _run_agent(
     builder = AgentBuilder(spec, env, session_id=session_id)
     runtime, ctx = await builder.build()
 
-    async for _event in runtime.run_stream():
-        pass  # All saves/traces go through proxies automatically
+    async for event in runtime.run_stream(user_input):
+        if channel is not None:
+            try:
+                await channel.send_notification(
+                    "stream.event",
+                    {**event.model_dump(), "session_id": session_id},
+                )
+            except Exception:
+                pass  # fire-and-forget
 
 
 def main() -> None:
@@ -112,6 +125,7 @@ def main() -> None:
         session_id=args.session_id,
         agent_spec_json=args.agent_spec,
         workspace_dir=args.workspace_dir,
+        user_input=args.user_input,
     ))
 
 
