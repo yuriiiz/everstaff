@@ -65,7 +65,7 @@ class AgentLoop:
         channel_manager: Any = None,
         sessions_dir: str | Path | None = None,
         triggers: list[Any] | None = None,           # list[TriggerConfig]
-        agent_hitl_channels: list[Any] | None = None, # list[HitlChannelRef]
+        hitl_channels: list[Any] | None = None,  # list[HitlChannelRef]
         channel_registry: dict[str, Any] | None = None, # dict[name → HitlChannel]
         session_index: Any = None,
         internal_sensor: Any = None,
@@ -86,7 +86,7 @@ class AgentLoop:
         self._busy = False  # overlap detection
         self._sessions_dir: Path | None = Path(sessions_dir) if sessions_dir else None
         self._triggers = triggers or []
-        self._agent_hitl_channels = agent_hitl_channels or []
+        self._hitl_channels = hitl_channels or []
         self._channel_registry = channel_registry or {}
         self._session_index = session_index
         self._internal_sensor = internal_sensor
@@ -108,35 +108,19 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     def _resolve_channels(self, event: Any) -> Any:
-        """Return a scoped ChannelManager for this trigger event.
+        """Return a scoped ChannelManager for this event.
 
-        Priority:
-        1. trigger.hitl_channels (if trigger found and explicitly set)
-        2. agent-level hitl_channels (if non-empty)
-        3. self._channel_manager (global fallback)
+        Uses agent-level hitl_channels if configured, otherwise
+        falls back to the default channel_manager.
         """
         from everstaff.channels.manager import ChannelManager
 
-        # Extract trigger_id: "cron.daily-digest" → "daily-digest"
-        event_type = getattr(event, "type", "") or ""
-        trigger_id = event_type.split(".", 1)[-1] if "." in event_type else event_type
-
-        # Find matching trigger by id
-        trigger = next((t for t in self._triggers if t.id == trigger_id), None)
-
-        # Determine which refs to use
-        refs = None
-        if trigger is not None and trigger.hitl_channels is not None:
-            refs = trigger.hitl_channels
-        elif self._agent_hitl_channels:
-            refs = self._agent_hitl_channels
-
-        if refs is None:
+        if not self._hitl_channels:
             return self._channel_manager  # fallback to global
 
         # Build scoped ChannelManager from refs + registry
         scoped = ChannelManager()
-        for ref in refs:
+        for ref in self._hitl_channels:
             channel = self._channel_registry.get(ref.ref)
             if channel is None:
                 logger.warning(

@@ -265,67 +265,9 @@ async def test_loop_skip_emits_think_but_no_act():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_loop_uses_trigger_hitl_channels():
-    """When trigger has hitl_channels, scoped ChannelManager passed to runtime."""
-    from everstaff.schema.autonomy import TriggerConfig, HitlChannelRef
-    from everstaff.channels.manager import ChannelManager
-
-    bus = EventBus()
-    bus.subscribe("test-agent")
-
-    decision = Decision(action="execute", task_prompt="do work", reasoning="r", priority="normal")
-    think = MockThinkEngine(decision)
-    received_cm = []
-
-    class _CapturingRuntime:
-        async def run(self, prompt: str, **kw) -> str:
-            return "done"
-
-    def _factory(**kw):
-        received_cm.append(kw.get("channel_manager"))
-        return _CapturingRuntime()
-
-    class _FakeChannel:
-        async def send_request(self, *a): pass
-        async def on_resolved(self, *a): pass
-        async def start(self): pass
-        async def stop(self): pass
-
-    fake_ch = _FakeChannel()
-    trigger = TriggerConfig(
-        id="daily",
-        type="cron",
-        schedule="* * * * *",
-        task="do work",
-        hitl_channels=[HitlChannelRef(ref="lark-main")],
-    )
-
-    loop = AgentLoop(
-        agent_name="test-agent",
-        event_bus=bus,
-        think_engine=think,
-        runtime_factory=_factory,
-        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
-        agent_uuid="test-uuid",
-        tracer=NullTracer(),
-        triggers=[trigger],
-        agent_hitl_channels=[],
-        channel_registry={"lark-main": fake_ch},
-    )
-
-    await bus.publish(AgentEvent(source="cron", type="cron.daily", target_agent="test-agent"))
-    await loop.run_once()
-
-    assert len(received_cm) == 1
-    scoped = received_cm[0]
-    assert scoped is not None
-    assert fake_ch in scoped._channels
-
-
-@pytest.mark.asyncio
-async def test_loop_falls_back_to_agent_hitl_channels():
-    """Trigger without hitl_channels falls back to agent-level hitl_channels."""
-    from everstaff.schema.autonomy import TriggerConfig, HitlChannelRef
+async def test_loop_uses_agent_hitl_channels():
+    """Agent-level hitl_channels → scoped ChannelManager passed to runtime."""
+    from everstaff.schema.autonomy import HitlChannelRef
 
     bus = EventBus()
     bus.subscribe("test-agent")
@@ -349,10 +291,6 @@ async def test_loop_falls_back_to_agent_hitl_channels():
         async def stop(self): pass
 
     agent_ch = _FakeChannel()
-    trigger = TriggerConfig(
-        id="daily", type="cron", schedule="* * * * *", task="do work",
-        hitl_channels=None,
-    )
 
     loop = AgentLoop(
         agent_name="test-agent",
@@ -362,8 +300,7 @@ async def test_loop_falls_back_to_agent_hitl_channels():
         daemon_state_store=DaemonStateStore(InMemoryFileStore()),
         agent_uuid="test-uuid",
         tracer=NullTracer(),
-        triggers=[trigger],
-        agent_hitl_channels=[HitlChannelRef(ref="agent-ch")],
+        hitl_channels=[HitlChannelRef(ref="agent-ch")],
         channel_registry={"agent-ch": agent_ch},
     )
 
@@ -406,7 +343,7 @@ async def test_loop_no_hitl_channels_passes_default_cm():
         tracer=NullTracer(),
         channel_manager=default_cm,
         triggers=[],
-        agent_hitl_channels=[],
+        hitl_channels=[],
         channel_registry={},
     )
 
