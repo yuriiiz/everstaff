@@ -335,6 +335,7 @@ class AgentRuntime:
                         "stopped": True,
                         "total_duration_ms": total_ms,
                     }, duration_ms=total_ms)
+                    await self._hook_notify("on_session_end", _STOPPED)
                     # Clean up cancel signal file
                     if self._ctx.file_store is not None:
                         try:
@@ -440,6 +441,7 @@ class AgentRuntime:
                         "stopped": True,
                         "total_duration_ms": total_ms,
                     }, duration_ms=total_ms)
+                    await self._hook_notify("on_session_end", _STOPPED)
                     if self._ctx.file_store is not None:
                         try:
                             await self._ctx.file_store.delete(_SI.signal_relpath(self._ctx.session_id, self._ctx.root_session_id))
@@ -538,6 +540,7 @@ class AgentRuntime:
                             "stopped": True,
                             "total_duration_ms": total_ms,
                         }, duration_ms=total_ms)
+                        await self._hook_notify("on_session_end", _STOPPED)
                         # Clean up cancel signal file
                         if self._ctx.file_store is not None:
                             try:
@@ -721,6 +724,7 @@ class AgentRuntime:
                 "paused_for_hitl": True,
                 "total_duration_ms": total_ms,
             }, duration_ms=total_ms)
+            await self._hook_notify("on_session_end", "")
             # Yield HITL request events so broadcast_fn can notify WS clients
             # (daemon sessions use channel_manager above; web sessions use this path)
             for req in hitl_exc.requests:
@@ -755,6 +759,10 @@ class AgentRuntime:
                 "message": str(e),
                 "phase": "runtime_loop",
             })
+            try:
+                await self._hook_notify("on_session_end", str(e))
+            except Exception:
+                pass  # don't mask original exception
             yield ErrorEvent(error=str(e))
             raise
 

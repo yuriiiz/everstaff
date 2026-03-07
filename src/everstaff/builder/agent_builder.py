@@ -102,7 +102,7 @@ class AgentBuilder:
         # Determine mem0 scope
         mem0_scope = {}
         if self._env.config.memory.enabled:
-            mem0_scope["agent_id"] = self._spec.agent_name
+            mem0_scope["agent_id"] = self._spec.uuid or self._spec.agent_name
             # user_id will be added when auth context is available
 
         # 1. Build independent modules in parallel

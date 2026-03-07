@@ -65,6 +65,14 @@ class S3FileStore:
             Body=data,
         )
 
+    async def append(self, path: str, data: bytes) -> None:
+        """S3 has no native append — read-modify-write."""
+        try:
+            existing = await self.read(path)
+        except Exception:
+            existing = b""
+        await self.write(path, existing + data)
+
     async def exists(self, path: str) -> bool:
         def _exists() -> bool:
             try:

@@ -27,6 +27,12 @@ class LocalFileStore:
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_bytes(data)
 
+    async def append(self, path: str, data: bytes) -> None:
+        full = self._resolve(path)
+        full.parent.mkdir(parents=True, exist_ok=True)
+        with full.open("ab") as f:
+            f.write(data)
+
     async def exists(self, path: str) -> bool:
         return self._resolve(path).exists()
 

@@ -35,7 +35,7 @@ class SandboxEnvironment(RuntimeEnvironment):
         self._secret_store = secret_store
         self._workspace_dir = workspace_dir
 
-    def build_memory_store(self, max_tokens: int | None = None) -> "MemoryStore":
+    def build_memory_store(self, max_tokens: int | None = None, **kwargs: Any) -> "MemoryStore":
         return ProxyMemoryStore(self._channel)
 
     def build_tracer(self, session_id: str = "") -> "TracingBackend":

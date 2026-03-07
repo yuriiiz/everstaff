@@ -35,7 +35,7 @@ GET /agents
   {
     "uuid": "a1b2c3d4-...",
     "agent_name": "Test",
-    "version": "0.1.0",
+    "version": "0.1.3",
     "description": "A test agent",
     "instructions": "You are a helpful assistant...",
     "adviced_model_kind": "smart",

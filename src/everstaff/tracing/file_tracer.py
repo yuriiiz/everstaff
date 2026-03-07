@@ -39,6 +39,8 @@ class FileTracer:
         self._flush_interval = flush_interval
         self._buffer: list[str] = []
         self._last_flush_time: float = time.monotonic()
+        self._write_lock: asyncio.Lock | None = None
+        self._pending_tasks: list[asyncio.Task] = []
 
         if store is not None:
             # New injection-based constructor: paths are relative strings
@@ -52,6 +54,11 @@ class FileTracer:
             self._legacy_session_path = Path(session_path) if session_path else None
             self._legacy_global_path = Path(global_path) if global_path else None
             self._legacy_mode = True
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
+        return self._write_lock
 
     def on_event(self, event: TraceEvent) -> None:
         try:
@@ -82,7 +89,9 @@ class FileTracer:
                     lines = "\n".join(self._buffer) + "\n"
                     self._buffer.clear()
                     self._last_flush_time = time.monotonic()
-                    loop.create_task(self._flush_async(lines))
+                    task = loop.create_task(self._flush_async(lines))
+                    self._pending_tasks.append(task)
+                    task.add_done_callback(self._pending_tasks.remove)
                 except RuntimeError:
                     self._flush_sync()
 
@@ -109,8 +118,18 @@ class FileTracer:
         asyncio.run(self._flush_async(lines))
 
     async def aflush(self) -> None:
-        """Flush buffered events (async-safe version)."""
-        if self._legacy_mode or not self._buffer:
+        """Flush buffered events (async-safe version).
+
+        Awaits any in-flight flush tasks first, then flushes remaining buffer.
+        """
+        if self._legacy_mode:
+            return
+        # Wait for any pending fire-and-forget flush tasks
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
+        # Flush any remaining buffered events
+        if not self._buffer:
             return
         lines = "\n".join(self._buffer) + "\n"
         self._buffer.clear()
@@ -119,14 +138,22 @@ class FileTracer:
 
     async def _flush_async(self, lines: str) -> None:
         data = lines.encode()
-        for path in filter(None, [self._session_path, self._global_path]):
-            try:
-                existing = b""
-                if await self._store.exists(path):
-                    existing = await self._store.read(path)
-                await self._store.write(path, existing + data)
-            except Exception as e:
-                logger.warning("FileTracer failed to write to %s: %s", path, e)
+        lock = self._get_lock()
+        async with lock:
+            for path in filter(None, [self._session_path, self._global_path]):
+                try:
+                    await self._store.append(path, data)
+                except (AttributeError, NotImplementedError):
+                    # Fallback for stores without append — read-modify-write
+                    try:
+                        existing = b""
+                        if await self._store.exists(path):
+                            existing = await self._store.read(path)
+                        await self._store.write(path, existing + data)
+                    except Exception as e:
+                        logger.warning("FileTracer failed to write to %s: %s", path, e)
+                except Exception as e:
+                    logger.warning("FileTracer failed to append to %s: %s", path, e)
 
     def close(self) -> None:
         """Flush remaining buffered events."""

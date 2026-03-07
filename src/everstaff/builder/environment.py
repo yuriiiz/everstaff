@@ -157,7 +157,7 @@ class TestEnvironment(RuntimeEnvironment):
             })
         super().__init__(config=config)
 
-    def build_memory_store(self, max_tokens: int | None = None) -> MemoryStore:
+    def build_memory_store(self, max_tokens: int | None = None, **mem0_scope) -> MemoryStore:
         return InMemoryStore()
 
     def build_tracer(self, session_id: str = "") -> TracingBackend:
