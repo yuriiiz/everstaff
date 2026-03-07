@@ -13,9 +13,13 @@ def app_with_daemon():
     app.include_router(daemon_router)
 
     # Mock daemon on app.state
+    class MockSensorManager:
+        _sensors = []
+
     class MockDaemon:
         is_running = True
         loop_manager = LoopManager()
+        sensor_manager = MockSensorManager()
 
         async def reload(self):
             pass
@@ -32,6 +36,7 @@ async def test_daemon_status(app_with_daemon):
         data = resp.json()
         assert "enabled" in data
         assert data["enabled"] is True
+        assert data["webhooks"] == []
 
 
 @pytest.mark.asyncio

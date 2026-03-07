@@ -14,8 +14,15 @@ async def daemon_status(request: Request):
     daemon = getattr(request.app.state, "daemon", None)
     if daemon is None:
         logger.debug("[DaemonAPI] GET /status — daemon not configured")
-        return {"enabled": False, "running": False}
-    status = {"enabled": True, "running": daemon.is_running}
+        return {"enabled": False, "running": False, "webhooks": []}
+    webhooks = []
+    for sensor, agent_name in daemon.sensor_manager._sensors:
+        if hasattr(sensor, "_route_path") and sensor._route_path:
+            webhooks.append({
+                "agent_name": agent_name,
+                "path": sensor._route_path,
+            })
+    status = {"enabled": True, "running": daemon.is_running, "webhooks": webhooks}
     logger.debug("[DaemonAPI] GET /status — %s", status)
     return status
 
