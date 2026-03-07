@@ -10,7 +10,7 @@ from everstaff.protocols import HitlRequest, HumanApprovalRequired, ToolDefiniti
 logger = logging.getLogger(__name__)
 
 # Valid HITL tool modes (mirrors hitl_mode in AgentSpec, minus "never")
-_VALID_MODES = ("on_request", "notify", "always")
+_VALID_MODES = ("on_request", "notify")
 
 
 class RequestHumanInputTool:
@@ -33,7 +33,6 @@ class RequestHumanInputTool:
         mode:
             "on_request" — full HITL: agent decides when to ask human.
             "notify"     — notify-only: non-blocking notifications, no blocking.
-            "always"     — supervised: agent must get approval before every action.
         """
         if mode not in _VALID_MODES:
             raise ValueError(f"Invalid HITL mode: {mode!r}, expected one of {_VALID_MODES}")
@@ -127,23 +126,6 @@ class RequestHumanInputTool:
                 "- Alert about warnings or issues encountered\n\n"
                 "**Important:** This tool only sends notifications. "
                 "You cannot ask questions or request decisions — proceed autonomously."
-            )
-        if self._mode == "always":
-            return (
-                "## Supervised Execution Mode\n\n"
-                "You are running in **supervised mode**. You MUST get explicit human approval "
-                "before executing ANY action.\n\n"
-                "**Mandatory workflow for EVERY step:**\n"
-                "1. Analyze and decide what to do next\n"
-                "2. Call `request_human_input` with `type: \"approve_reject\"` — describe the "
-                "specific action you plan to take (tool name, arguments, expected outcome)\n"
-                "3. Wait for human approval\n"
-                "4. Only after receiving approval, execute the action\n\n"
-                "**Rules:**\n"
-                "- NEVER call any tool without prior approval via `request_human_input`\n"
-                "- Each approval covers ONE action — get fresh approval for each subsequent step\n"
-                "- If the human rejects, propose an alternative or ask for guidance\n"
-                "- You may use `notify` type for status updates without pausing"
             )
         return (
             "## Human Interaction Rules\n\n"

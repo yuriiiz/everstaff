@@ -94,11 +94,10 @@ class AgentSpec(BaseModel):
     enable_bootstrap: bool = False
 
     # HITL — controls when the request_human_input tool is registered
-    # "always"     = supervised: agent must get approval before every action
     # "on_request" = full HITL (blocking + notify), agent decides when to ask
     # "notify"     = notify-only (non-blocking, fire-and-forget)
     # "never"      = tool not registered
-    hitl_mode: Literal["always", "on_request", "notify", "never"] = "on_request"
+    hitl_mode: Literal["on_request", "notify", "never"] = "on_request"
     hitl_channels: list[HitlChannelRef] = Field(default_factory=list)
 
     # Workflow — when set, the agent operates in workflow/coordinator mode.
