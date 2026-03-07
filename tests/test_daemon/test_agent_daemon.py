@@ -176,7 +176,7 @@ async def test_hot_reload_autonomy_disabled(tmp_path):
 
 @pytest.mark.asyncio
 async def test_daemon_passes_channel_registry_to_loop(tmp_path):
-    """AgentDaemon passes channel_registry + triggers + agent_hitl_channels to AgentLoop."""
+    """AgentDaemon passes channel_registry + triggers + hitl_channels to AgentLoop."""
     import yaml
     from everstaff.daemon.agent_daemon import AgentDaemon
     from everstaff.nulls import NullTracer
@@ -232,6 +232,7 @@ async def test_daemon_passes_channel_registry_to_loop(tmp_path):
     assert kw["channel_registry"] is channel_registry
     assert len(kw["triggers"]) == 1
     assert kw["triggers"][0].id == "t1"
+    assert "agent_hitl_channels" not in kw
 
 
 def _write_agent_yaml_with_triggers(agents_dir: Path, name: str, triggers: list[dict]):

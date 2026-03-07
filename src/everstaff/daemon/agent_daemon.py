@@ -235,7 +235,7 @@ class AgentDaemon:
             channel_manager=self._channel_manager,
             sessions_dir=self._sessions_dir,
             triggers=spec.autonomy.triggers,
-            agent_hitl_channels=spec.hitl_channels,
+            hitl_channels=spec.hitl_channels,
             channel_registry=self._channel_registry,
             session_index=self._session_index,
             internal_sensor=internal_sensor,
