@@ -15,6 +15,11 @@ def reset_logging_state():
         h.close()
     for name in ul._NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.NOTSET)
+    for name in ul._LITELLM_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.NOTSET)
+        lg.handlers.clear()
+        lg.propagate = True
     yield
     # Teardown: clean state after each test
     ul._configured = False
@@ -23,6 +28,11 @@ def reset_logging_state():
         h.close()
     for name in ul._NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.NOTSET)
+    for name in ul._LITELLM_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.NOTSET)
+        lg.handlers.clear()
+        lg.propagate = True
 
 
 def test_setup_console_only(capsys):
@@ -105,3 +115,24 @@ def test_invalid_level_raises():
     from everstaff.utils.logging import setup_logging
     with pytest.raises(ValueError, match="Unknown log level"):
         setup_logging(console=True, level="VERBOS")
+
+
+def test_third_party_handlers_cleared():
+    """Third-party loggers must have no own handlers and propagate=True."""
+    # Pre-add a handler to simulate a third-party library configuring its own
+    litellm_logger = logging.getLogger("LiteLLM")
+    fake_handler = logging.StreamHandler()
+    litellm_logger.addHandler(fake_handler)
+    litellm_logger.propagate = False
+
+    from everstaff.utils.logging import setup_logging
+    setup_logging(console=True, level="INFO")
+
+    # After setup, handler should be cleared and propagate restored
+    assert len(litellm_logger.handlers) == 0
+    assert litellm_logger.propagate is True
+
+    # Also check one from _NOISY_LOGGERS
+    httpx_logger = logging.getLogger("httpx")
+    assert len(httpx_logger.handlers) == 0
+    assert httpx_logger.propagate is True

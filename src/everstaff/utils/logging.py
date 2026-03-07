@@ -28,6 +28,8 @@ _NOISY_LOGGERS = [
     "uvicorn.access",  # keep error/warning, suppress access log spam
 ]
 
+_LITELLM_LOGGERS = ["LiteLLM", "LiteLLM Router", "LiteLLM Proxy"]
+
 
 def setup_logging(
     *,
@@ -71,6 +73,9 @@ def setup_logging(
         fh.setLevel(numeric_level)
         root.addHandler(fh)
 
-    # Suppress noisy third-party loggers
-    for name in _NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(logging.WARNING)
+    # Suppress noisy third-party loggers and force them through our formatter
+    for name in [*_NOISY_LOGGERS, *_LITELLM_LOGGERS]:
+        lib_logger = logging.getLogger(name)
+        lib_logger.setLevel(logging.WARNING)
+        lib_logger.handlers.clear()
+        lib_logger.propagate = True
