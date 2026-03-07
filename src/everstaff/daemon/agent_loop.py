@@ -67,6 +67,7 @@ class AgentLoop:
         agent_hitl_channels: list[Any] | None = None, # list[HitlChannelRef]
         channel_registry: dict[str, Any] | None = None, # dict[name → HitlChannel]
         session_index: Any = None,
+        internal_sensor: Any = None,
     ) -> None:
         self._agent_name = agent_name
         self._bus = event_bus
@@ -85,6 +86,7 @@ class AgentLoop:
         self._agent_hitl_channels = agent_hitl_channels or []
         self._channel_registry = channel_registry or {}
         self._session_index = session_index
+        self._internal_sensor = internal_sensor
 
     # ------------------------------------------------------------------
     # Properties
@@ -249,6 +251,8 @@ class AgentLoop:
                 tags=[decision.priority],
             )
             await self._memory.episode_append(self._agent_name, episode)
+            if self._internal_sensor is not None:
+                self._internal_sensor.notify_episode()
 
         # Update working memory with the decision
         ws = await self._memory.working_load(self._agent_name)

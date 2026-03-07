@@ -58,6 +58,7 @@ class AgentDaemon:
         channel_registry: dict[str, Any] | None = None,
         sessions_dir: str | Path | None = None,
         session_index: Any = None,
+        app: Any = None,
     ) -> None:
         self._agents_dir = Path(agents_dir)
         self._memory = memory
@@ -68,6 +69,7 @@ class AgentDaemon:
         self._channel_registry = channel_registry or {}
         self._sessions_dir = sessions_dir
         self._session_index = session_index
+        self._app = app
         self._running = False
 
         from everstaff.daemon.event_bus import EventBus
@@ -173,6 +175,31 @@ class AgentDaemon:
             self._sensor_manager.register(sensor, agent_name=name)
             await sensor.start(self._event_bus)
 
+        # WebhookSensor for webhook triggers
+        webhook_triggers = [t for t in spec.autonomy.triggers if t.type == "webhook"]
+        if webhook_triggers and self._app and spec.uuid:
+            from everstaff.daemon.sensors.webhook import WebhookSensor
+            ws = WebhookSensor(triggers=webhook_triggers, agent_name=name, agent_uuid=spec.uuid, app=self._app)
+            self._sensor_manager.register(ws, agent_name=name)
+            await ws.start(self._event_bus)
+
+        # FileWatchSensor for file_watch triggers
+        file_watch_triggers = [t for t in spec.autonomy.triggers if t.type == "file_watch"]
+        if file_watch_triggers:
+            from everstaff.daemon.sensors.file_watch import FileWatchSensor
+            fws = FileWatchSensor(triggers=file_watch_triggers, agent_name=name)
+            self._sensor_manager.register(fws, agent_name=name)
+            await fws.start(self._event_bus)
+
+        # InternalSensor for internal triggers
+        internal_triggers = [t for t in spec.autonomy.triggers if t.type == "internal"]
+        internal_sensor = None
+        if internal_triggers:
+            from everstaff.daemon.sensors.internal import InternalSensor
+            internal_sensor = InternalSensor(triggers=internal_triggers, agent_name=name)
+            self._sensor_manager.register(internal_sensor, agent_name=name)
+            await internal_sensor.start(self._event_bus)
+
         # Create ThinkEngine
         think_llm = self._llm_factory(model_kind=spec.autonomy.think_model)
         think_engine = ThinkEngine(
@@ -206,6 +233,7 @@ class AgentDaemon:
             agent_hitl_channels=spec.hitl_channels,
             channel_registry=self._channel_registry,
             session_index=self._session_index,
+            internal_sensor=internal_sensor,
         )
 
         await self._loop_manager.start(loop)
