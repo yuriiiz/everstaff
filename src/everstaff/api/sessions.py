@@ -34,6 +34,14 @@ def _guard_session_id(sessions_dir: Path, session_id: str) -> Path:
     return target
 
 
+def _resolve_user_id(request: Request) -> str:
+    """Extract user_id from auth state, defaulting to 'default'."""
+    user = getattr(request.state, "user", None)
+    if user is not None:
+        return user.user_id
+    return "default"
+
+
 def _format_decision_message(request: dict, decision: str, comment: str | None) -> str:
     lines = ["[Human decision for HITL request]"]
     lines.append(f"Original prompt: {request.get('prompt', '')}")
@@ -56,6 +64,7 @@ async def _resume_session_task(
     root_session_id: str | None = None,  # root of session tree; None for root sessions
     session_index=None,  # shared SessionIndex for index updates
     executor_manager=None,  # sandbox ExecutorManager
+    user_id: str | None = None,
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -214,7 +223,7 @@ async def _resume_session_task(
 
     ctx = None
     try:
-        runtime, ctx = await AgentBuilder(spec, env, session_id=session_id, user_input=decision_text or None).build()
+        runtime, ctx = await AgentBuilder(spec, env, session_id=session_id, user_input=decision_text or None, user_id=user_id).build()
         if tool_call_id:
             # Proper resume (single-HITL legacy path): insert HITL decision as a tool-role message.
             from everstaff.protocols import Message
@@ -443,7 +452,17 @@ async def _run_in_sandbox(
         except Exception:
             pass
     finally:
-        await executor_manager.destroy(session_id)
+        # Wait for IPC handler to finish processing all buffered messages
+        # (including tracer.event session_end) before flushing the tracer.
+        if hasattr(executor, "wait_drained"):
+            await executor.wait_drained()
+        # Flush the orchestrator-side tracer so buffered events (including
+        # session_end) are persisted before the tracer goes out of scope.
+        if tracer and hasattr(tracer, "aflush"):
+            try:
+                await tracer.aflush()
+            except Exception:
+                pass
 
 
 def _extract_broadcast_fn(channel_manager):
@@ -602,6 +621,7 @@ def make_router(config) -> APIRouter:
         broadcast_fn = _extract_broadcast_fn(cm) if cm is not None else None
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
         executor_mgr = getattr(request.app.state, "executor_manager", None)
+        user_id = _resolve_user_id(request)
         background_tasks.add_task(
             _resume_session_task, session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
@@ -610,6 +630,7 @@ def make_router(config) -> APIRouter:
             mcp_pool=mcp_pool,
             session_index=index,
             executor_manager=executor_mgr,
+            user_id=user_id,
         )
         return {"session_id": session_id, "status": "running"}
 
@@ -888,6 +909,7 @@ def make_router(config) -> APIRouter:
         cm = getattr(request.app.state, "channel_manager", None)
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
         executor_mgr = getattr(request.app.state, "executor_manager", None)
+        user_id = _resolve_user_id(request)
 
         # For cancelled/failed/interrupted: resume with optional user input
         if current_status in ("cancelled", "failed", "interrupted"):
@@ -901,6 +923,7 @@ def make_router(config) -> APIRouter:
                 mcp_pool=mcp_pool,
                 session_index=_idx,
                 executor_manager=executor_mgr,
+                user_id=user_id,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -922,6 +945,7 @@ def make_router(config) -> APIRouter:
             mcp_pool=mcp_pool,
             session_index=_idx,
             executor_manager=executor_mgr,
+            user_id=user_id,
         )
         return {"status": "resuming", "session_id": session_id}
 
