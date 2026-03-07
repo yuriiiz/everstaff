@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Database, Folder, Shield, Cpu, ChevronRight } from 'lucide-react';
+import { Settings as SettingsIcon, Database, Folder, Shield, Cpu, ChevronRight, Box, Brain } from 'lucide-react';
 import LoadingView from '../components/LoadingView';
 
 const ConfigSection = ({ title, icon: Icon, children, id }) => (
@@ -69,6 +69,8 @@ export default function Settings() {
         { id: 'runtime', label: 'Runtime', icon: Database },
         { id: 'channels', label: 'Channels', icon: SettingsIcon },
         { id: 'features', label: 'Features', icon: SettingsIcon },
+        { id: 'sandbox', label: 'Sandbox', icon: Box },
+        { id: 'memory', label: 'Memory', icon: Brain },
         { id: 'security', label: 'Security', icon: Shield },
         { id: 'tracing', label: 'Tracing', icon: SettingsIcon },
     ];
@@ -162,7 +164,6 @@ export default function Settings() {
                     {/* Runtime Storage */}
                     <ConfigSection title="Runtime Storage" icon={Database} id="runtime">
                         <ConfigItem label="Sessions Dir" value={config.sessions_dir} isCode />
-                        <ConfigItem label="Memory Dir" value={config.memory_dir} isCode />
                         <div style={{ display: 'flex', borderBottom: '1px solid #f3f4f6', padding: '8px 0' }}>
                             <div style={{ width: '160px', fontSize: '12px', fontWeight: 600, color: '#6b7280' }}>Storage</div>
                             <div style={{ flex: 1, fontSize: '12px', color: '#111827' }}>
@@ -235,6 +236,49 @@ export default function Settings() {
                         </div>
                     </ConfigSection>
 
+                    {/* Sandbox */}
+                    <ConfigSection title="Sandbox Environment" icon={Box} id="sandbox">
+                        <ConfigItem label="Enabled" value={config.sandbox?.enabled ? 'Yes' : 'No'} />
+                        {config.sandbox?.enabled && (
+                            <>
+                                <ConfigItem label="Type" value={config.sandbox.type} isCode />
+                                <ConfigItem label="Idle Timeout" value={`${config.sandbox.idle_timeout}s`} />
+                                <ConfigItem label="Token TTL" value={`${config.sandbox.token_ttl}s`} />
+                                {config.sandbox.type === 'docker' && config.sandbox?.docker && (
+                                    <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e5e7eb', marginTop: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>IMAGE</div>
+                                            <div style={{ fontSize: '12px', color: '#111827', fontFamily: 'monospace' }}>{config.sandbox.docker.image}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>MEMORY LIMIT</div>
+                                            <div style={{ fontSize: '12px', color: '#111827' }}>{config.sandbox.docker.memory_limit}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>CPU LIMIT</div>
+                                            <div style={{ fontSize: '12px', color: '#111827' }}>{config.sandbox.docker.cpu_limit}</div>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </ConfigSection>
+
+                    {/* Memory */}
+                    <ConfigSection title="Memory" icon={Brain} id="memory">
+                        <ConfigItem label="Enabled" value={config.memory?.enabled ? 'Yes' : 'No'} />
+                        {config.memory?.enabled && (
+                            <>
+                                <ConfigItem label="Vector Store" value={config.memory.vector_store} isCode />
+                                <ConfigItem label="Store Path" value={config.memory.vector_store_path} isCode />
+                                <ConfigItem label="LLM Model" value={config.memory.llm_model_kind} isCode />
+                                <ConfigItem label="Embedding Model" value={config.memory.embedding_model_kind} isCode />
+                                <ConfigItem label="Search Top K" value={config.memory.search_top_k} />
+                                <ConfigItem label="Search Threshold" value={config.memory.search_threshold} />
+                            </>
+                        )}
+                    </ConfigSection>
+
                     {/* Security & Permissions */}
                     <ConfigSection title="Security & Permissions" icon={Shield} id="security">
                         <ConfigItem label="Auth Enabled" value={config.auth?.enabled ? 'Yes' : 'No'} />
@@ -245,23 +289,11 @@ export default function Settings() {
                                 <ConfigItem label="Public Routes" value={config.auth.public_routes || []} isCode />
                             </>
                         )}
-                        <div style={{ marginTop: '12px' }}>
-                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>Permission Rules</div>
-                            <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-                                <div style={{ marginBottom: '8px' }}>
-                                    <div style={{ fontSize: '10px', color: '#10b981', fontWeight: 700 }}>ALLOW</div>
-                                    <div style={{ fontSize: '12px', color: '#065f46', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                                        {config.permissions?.allow?.length > 0 ? config.permissions.allow.join(', ') : 'None'}
-                                    </div>
-                                </div>
-                                <div style={{ marginBottom: '8px' }}>
-                                    <div style={{ fontSize: '10px', color: '#ef4444', fontWeight: 700 }}>DENY</div>
-                                    <div style={{ fontSize: '12px', color: '#991b1b', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                                        {config.permissions?.deny?.length > 0 ? config.permissions.deny.join(', ') : 'None'}
-                                    </div>
-                                </div>
-                            </div>
+                        <div style={{ marginTop: '16px', marginBottom: '8px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+                            Permission Rules
                         </div>
+                        <ConfigItem label="Allow Rules" value={config.permissions?.allow?.length > 0 ? config.permissions.allow : ['None']} isCode />
+                        <ConfigItem label="Deny Rules" value={config.permissions?.deny?.length > 0 ? config.permissions.deny : ['None']} isCode />
                     </ConfigSection>
 
                     {/* Tracing Configuration */}

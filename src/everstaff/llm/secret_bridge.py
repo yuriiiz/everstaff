@@ -1,6 +1,7 @@
 """Bridge SecretStore to litellm's secret manager interface."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional, Union, TYPE_CHECKING
 
@@ -11,6 +12,13 @@ from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagemen
 
 if TYPE_CHECKING:
     from everstaff.core.secret_store import SecretStore
+
+
+class _SecretFallbackFilter(logging.Filter):
+    """Suppress litellm ERROR logs for expected secret fallbacks."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Defaulting to os.environ" not in record.getMessage()
 
 
 class SecretStoreBridge(CustomSecretManager):
@@ -52,3 +60,6 @@ def install_secret_bridge(secret_store: "SecretStore") -> None:
     litellm.secret_manager_client = SecretStoreBridge(secret_store)
     litellm._key_management_system = KeyManagementSystem.CUSTOM
     litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
+    # Suppress noisy "Defaulting to os.environ" ERROR logs from litellm
+    # when querying config keys (e.g. USE_LITELLM_PROXY) not in SecretStore.
+    logging.getLogger("LiteLLM").addFilter(_SecretFallbackFilter())

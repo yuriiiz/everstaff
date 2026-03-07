@@ -71,7 +71,11 @@ class AgentBuilder:
 
     def _build_system_prompt(self) -> str | None:
         parts = []
-        # 1. Project context
+        # 1. Runtime environment context
+        now = datetime.datetime.now().astimezone()
+        parts.append(f"Current local time: {now.strftime('%Y-%m-%dT%H:%M:%S%z')} ({now.tzname()})\n")
+
+        # 2. Project context
         try:
             from everstaff.project_context import ProjectContextLoader
             loader = ProjectContextLoader(self._env.project_root())
@@ -80,10 +84,6 @@ class AgentBuilder:
                 parts.append(proj)
         except Exception as exc:
             logger.debug("ProjectContextLoader unavailable: %s", exc)
-            
-        # 2. Runtime environment context
-        now = datetime.datetime.now().astimezone()
-        parts.append(f"<EnvironmentVariables>\nCurrent local time: {now.strftime('%Y-%m-%dT%H:%M:%S%z')} ({now.tzname()})\n</EnvironmentVariables>")
 
         # 3. Agent instructions
         if self._spec.instructions:
