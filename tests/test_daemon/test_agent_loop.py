@@ -4,8 +4,36 @@ from dataclasses import dataclass
 from everstaff.daemon.agent_loop import AgentLoop
 from everstaff.daemon.event_bus import EventBus
 from everstaff.daemon.think_engine import ThinkEngine
-from everstaff.protocols import AgentEvent, Decision, Episode, WorkingState, LLMResponse, ToolCallRequest
-from everstaff.nulls import InMemoryStore, NullTracer
+from everstaff.protocols import AgentEvent, Decision, LLMResponse, ToolCallRequest
+from everstaff.nulls import NullTracer
+from everstaff.daemon.state_store import DaemonState, DaemonStateStore
+
+
+class InMemoryFileStore:
+    def __init__(self):
+        self._data: dict[str, bytes] = {}
+    async def read(self, path: str) -> bytes:
+        if path not in self._data:
+            raise FileNotFoundError(path)
+        return self._data[path]
+    async def write(self, path: str, data: bytes) -> None:
+        self._data[path] = data
+    async def exists(self, path: str) -> bool:
+        return path in self._data
+    async def delete(self, path: str) -> None:
+        self._data.pop(path, None)
+    async def list(self, prefix: str) -> list[str]:
+        return [k for k in self._data if k.startswith(prefix)]
+
+
+class FakeMem0:
+    def __init__(self):
+        self.added: list[tuple] = []
+    async def add(self, messages, **scope):
+        self.added.append((messages, scope))
+        return []
+    async def search(self, query, *, top_k=None, **scope):
+        return []
 
 
 class MockThinkEngine:
@@ -34,10 +62,11 @@ class MockRuntime:
 
 @pytest.mark.asyncio
 async def test_loop_execute_cycle():
-    """trigger -> think returns execute -> act called -> memory updated"""
+    """trigger -> think returns execute -> act called -> mem0 updated"""
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
+    mem0 = FakeMem0()
+    state_store = DaemonStateStore(InMemoryFileStore())
 
     decision = Decision(action="execute", task_prompt="check email", reasoning="daily", priority="normal")
     think = MockThinkEngine(decision)
@@ -48,9 +77,10 @@ async def test_loop_execute_cycle():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=state_store,
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
+        mem0_client=mem0,
         goals=[],
     )
 
@@ -64,11 +94,9 @@ async def test_loop_execute_cycle():
     assert runtime.called
     assert runtime.last_prompt == "check email"
 
-    # Memory should have an episode
-    episodes = await memory.episode_query("test-agent")
-    assert len(episodes) == 1
-    assert episodes[0].action == "check email"
-    assert episodes[0].result == "3 emails found"
+    # Mem0 should have an episode
+    assert len(mem0.added) == 1
+    assert "check email" in mem0.added[0][0][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -76,7 +104,6 @@ async def test_loop_skip_cycle():
     """trigger -> think returns skip -> act NOT called"""
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
 
     decision = Decision(action="skip", reasoning="nothing to do")
     think = MockThinkEngine(decision)
@@ -87,9 +114,9 @@ async def test_loop_skip_cycle():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         goals=[],
     )
 
@@ -101,11 +128,11 @@ async def test_loop_skip_cycle():
 
 
 @pytest.mark.asyncio
-async def test_loop_updates_working_memory():
-    """After execute, working memory should have recent decision."""
+async def test_loop_updates_recent_decisions():
+    """After execute, daemon state should have recent decision."""
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
+    state_store = DaemonStateStore(InMemoryFileStore())
 
     decision = Decision(action="execute", task_prompt="deploy", reasoning="release day", priority="high")
     think = MockThinkEngine(decision)
@@ -116,18 +143,18 @@ async def test_loop_updates_working_memory():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=state_store,
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         goals=[],
     )
 
     await bus.publish(AgentEvent(source="cron", type="tick", target_agent="test-agent"))
     await loop.run_once()
 
-    ws = await memory.working_load("test-agent")
-    assert len(ws.recent_decisions) > 0
-    assert ws.recent_decisions[-1]["action"] == "execute"
+    state = await state_store.load("test-uuid")
+    assert len(state.recent_decisions) > 0
+    assert state.recent_decisions[-1]["action"] == "execute"
 
 
 @pytest.mark.asyncio
@@ -135,7 +162,6 @@ async def test_loop_no_event_returns_without_acting():
     """When no event in queue, run_once should return without doing anything."""
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
     think = MockThinkEngine(Decision(action="execute", task_prompt="x", reasoning="y"))
     runtime = MockRuntime()
 
@@ -144,9 +170,9 @@ async def test_loop_no_event_returns_without_acting():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         goals=[],
         tick_interval=0.05,
     )
@@ -173,7 +199,6 @@ class CollectingTracer:
 async def test_loop_emits_trace_events():
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
     tracer = CollectingTracer()
 
     decision = Decision(action="execute", task_prompt="test task", reasoning="testing", priority="normal")
@@ -185,9 +210,9 @@ async def test_loop_emits_trace_events():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=tracer,
-        autonomy_level="autonomous",
         goals=[],
     )
 
@@ -207,7 +232,6 @@ async def test_loop_emits_trace_events():
 async def test_loop_skip_emits_think_but_no_act():
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
     tracer = CollectingTracer()
 
     decision = Decision(action="skip", reasoning="nothing to do")
@@ -219,9 +243,9 @@ async def test_loop_skip_emits_think_but_no_act():
         event_bus=bus,
         think_engine=think,
         runtime_factory=lambda **kw: runtime,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=tracer,
-        autonomy_level="autonomous",
         goals=[],
     )
 
@@ -248,7 +272,6 @@ async def test_loop_uses_trigger_hitl_channels():
 
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
 
     decision = Decision(action="execute", task_prompt="do work", reasoning="r", priority="normal")
     think = MockThinkEngine(decision)
@@ -282,9 +305,9 @@ async def test_loop_uses_trigger_hitl_channels():
         event_bus=bus,
         think_engine=think,
         runtime_factory=_factory,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         triggers=[trigger],
         agent_hitl_channels=[],
         channel_registry={"lark-main": fake_ch},
@@ -306,7 +329,6 @@ async def test_loop_falls_back_to_agent_hitl_channels():
 
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
 
     decision = Decision(action="execute", task_prompt="do work", reasoning="r", priority="normal")
     think = MockThinkEngine(decision)
@@ -337,9 +359,9 @@ async def test_loop_falls_back_to_agent_hitl_channels():
         event_bus=bus,
         think_engine=think,
         runtime_factory=_factory,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         triggers=[trigger],
         agent_hitl_channels=[HitlChannelRef(ref="agent-ch")],
         channel_registry={"agent-ch": agent_ch},
@@ -359,7 +381,6 @@ async def test_loop_no_hitl_channels_passes_default_cm():
 
     bus = EventBus()
     bus.subscribe("test-agent")
-    memory = InMemoryStore()
 
     decision = Decision(action="execute", task_prompt="do work", reasoning="r", priority="normal")
     think = MockThinkEngine(decision)
@@ -380,9 +401,9 @@ async def test_loop_no_hitl_channels_passes_default_cm():
         event_bus=bus,
         think_engine=think,
         runtime_factory=_factory,
-        memory=memory,
+        daemon_state_store=DaemonStateStore(InMemoryFileStore()),
+        agent_uuid="test-uuid",
         tracer=NullTracer(),
-        autonomy_level="autonomous",
         channel_manager=default_cm,
         triggers=[],
         agent_hitl_channels=[],

@@ -13,7 +13,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from everstaff.daemon.event_bus import EventBus
     from everstaff.daemon.think_engine import ThinkEngine
-    from everstaff.protocols import AgentEvent, Decision, TracingBackend, MemoryStore
+    from everstaff.protocols import AgentEvent, Decision, TracingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +56,10 @@ class AgentLoop:
         event_bus: "EventBus",
         think_engine: "ThinkEngine",
         runtime_factory: Any,
-        memory: "MemoryStore",
+        daemon_state_store: Any,
+        agent_uuid: str,
         tracer: "TracingBackend",
-        autonomy_level: str = "supervised",
+        mem0_client: Any = None,
         goals: list[Any] | None = None,
         tick_interval: float = 60.0,
         channel_manager: Any = None,
@@ -73,9 +74,11 @@ class AgentLoop:
         self._bus = event_bus
         self._think = think_engine
         self._runtime_factory = runtime_factory
-        self._memory = memory
+        self._state_store = daemon_state_store
+        self._agent_uuid = agent_uuid
         self._tracer = tracer
-        self._level = autonomy_level
+        self._mem0 = mem0_client
+
         self._goals = goals or []
         self._tick_interval = tick_interval
         self._channel_manager = channel_manager
@@ -153,7 +156,7 @@ class AgentLoop:
 
     async def run_once(self) -> None:
         """Execute a single wake -> think -> act -> reflect cycle."""
-        from everstaff.protocols import Episode, TraceEvent, WorkingState
+        from everstaff.protocols import TraceEvent
 
         # 1. Wake -- try to get an event
         event = await self._bus.wait_for(self._agent_name, timeout=self._tick_interval)
@@ -239,32 +242,35 @@ class AgentLoop:
             logger.info("[Loop:%s] Skip — reason: %s", self._agent_name, decision.reasoning[:100] if decision.reasoning else 'no reason')
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
-        # 4. Reflect -- update memory
+        # 4. Reflect
         if decision.action == "execute":
-            episode = Episode(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                trigger=f"{event.source}:{event.type}",
-                action=decision.task_prompt,
-                result=str(result),
-                duration_ms=duration_ms,
-                session_id=loop_session_id,
-                tags=[decision.priority],
-            )
-            await self._memory.episode_append(self._agent_name, episode)
+            # Store episode in mem0 (semantic, searchable)
+            if self._mem0:
+                episode_summary = (
+                    f"[{datetime.now(timezone.utc).isoformat()}] "
+                    f"Trigger: {event.source}:{event.type} | "
+                    f"Action: {decision.task_prompt} | "
+                    f"Result: {str(result)[:500]} | "
+                    f"Duration: {duration_ms}ms"
+                )
+                await self._mem0.add(
+                    [{"role": "assistant", "content": episode_summary}],
+                    agent_id=self._agent_name,
+                    run_id=loop_session_id,
+                )
             if self._internal_sensor is not None:
                 self._internal_sensor.notify_episode()
 
-        # Update working memory with the decision
-        ws = await self._memory.working_load(self._agent_name)
-        ws.recent_decisions.append({
+        # Update structured state with the decision
+        state = await self._state_store.load(self._agent_uuid)
+        state.recent_decisions.append({
             "action": decision.action,
             "task": decision.task_prompt,
             "reasoning": decision.reasoning,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        # Keep last 20 decisions
-        ws.recent_decisions = ws.recent_decisions[-20:]
-        await self._memory.working_save(self._agent_name, ws)
+        state.recent_decisions = state.recent_decisions[-20:]
+        await self._state_store.save(self._agent_uuid, state)
 
         # Trace: reflect
         self._tracer.on_event(TraceEvent(
@@ -282,8 +288,8 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the loop continuously until stopped or cancelled."""
-        logger.info("[Loop:%s] Loop started — tick_interval=%.0fs, level=%s",
-                     self._agent_name, self._tick_interval, self._level)
+        logger.info("[Loop:%s] Loop started — tick_interval=%.0fs",
+                     self._agent_name, self._tick_interval)
         self._running = True
         cycle_count = 0
         try:
