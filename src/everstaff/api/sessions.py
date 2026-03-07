@@ -823,6 +823,17 @@ def make_router(config) -> APIRouter:
                 await store.write(session_relpath, json.dumps(session_data, ensure_ascii=False).encode())
         except Exception:
             pass  # cancel.signal is the primary mechanism; this is best-effort
+
+        # Push cancel to sandbox executor if active
+        executor_mgr = getattr(request.app.state, "executor_manager", None)
+        if executor_mgr and executor_mgr.has_active(session_id):
+            executor = executor_mgr._executors.get(session_id)
+            if executor:
+                try:
+                    await executor.push_cancel()
+                except Exception as e:
+                    logger.debug("[session] sandbox cancel push failed: %s", e)
+
         return {"status": "cancelled", "force": force, "session_id": session_id}
 
     @router.post("/sessions/{session_id}/resume", status_code=202)

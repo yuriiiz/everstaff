@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -142,6 +143,16 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
     except Exception:
         return
 
+    # Push HITL resolution to sandbox executor if active
+    executor_mgr = getattr(app.state, "executor_manager", None)
+    if executor_mgr and executor_mgr.has_active(session_id):
+        executor = executor_mgr._executors.get(session_id)
+        if executor:
+            try:
+                await executor.push_hitl_resolution(hitl_id, decision, comment or "")
+            except Exception as e:
+                logging.getLogger(__name__).debug("Sandbox HITL push failed: %s", e)
+
     # Re-read session data to check settlement
     session_path = SessionIndex.session_relpath(session_id, _root_for_path)
     try:
@@ -157,7 +168,7 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
     agent_uuid = session_data.get("agent_uuid", "")
     from everstaff.api.sessions import _resume_session_task
     mcp_pool = getattr(app.state, "mcp_pool", None)
-    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid, mcp_pool=mcp_pool, root_session_id=_root_for_path, session_index=index)
+    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid, mcp_pool=mcp_pool, root_session_id=_root_for_path, session_index=index, executor_manager=executor_mgr)
 
 
 def make_router(config) -> APIRouter:
