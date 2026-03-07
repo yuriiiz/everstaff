@@ -18,27 +18,27 @@ class EventBus:
     def subscribe(self, agent_name: str) -> asyncio.Queue:
         if agent_name not in self._subscribers:
             self._subscribers[agent_name] = asyncio.Queue()
-            logger.info("[EventBus] Subscribed: '%s'", agent_name)
+            logger.info("subscribed target=%s", agent_name)
         return self._subscribers[agent_name]
 
     def unsubscribe(self, agent_name: str) -> None:
         removed = self._subscribers.pop(agent_name, None)
         if removed is not None:
-            logger.info("[EventBus] Unsubscribed: '%s'", agent_name)
+            logger.info("unsubscribed target=%s", agent_name)
 
     async def publish(self, event: "AgentEvent") -> None:
         if event.target_agent:
             q = self._subscribers.get(event.target_agent)
             if q:
                 await q.put(event)
-                logger.debug("[EventBus] Published %s:%s → '%s'", event.source, event.type, event.target_agent)
+                logger.debug("published source=%s type=%s target=%s", event.source, event.type, event.target_agent)
             else:
-                logger.warning("[EventBus] No subscriber for target '%s' — event %s:%s dropped",
+                logger.warning("no subscriber for target=%s source=%s type=%s dropped",
                                event.target_agent, event.source, event.type)
         else:
             for name, q in self._subscribers.items():
                 await q.put(event)
-            logger.debug("[EventBus] Broadcast %s:%s → %d subscriber(s)",
+            logger.debug("broadcast source=%s type=%s subscribers=%d",
                           event.source, event.type, len(self._subscribers))
 
     async def wait_for(
@@ -63,5 +63,5 @@ class EventBus:
             except asyncio.QueueEmpty:
                 break
         if events:
-            logger.debug("[EventBus] Drained %d event(s) for '%s'", len(events), agent_name)
+            logger.debug("drained events=%d target=%s", len(events), agent_name)
         return events

@@ -160,7 +160,7 @@ class AgentDaemon:
         from everstaff.daemon.sensors.scheduler import SchedulerSensor
         from everstaff.daemon.agent_loop import AgentLoop
 
-        logger.info("Starting agent '%s' — think_model=%s, act_model=%s",
+        logger.info("starting agent=%s think_model=%s act_model=%s",
                      name, spec.autonomy.think_model, spec.autonomy.act_model)
 
         # Subscribe to EventBus
@@ -172,7 +172,7 @@ class AgentDaemon:
             if t.type in ("cron", "interval")
         ]
         if cron_triggers:
-            logger.info("Agent '%s': registering %d cron/interval trigger(s)", name, len(cron_triggers))
+            logger.info("registering cron/interval triggers agent=%s count=%d", name, len(cron_triggers))
             sensor = SchedulerSensor(triggers=cron_triggers, agent_name=name)
             self._sensor_manager.register(sensor, agent_name=name)
             await sensor.start(self._event_bus)
@@ -243,11 +243,11 @@ class AgentDaemon:
 
     async def _stop_agent(self, name: str) -> None:
         """Stop all components for a single agent."""
-        logger.info("Stopping agent '%s'", name)
+        logger.info("stopping agent=%s", name)
         await self._loop_manager.stop(name)
         await self._sensor_manager.unregister_for(name)
         self._event_bus.unsubscribe(name)
-        logger.info("Agent '%s' stopped", name)
+        logger.info("agent stopped agent=%s", name)
 
     # ------------------------------------------------------------------
     # Daemon lifecycle
@@ -255,25 +255,25 @@ class AgentDaemon:
 
     async def start(self) -> None:
         """Discover and start all autonomous agents."""
-        logger.info("====== AgentDaemon starting ======")
+        logger.info("daemon starting")
         logger.info("agents_dir=%s", self._agents_dir)
         self._running = True
         agents = self._discover_autonomous_agents()
         for name, spec in agents.items():
             try:
                 await self._start_agent(name, spec)
-                logger.info("Agent '%s' started", name)
+                logger.info("agent started agent=%s", name)
             except Exception as exc:
-                logger.error("✗ Failed to start agent '%s': %s", name, exc)
-        logger.info("====== AgentDaemon ready — %d agent(s) running ======", len(agents))
+                logger.error("failed to start agent=%s error=%s", name, exc)
+        logger.info("daemon ready agents=%d", len(agents))
 
     async def stop(self) -> None:
         """Stop all running agents and sensors."""
-        logger.info("====== AgentDaemon shutting down ======")
+        logger.info("daemon shutting down")
         await self._loop_manager.stop_all()
         await self._sensor_manager.stop_all()
         self._running = False
-        logger.info("====== AgentDaemon stopped ======")
+        logger.info("daemon stopped")
 
     async def reload(self) -> None:
         """Hot reload: re-scan agents directory and reconcile running loops.
@@ -284,7 +284,7 @@ class AgentDaemon:
         * Existing agents are restarted to pick up any config changes
           (permissions, instructions, tools, etc.).
         """
-        logger.info("====== Hot reload triggered ======")
+        logger.info("hot reload triggered")
         current_agents = self._discover_autonomous_agents()
         current_names = set(current_agents.keys())
         running_names = set(self._loop_manager._loops.keys())
@@ -313,4 +313,4 @@ class AgentDaemon:
                 await self._start_agent(name, current_agents[name])
             except Exception as exc:
                 logger.error("Failed to start agent '%s' during reload: %s", name, exc)
-        logger.info("====== Hot reload complete ======")
+        logger.info("hot reload complete")

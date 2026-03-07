@@ -33,7 +33,7 @@ class FileWatchSensor(Sensor):
         self._bus = event_bus
         self._stop_event.clear()
         self._task = asyncio.create_task(self._watch_loop(), name=f"file-watch-{self._agent_name}")
-        logger.info("[FileWatchSensor:%s] Started watching %d trigger(s)", self._agent_name, len(self._triggers))
+        logger.info("started watching agent=%s triggers=%d", self._agent_name, len(self._triggers))
 
     async def _watch_loop(self) -> None:
         from watchfiles import awatch
@@ -87,4 +87,4 @@ class FileWatchSensor(Sensor):
                 pass
         self._task = None
         self._bus = None
-        logger.info("[FileWatchSensor:%s] Stopped", self._agent_name)
+        logger.info("stopped agent=%s", self._agent_name)

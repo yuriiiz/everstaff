@@ -55,7 +55,7 @@ class WebhookSensor(Sensor):
             self._route_path, _endpoint, methods=["POST"],
             name=f"webhook_{self._agent_uuid}",
         )
-        logger.info("[WebhookSensor:%s] Registered %s", self._agent_name, self._route_path)
+        logger.info("registered agent=%s route=%s", self._agent_name, self._route_path)
 
     async def handle_webhook(self, *, trigger_id: str, payload: dict) -> None:
         from everstaff.protocols import AgentEvent
@@ -72,4 +72,4 @@ class WebhookSensor(Sensor):
 
     async def stop(self) -> None:
         self._bus = None
-        logger.info("[WebhookSensor:%s] Stopped", self._agent_name)
+        logger.info("stopped agent=%s", self._agent_name)

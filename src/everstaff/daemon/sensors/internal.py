@@ -25,7 +25,7 @@ class InternalSensor(Sensor):
     async def start(self, event_bus: EventBus) -> None:
         self._bus = event_bus
         self._episode_count = 0
-        logger.info("[InternalSensor:%s] Started with %d trigger(s)", self._agent_name, len(self._triggers))
+        logger.info("started agent=%s triggers=%d", self._agent_name, len(self._triggers))
 
     def notify_episode(self) -> None:
         """Called by AgentLoop after each episode is recorded."""
@@ -55,9 +55,9 @@ class InternalSensor(Sensor):
             loop = asyncio.get_running_loop()
             loop.create_task(self._bus.publish(event))
         except RuntimeError:
-            logger.warning("[InternalSensor:%s] No running event loop", self._agent_name)
+            logger.warning("no running event loop agent=%s", self._agent_name)
 
     async def stop(self) -> None:
         self._bus = None
         self._episode_count = 0
-        logger.info("[InternalSensor:%s] Stopped", self._agent_name)
+        logger.info("stopped agent=%s", self._agent_name)

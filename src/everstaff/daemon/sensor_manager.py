@@ -17,23 +17,23 @@ class SensorManager:
 
     def register(self, sensor: Any, agent_name: str | None = None) -> None:
         self._sensors.append((sensor, agent_name))
-        logger.info("[SensorMgr] Registered sensor for agent '%s' (total=%d)",
+        logger.info("registered sensor agent=%s total=%d",
                      agent_name or '(global)', len(self._sensors))
 
     async def start_all(self) -> None:
-        logger.info("[SensorMgr] Starting all sensors (%d)", len(self._sensors))
+        logger.info("starting all sensors count=%d", len(self._sensors))
         for sensor, name in self._sensors:
             await sensor.start(self._bus)
-            logger.debug("[SensorMgr] Started sensor for '%s'", name or '(global)')
+            logger.debug("started sensor agent=%s", name or '(global)')
 
     async def stop_all(self) -> None:
         count = len(self._sensors)
-        logger.info("[SensorMgr] Stopping all sensors (%d)", count)
+        logger.info("stopping all sensors count=%d", count)
         for sensor, name in self._sensors:
             await sensor.stop()
-            logger.debug("[SensorMgr] Stopped sensor for '%s'", name or '(global)')
+            logger.debug("stopped sensor agent=%s", name or '(global)')
         self._sensors.clear()
-        logger.info("[SensorMgr] All %d sensor(s) stopped and cleared", count)
+        logger.info("all sensors stopped and cleared count=%d", count)
 
     async def unregister_for(self, agent_name: str) -> None:
         remaining = []
@@ -46,4 +46,4 @@ class SensorManager:
                 remaining.append((sensor, name))
         self._sensors = remaining
         if stopped:
-            logger.info("[SensorMgr] Unregistered %d sensor(s) for agent '%s'", stopped, agent_name)
+            logger.info("unregistered sensors count=%d agent=%s", stopped, agent_name)

@@ -16,6 +16,7 @@ Tools available to the LLM during thinking:
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -154,7 +155,7 @@ async def _handle_make_decision(
         priority=args.get("priority", "normal"),
     )
     logger.info(
-        "[Think:%s] Decision made — action=%s, priority=%s, task='%s'",
+        "decision made agent=%s action=%s priority=%s task=%s",
         ctx.agent_name, decision.action, decision.priority,
         decision.task_prompt[:80] if decision.task_prompt else "-",
     )
@@ -165,7 +166,7 @@ async def _handle_search_memory(
     args: dict, ctx: ThinkToolContext,
 ) -> tuple[str, Decision | None]:
     query = args.get("query", "")
-    logger.debug("[Think:%s] Tool call: search_memory(query=%s)", ctx.agent_name, query[:80])
+    logger.debug("tool call search_memory agent=%s query=%s", ctx.agent_name, query[:80])
     if ctx.mem0 is None:
         content = "(memory not enabled)"
     else:
@@ -183,7 +184,7 @@ async def _handle_break_down_goal(
     goal_id = args["goal_id"]
     raw_subs = args.get("sub_goals", [])
     logger.debug(
-        "[Think:%s] Tool call: break_down_goal(goal_id=%s, sub_goals=%d)",
+        "tool call break_down_goal agent=%s goal_id=%s sub_goals=%d",
         ctx.agent_name, goal_id, len(raw_subs),
     )
     sub_goals = [
@@ -207,7 +208,7 @@ async def _handle_update_goal_progress(
     status = args["status"]
     note = args.get("progress_note", "")
     logger.debug(
-        "[Think:%s] Tool call: update_goal_progress(goal_id=%s, idx=%d, status=%s)",
+        "tool call update_goal_progress agent=%s goal_id=%s idx=%d status=%s",
         ctx.agent_name, goal_id, idx, status,
     )
     if goal_id not in ctx.state.goals_breakdown:
@@ -229,7 +230,7 @@ async def _handle_record_learning_insight(
     args: dict, ctx: ThinkToolContext,
 ) -> tuple[str, Decision | None]:
     logger.debug(
-        "[Think:%s] Tool call: record_learning_insight(category=%s)",
+        "tool call record_learning_insight agent=%s category=%s",
         ctx.agent_name, args.get("category"),
     )
     if ctx.mem0 is None:
@@ -298,13 +299,13 @@ class ThinkEngine:
         tool calls.  It terminates when the LLM calls ``make_decision``
         or after ``_MAX_THINK_ITERATIONS`` rounds.
         """
-        logger.info("[Think:%s] Starting — trigger=%s:%s, pending=%d, goals=%d",
+        logger.info("starting agent=%s trigger=%s:%s pending=%d goals=%d",
                      agent_name, trigger.source, trigger.type, len(pending_events), len(autonomy_goals))
 
         # Load structured state from DaemonStateStore
         from everstaff.daemon.state_store import DaemonState
         state: DaemonState = await self._state_store.load(self._agent_uuid)
-        logger.debug("[Think:%s] State loaded — goals=%d, decisions=%d",
+        logger.debug("state loaded agent=%s goals=%d decisions=%d",
                       agent_name, len(state.goals_breakdown), len(state.recent_decisions))
 
         system_prompt = self._build_system_prompt(
@@ -325,12 +326,12 @@ class ThinkEngine:
 
         # Tool loop — max _MAX_THINK_ITERATIONS rounds
         for iteration in range(_MAX_THINK_ITERATIONS):
-            logger.debug("[Think:%s] LLM call iteration %d/%d", agent_name, iteration + 1, _MAX_THINK_ITERATIONS)
+            logger.debug("llm call agent=%s iteration=%d/%d", agent_name, iteration + 1, _MAX_THINK_ITERATIONS)
             response = await self._llm.complete(messages, THINK_TOOLS, system=system_prompt)
 
             if not response.tool_calls:
                 # No tool call means the LLM declined to decide — skip.
-                logger.info("[Think:%s] No tool call from LLM — defaulting to skip", agent_name)
+                logger.info("no tool call from LLM defaulting to skip agent=%s", agent_name)
                 # Capture the LLM's response text before breaking
                 if response.content:
                     messages.append(Message(role="assistant", thinking=response.thinking, content=response.content, created_at=datetime.now(timezone.utc).isoformat()))
@@ -345,7 +346,7 @@ class ThinkEngine:
                 {
                     "id": tc.id,
                     "type": "function",
-                    "function": {"name": tc.name, "arguments": str(tc.args)},
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
                 }
                 for tc in response.tool_calls
             ]
@@ -386,7 +387,7 @@ class ThinkEngine:
 
         if decision is None:
             # Exhausted iterations without a decision
-            logger.warning("[Think:%s] Max iterations (%d) reached without decision — defaulting to skip",
+            logger.warning("max iterations reached without decision agent=%s iterations=%d",
                             agent_name, _MAX_THINK_ITERATIONS)
             decision = Decision(action="skip", reasoning="Max think iterations reached")
 

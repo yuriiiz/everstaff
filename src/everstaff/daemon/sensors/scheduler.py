@@ -56,7 +56,7 @@ class SchedulerSensor(Sensor):
                     args=[trigger],
                     id=f"{self._agent_name}-{trigger.id}",
                 )
-                logger.info("[Scheduler:%s] Registered cron job '%s': %s",
+                logger.info("registered cron job agent=%s name=%s expr=%s",
                              self._agent_name, trigger.id, trigger.schedule)
             elif trigger.type == "interval" and trigger.every > 0:
                 self._scheduler.add_job(
@@ -66,10 +66,10 @@ class SchedulerSensor(Sensor):
                     args=[trigger],
                     id=f"{self._agent_name}-{trigger.id}",
                 )
-                logger.info("[Scheduler:%s] Registered interval job '%s': every %ds",
+                logger.info("registered interval job agent=%s name=%s every=%ds",
                              self._agent_name, trigger.id, trigger.every)
         self._scheduler.start()
-        logger.info("[Scheduler:%s] APScheduler started with %d job(s)",
+        logger.info("scheduler started agent=%s jobs=%d",
                      self._agent_name, len(self._triggers))
 
     async def _emit(self, trigger: TriggerConfig) -> None:
@@ -83,7 +83,7 @@ class SchedulerSensor(Sensor):
             target_agent=self._agent_name,
         )
         await self._bus.publish(event)
-        logger.info("[Scheduler:%s] Fired trigger '%s' — task: %s",
+        logger.info("fired trigger agent=%s name=%s task=%s",
                      self._agent_name, trigger.id, trigger.task[:80] if trigger.task else '-')
 
     async def stop(self) -> None:
@@ -91,4 +91,4 @@ class SchedulerSensor(Sensor):
         if self._scheduler:
             self._scheduler.shutdown(wait=False)
             self._scheduler = None
-            logger.info("[Scheduler:%s] APScheduler stopped", self._agent_name)
+            logger.info("scheduler stopped agent=%s", self._agent_name)

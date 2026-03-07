@@ -124,7 +124,7 @@ class AgentLoop:
             channel = self._channel_registry.get(ref.ref)
             if channel is None:
                 logger.warning(
-                    "[Loop:%s] Channel ref '%s' not found in registry, skipping",
+                    "channel ref not found in registry agent=%s ref=%s",
                     self._agent_name, ref.ref,
                 )
                 continue
@@ -145,14 +145,14 @@ class AgentLoop:
         # 1. Wake -- try to get an event
         event = await self._bus.wait_for(self._agent_name, timeout=self._tick_interval)
         if event is None:
-            logger.debug("[Loop:%s] Tick — no event (timeout=%.0fs)", self._agent_name, self._tick_interval)
+            logger.debug("tick no event agent=%s timeout=%.0fs", self._agent_name, self._tick_interval)
             return  # No event, nothing to do
 
         # Create a parent session id for this cycle
         loop_session_id = str(uuid4())
         now = datetime.now(timezone.utc).isoformat()
         self._write_loop_session(loop_session_id, event, now)
-        logger.info("[Loop:%s] ▶ Cycle start — trigger=%s:%s, session=%s",
+        logger.info("cycle start agent=%s trigger=%s:%s session=%s",
                      self._agent_name, event.source, event.type, loop_session_id[:8])
 
         # Trace: wake
@@ -170,7 +170,7 @@ class AgentLoop:
         ))
 
         pending = self._bus.drain(self._agent_name)
-        logger.debug("[Loop:%s] Think — pending_events=%d", self._agent_name, len(pending))
+        logger.debug("think agent=%s pending_events=%d", self._agent_name, len(pending))
         decision, think_messages = await self._think.think(
             agent_name=self._agent_name,
             trigger=event,
@@ -178,7 +178,7 @@ class AgentLoop:
             autonomy_goals=self._goals,
         )
 
-        logger.info("[Loop:%s] Think → decision=%s, task='%s', reasoning='%s'",
+        logger.info("think complete agent=%s decision=%s task=%s reasoning=%s",
                      self._agent_name, decision.action, decision.task_prompt[:80] if decision.task_prompt else '-',
                      decision.reasoning[:80] if decision.reasoning else '-')
 
@@ -194,7 +194,7 @@ class AgentLoop:
         result = ""
         start_time = time.monotonic()
         if decision.action == "execute" and decision.task_prompt:
-            logger.info("[Loop:%s] Act — executing task: '%s'", self._agent_name, decision.task_prompt[:100])
+            logger.info("act executing agent=%s task=%s", self._agent_name, decision.task_prompt[:100])
             self._tracer.on_event(TraceEvent(
                 kind="loop_act_start",
                 session_id=loop_session_id,
@@ -209,9 +209,9 @@ class AgentLoop:
             )
             try:
                 result = await runtime.run(decision.task_prompt)
-                logger.info("[Loop:%s] Act — completed (result_len=%d)", self._agent_name, len(str(result)))
+                logger.info("act completed agent=%s result_len=%d", self._agent_name, len(str(result)))
             except Exception as exc:
-                logger.error("[Loop:%s] Act — FAILED: %s", self._agent_name, exc)
+                logger.error("act failed agent=%s error=%s", self._agent_name, exc)
                 result = f"ERROR: {exc}"
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -223,7 +223,7 @@ class AgentLoop:
                 duration_ms=float(duration_ms),
             ))
         else:
-            logger.info("[Loop:%s] Skip — reason: %s", self._agent_name, decision.reasoning[:100] if decision.reasoning else 'no reason')
+            logger.info("skip agent=%s reason=%s", self._agent_name, decision.reasoning[:100] if decision.reasoning else 'no reason')
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
         # 4. Reflect
@@ -263,7 +263,7 @@ class AgentLoop:
             data={"agent": self._agent_name, "decision": decision.action},
         ))
         self._finish_loop_session(loop_session_id, decision, duration_ms, result)
-        logger.info("[Loop:%s] ■ Cycle end — decision=%s, duration=%dms, session=%s",
+        logger.info("cycle end agent=%s decision=%s duration=%dms session=%s",
                      self._agent_name, decision.action, duration_ms, loop_session_id[:8])
 
     # ------------------------------------------------------------------
@@ -272,7 +272,7 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the loop continuously until stopped or cancelled."""
-        logger.info("[Loop:%s] Loop started — tick_interval=%.0fs",
+        logger.info("loop started agent=%s tick_interval=%.0fs",
                      self._agent_name, self._tick_interval)
         self._running = True
         cycle_count = 0
@@ -282,14 +282,14 @@ class AgentLoop:
                     cycle_count += 1
                     await self.run_once()
                 except asyncio.CancelledError:
-                    logger.info("[Loop:%s] Loop cancelled after %d cycle(s)", self._agent_name, cycle_count)
+                    logger.info("loop cancelled agent=%s cycles=%d", self._agent_name, cycle_count)
                     break
                 except Exception as exc:
-                    logger.error("[Loop:%s] Cycle error (cycle #%d): %s", self._agent_name, cycle_count, exc)
+                    logger.error("cycle error agent=%s cycle=%d error=%s", self._agent_name, cycle_count, exc)
                     await asyncio.sleep(1)  # brief backoff on error
         finally:
             self._running = False
-            logger.info("[Loop:%s] Loop exited — total cycles: %d", self._agent_name, cycle_count)
+            logger.info("loop exited agent=%s total_cycles=%d", self._agent_name, cycle_count)
 
     # ------------------------------------------------------------------
     # Loop session persistence
@@ -302,10 +302,6 @@ class AgentLoop:
         session_dir = self._sessions_dir / session_id
         try:
             session_dir.mkdir(parents=True, exist_ok=True)
-            payload_str = str(event.payload) if event.payload else ""
-            trigger_msg = f"Triggered by {event.source}:{event.type}"
-            if payload_str:
-                trigger_msg += f"\nPayload: {payload_str}"
             data = {
                 "session_id": session_id,
                 "agent_name": self._agent_name,
@@ -316,7 +312,7 @@ class AgentLoop:
                 "metadata": {
                     "title": f"Daemon: {event.source}:{event.type}",
                 },
-                "messages": [{"role": "user", "content": trigger_msg}],
+                "messages": [],
                 "hitl_requests": [],
             }
             (session_dir / "session.json").write_text(json.dumps(data, indent=2))
@@ -328,7 +324,7 @@ class AgentLoop:
                     status="running", created_at=now, updated_at=now,
                 ))
         except Exception as exc:
-            logger.warning("[Loop:%s] Failed to write loop session %s: %s", self._agent_name, session_id, exc)
+            logger.warning("failed to write loop session agent=%s session=%s error=%s", self._agent_name, session_id, exc)
 
     def _append_think_messages(self, session_id: str, think_messages: list) -> None:
         """Append think-phase messages to the loop session file."""
@@ -336,7 +332,7 @@ class AgentLoop:
             return
         meta_path = self._sessions_dir / session_id / "session.json"
         if not meta_path.exists():
-            logger.debug("[Loop:%s] Session file not found for appending think messages: %s",
+            logger.debug("session file not found for appending think messages agent=%s session=%s",
                          self._agent_name, session_id)
             return
         try:
@@ -346,7 +342,7 @@ class AgentLoop:
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
         except Exception as exc:
-            logger.warning("[Loop:%s] Failed to append think messages to session %s: %s",
+            logger.warning("failed to append think messages agent=%s session=%s error=%s",
                            self._agent_name, session_id, exc)
 
     def _finish_loop_session(self, session_id: str, decision: Any, duration_ms: int, result: str = "") -> None:
@@ -359,15 +355,12 @@ class AgentLoop:
         try:
             data = json.loads(meta_path.read_text())
             if decision.action == "execute":
-                content = f"Decision: execute\nTask: {decision.task_prompt}"
-                if result:
-                    content += f"\nResult: {str(result)[:500]}"
-                content += f"\nDuration: {duration_ms}ms"
-            elif decision.action == "skip":
-                content = f"Decision: skip\nReason: {decision.reasoning}"
+                thinking = f"Decision: execute\nTask: {decision.task_prompt}"
+                content = result
             else:
-                content = f"Decision: {decision.action}\nReason: {decision.reasoning}"
-            data["messages"].append({"role": "assistant", "content": content, "created_at": datetime.now(timezone.utc).isoformat()})
+                thinking = f"Decision: {decision.action}\nReason: {decision.reasoning}"
+                content = f"Decide to {decision.action} the loop"
+            data["messages"].append({"role": "assistant", "content": content, "thinking": thinking, "created_at": datetime.now(timezone.utc).isoformat()})
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
@@ -381,9 +374,9 @@ class AgentLoop:
                     updated_at=data["updated_at"],
                 ))
         except Exception as exc:
-            logger.warning("[Loop:%s] Failed to finish loop session %s: %s", self._agent_name, session_id, exc)
+            logger.warning("failed to finish loop session agent=%s session=%s error=%s", self._agent_name, session_id, exc)
 
     def stop(self) -> None:
         """Signal the loop to stop after the current cycle completes."""
-        logger.info("[Loop:%s] Stop requested", self._agent_name)
+        logger.info("stop requested agent=%s", self._agent_name)
         self._running = False
