@@ -28,6 +28,7 @@ class IpcServerHandler:
         on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
         on_stream_event: Callable[[dict], Awaitable[None]] | None = None,
         config_data: dict[str, Any] | None = None,
+        mem0_client: Any | None = None,
     ) -> None:
         self._memory = memory_store
         self._tracer = tracer
@@ -37,6 +38,7 @@ class IpcServerHandler:
         self._on_hitl_detected = on_hitl_detected
         self._on_stream_event = on_stream_event
         self._config_data = config_data or {}
+        self._mem0_client = mem0_client
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
         """Route a single IPC message to the appropriate handler."""
@@ -57,6 +59,8 @@ class IpcServerHandler:
                 return self._handle_tracer_event(params)
             elif method == "stream.event":
                 return await self._handle_stream_event(params)
+            elif method.startswith("mem0."):
+                return await self._handle_mem0(method, params)
             elif method.startswith("file."):
                 return await self._handle_file_op(method, params)
             elif method.startswith("memory."):
@@ -212,3 +216,23 @@ class IpcServerHandler:
             topics = await self._memory.semantic_list(params["agent_id"])
             return {"topics": topics}
         return {"error": f"Unknown memory operation: {op}"}
+
+    async def _handle_mem0(self, method: str, params: dict[str, Any]) -> Any:
+        """Handle mem0.add / mem0.search."""
+        op = method.split(".", 1)[1]
+        if self._mem0_client is None:
+            if op == "search":
+                return []
+            return {"results": []}
+        if op == "add":
+            params = dict(params)
+            messages = params.pop("messages", [])
+            scope = {k: v for k, v in params.items() if v is not None}
+            return await self._mem0_client.add(messages, **scope)
+        elif op == "search":
+            params = dict(params)
+            query = params.pop("query", "")
+            top_k = params.pop("top_k", None)
+            scope = {k: v for k, v in params.items() if v is not None}
+            return await self._mem0_client.search(query, top_k=top_k, **scope)
+        return {"error": f"Unknown mem0 operation: {op}"}
