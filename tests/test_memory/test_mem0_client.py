@@ -43,10 +43,10 @@ class TestMem0ClientSearch:
     async def test_search_filters_by_threshold(self):
         with patch("everstaff.memory.mem0_client.Memory") as MockMemory:
             mock_instance = MagicMock()
-            mock_instance.search.return_value = [
+            mock_instance.search.return_value = {"results": [
                 {"memory": "high relevance", "score": 0.9},
                 {"memory": "low relevance", "score": 0.1},
-            ]
+            ]}
             MockMemory.from_config.return_value = mock_instance
 
             from everstaff.memory.mem0_client import Mem0Client

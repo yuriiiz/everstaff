@@ -75,5 +75,6 @@ class Mem0Client:
         """Retrieve relevant memories with threshold filtering."""
         kwargs = {k: v for k, v in scope.items() if v is not None}
         kwargs["limit"] = top_k or self._top_k
-        results = await asyncio.to_thread(self._memory.search, query, **kwargs)
+        response = await asyncio.to_thread(self._memory.search, query, **kwargs)
+        results = response.get("results", []) if isinstance(response, dict) else response
         return [r for r in results if r.get("score", 0) >= self._threshold]
