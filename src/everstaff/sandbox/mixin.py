@@ -54,6 +54,7 @@ class IpcSandboxMixin:
         config_data: dict[str, Any] | None = None,
         on_stream_event: Callable[..., Awaitable[None]] | None = None,
         on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
+        mem0_client: Any | None = None,
     ) -> None:
         """Inject IPC dependencies. Called by ExecutorManager, not by sandbox implementers."""
         self._secret_store = secret_store
@@ -63,6 +64,7 @@ class IpcSandboxMixin:
         self._config_data = config_data or {}
         self._on_stream_event = on_stream_event
         self._on_hitl_detected = on_hitl_detected
+        self._mem0_client = mem0_client
         self._session_id: str = ""
         self._alive: bool = False
         self._started_at: float = 0.0
@@ -146,6 +148,7 @@ class IpcSandboxMixin:
             token_store=self._token_store, secret_store=self._secret_store,
             on_stream_event=self._on_stream_event, on_hitl_detected=self._on_hitl_detected,
             config_data=self._config_data,
+            mem0_client=self._mem0_client,
         )
         await self._create_ipc_server()
 

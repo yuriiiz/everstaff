@@ -24,12 +24,14 @@ class ExecutorManager:
         file_store: "FileStore | None" = None,
         config_data: dict[str, Any] | None = None,
         idle_timeout: float | None = None,
+        mem0_client: Any | None = None,
     ) -> None:
         self._factory = factory
         self._secret_store = secret_store
         self._memory_store = memory_store
         self._file_store = file_store
         self._config_data = config_data or {}
+        self._mem0_client = mem0_client
         self._executors: dict[str, "SandboxExecutor"] = {}
         self._idle_timeout = idle_timeout
         self._last_activity: dict[str, float] = {}
@@ -51,6 +53,7 @@ class ExecutorManager:
                 memory_store=self._memory_store,
                 file_store=self._file_store,
                 config_data=self._config_data,
+                mem0_client=self._mem0_client,
             )
         await executor.start(session_id)
         self._executors[session_id] = executor

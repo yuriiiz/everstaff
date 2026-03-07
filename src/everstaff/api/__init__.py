@@ -180,6 +180,16 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         def _sandbox_factory():
             return ProcessSandbox(sessions_dir=_sessions_resolved)
 
+        _mem0_client = None
+        if config.memory.enabled:
+            try:
+                from everstaff.memory.mem0_client import Mem0Client
+                _llm_model_id = config.resolve_model(config.memory.llm_model_kind).model_id
+                _embed_model_id = config.resolve_model(config.memory.embedding_model_kind).model_id
+                _mem0_client = Mem0Client(config.memory, _llm_model_id, _embed_model_id)
+            except Exception as _exc:
+                _logger.warning("Failed to create Mem0Client for sandbox: %s", _exc)
+
         _executor_manager = ExecutorManager(
             factory=_sandbox_factory,
             secret_store=_secret_store,
@@ -187,6 +197,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             file_store=_file_store,
             config_data=config.model_dump(),
             idle_timeout=config.sandbox.idle_timeout,
+            mem0_client=_mem0_client,
         )
         app.state.executor_manager = _executor_manager
 
