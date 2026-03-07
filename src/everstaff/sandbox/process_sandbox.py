@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from everstaff.sandbox.executor import SandboxExecutor
 from everstaff.sandbox.ipc.server_handler import IpcServerHandler
@@ -19,6 +19,7 @@ from everstaff.sandbox.models import SandboxCommand, SandboxResult, SandboxStatu
 
 if TYPE_CHECKING:
     from everstaff.core.secret_store import SecretStore
+    from everstaff.protocols import FileStore, MemoryStore, TracingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,23 @@ class ProcessSandbox(SandboxExecutor):
     4. stop() -> closes IPC server, terminates process, cleans up socket
     """
 
-    def __init__(self, workdir: Path, secret_store: "SecretStore") -> None:
+    def __init__(
+        self,
+        workdir: Path,
+        secret_store: "SecretStore",
+        memory_store: "MemoryStore | None" = None,
+        tracer: "TracingBackend | None" = None,
+        file_store: "FileStore | None" = None,
+        on_stream_event: Callable[..., Awaitable[None]] | None = None,
+        on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
+    ) -> None:
         self._workdir = workdir
         self._secret_store = secret_store
+        self._memory_store = memory_store
+        self._tracer = tracer
+        self._file_store = file_store
+        self._on_stream_event = on_stream_event
+        self._on_hitl_detected = on_hitl_detected
         self._session_id: str = ""
         self._alive: bool = False
         self._started_at: float = 0.0
@@ -80,8 +95,13 @@ class ProcessSandbox(SandboxExecutor):
 
         # Start IPC server
         self._ipc_handler = IpcServerHandler(
+            memory_store=self._memory_store,
+            tracer=self._tracer,
+            file_store=self._file_store,
             token_store=self._token_store,
             secret_store=self._secret_store,
+            on_stream_event=self._on_stream_event,
+            on_hitl_detected=self._on_hitl_detected,
         )
         self._ipc_server = await asyncio.start_unix_server(
             self._handle_connection,

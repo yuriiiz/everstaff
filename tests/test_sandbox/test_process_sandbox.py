@@ -207,3 +207,44 @@ class TestProcessSandboxSpawn:
 
         mock_proc.terminate.assert_called_once()
         assert sandbox._process is None
+
+
+@pytest.mark.asyncio
+async def test_stream_event_callback_wired(tmp_path):
+    """ProcessSandbox forwards stream events to on_stream_event callback."""
+    events = []
+    async def on_stream(event_data):
+        events.append(event_data)
+
+    sandbox = ProcessSandbox(
+        workdir=tmp_path, secret_store=SecretStore(),
+        on_stream_event=on_stream,
+    )
+    await sandbox.start("test-session")
+
+    result = await sandbox._ipc_handler.handle("stream.event", {
+        "type": "text_delta", "content": "hello", "session_id": "test-session",
+    })
+    assert result == {}
+    assert len(events) == 1
+    assert events[0]["type"] == "text_delta"
+    await sandbox.stop()
+
+
+@pytest.mark.asyncio
+async def test_ipc_handler_has_memory_tracer_filestore(tmp_path):
+    """ProcessSandbox IPC handler receives memory, tracer, file_store."""
+    memory = AsyncMock()
+    tracer = MagicMock()
+    file_store = AsyncMock()
+
+    sandbox = ProcessSandbox(
+        workdir=tmp_path, secret_store=SecretStore(),
+        memory_store=memory, tracer=tracer, file_store=file_store,
+    )
+    await sandbox.start("test-session")
+
+    assert sandbox._ipc_handler._memory is memory
+    assert sandbox._ipc_handler._tracer is tracer
+    assert sandbox._ipc_handler._file_store is file_store
+    await sandbox.stop()
