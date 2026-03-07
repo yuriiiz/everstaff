@@ -232,6 +232,18 @@ async def test_stream_event_callback_wired(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_workspace_dir_set_on_start(tmp_path):
+    """start() creates workspace at sessions_dir/session_id/workspaces."""
+    sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+    await sandbox.start("sess-123")
+
+    expected = tmp_path / "sess-123" / "workspaces"
+    assert sandbox._workdir == expected
+    assert expected.exists()
+    await sandbox.stop()
+
+
+@pytest.mark.asyncio
 async def test_ipc_handler_has_memory_tracer_filestore(tmp_path):
     """ProcessSandbox IPC handler receives memory, tracer, file_store."""
     memory = AsyncMock()

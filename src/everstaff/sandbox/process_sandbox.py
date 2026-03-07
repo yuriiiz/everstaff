@@ -58,7 +58,8 @@ class ProcessSandbox(SandboxExecutor):
         on_stream_event: Callable[..., Awaitable[None]] | None = None,
         on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
-        self._workdir = workdir
+        self._sessions_dir = workdir  # base sessions directory
+        self._workdir = workdir       # will be updated in start()
         self._secret_store = secret_store
         self._memory_store = memory_store
         self._tracer = tracer
@@ -83,6 +84,7 @@ class ProcessSandbox(SandboxExecutor):
 
     async def start(self, session_id: str) -> None:
         self._session_id = session_id
+        self._workdir = self._sessions_dir / session_id / "workspaces"
         self._workdir.mkdir(parents=True, exist_ok=True)
 
         # Create IPC socket in temp directory
