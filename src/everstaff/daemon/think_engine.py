@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from everstaff.daemon.goals import GoalBreakdown, SubGoal
 from everstaff.protocols import Decision, Message, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,42 @@ THINK_TOOLS: list[ToolDefinition] = [
                     "description": "Filter by tags",
                 },
             },
+        },
+    ),
+    ToolDefinition(
+        name="break_down_goal",
+        description="Break a user-defined goal into actionable sub-goals. The user's original goal is preserved and immutable.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "string", "description": "The GoalConfig id to break down"},
+                "sub_goals": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string"},
+                            "acceptance_criteria": {"type": "string"},
+                        },
+                        "required": ["description"],
+                    },
+                },
+            },
+            "required": ["goal_id", "sub_goals"],
+        },
+    ),
+    ToolDefinition(
+        name="update_goal_progress",
+        description="Update the status of a daemon-maintained sub-goal.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "string"},
+                "sub_goal_index": {"type": "integer", "description": "0-based index"},
+                "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked"]},
+                "progress_note": {"type": "string"},
+            },
+            "required": ["goal_id", "sub_goal_index", "status"],
         },
     ),
 ]
@@ -251,6 +288,56 @@ class ThinkEngine:
                             created_at=datetime.now(timezone.utc).isoformat(),
                         ))
 
+                    elif tc.name == "break_down_goal":
+                        goal_id = tc.args["goal_id"]
+                        raw_subs = tc.args.get("sub_goals", [])
+                        logger.debug("[Think:%s] Tool call: break_down_goal(goal_id=%s, sub_goals=%d)",
+                                     agent_name, goal_id, len(raw_subs))
+                        sub_goals = [
+                            SubGoal(
+                                description=s["description"],
+                                acceptance_criteria=s.get("acceptance_criteria", ""),
+                            )
+                            for s in raw_subs
+                        ]
+                        gb = GoalBreakdown(goal_id=goal_id, sub_goals=sub_goals)
+                        working.custom.setdefault("goals_breakdown", {})[goal_id] = gb.model_dump()
+                        await self._memory.working_save(agent_name, working)
+                        messages.append(Message(
+                            role="tool",
+                            content=f"Goal '{goal_id}' broken into {len(sub_goals)} sub-goals.",
+                            tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+
+                    elif tc.name == "update_goal_progress":
+                        goal_id = tc.args["goal_id"]
+                        idx = tc.args["sub_goal_index"]
+                        status = tc.args["status"]
+                        note = tc.args.get("progress_note", "")
+                        logger.debug("[Think:%s] Tool call: update_goal_progress(goal_id=%s, idx=%d, status=%s)",
+                                     agent_name, goal_id, idx, status)
+                        breakdowns = working.custom.get("goals_breakdown", {})
+                        if goal_id not in breakdowns:
+                            result_text = f"Error: no breakdown for goal '{goal_id}'"
+                        else:
+                            gb = GoalBreakdown.model_validate(breakdowns[goal_id])
+                            if idx < 0 or idx >= len(gb.sub_goals):
+                                result_text = f"Error: sub_goal_index {idx} out of range (0-{len(gb.sub_goals) - 1})"
+                            else:
+                                gb.sub_goals[idx].status = status
+                                if note:
+                                    gb.sub_goals[idx].progress_note = note
+                                breakdowns[goal_id] = gb.model_dump()
+                                await self._memory.working_save(agent_name, working)
+                                result_text = f"Sub-goal {idx} of '{goal_id}' updated to '{status}'. Completion: {gb.completion_ratio:.0%}"
+                        messages.append(Message(
+                            role="tool",
+                            content=result_text,
+                            tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+
                 if decided:
                     break
 
@@ -376,6 +463,17 @@ class ThinkEngine:
 
         if working.goals_progress:
             parts.append(f"\n## Goal progress: {working.goals_progress}")
+
+        breakdowns = working.custom.get("goals_breakdown", {})
+        if breakdowns:
+            parts.append("\n## Goal breakdowns:")
+            for gid, bd_data in breakdowns.items():
+                gb = GoalBreakdown.model_validate(bd_data)
+                parts.append(f"- Goal '{gid}' ({gb.completion_ratio:.0%} complete):")
+                for i, sg in enumerate(gb.sub_goals):
+                    parts.append(f"  {i}. [{sg.status}] {sg.description}")
+                    if sg.progress_note:
+                        parts.append(f"     Note: {sg.progress_note}")
 
         if episodes:
             parts.append(f"\n## Recent episodes ({len(episodes)}):")
