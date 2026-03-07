@@ -52,7 +52,7 @@ class FakeMem0:
 
 
 @pytest.mark.asyncio
-async def test_think_returns_decision():
+async def test_think_returns_decision_and_messages():
     state_store = DaemonStateStore(InMemoryFileStore())
     llm = FakeLLM({"action": "execute", "task_prompt": "check email", "reasoning": "daily", "priority": "normal"})
     engine = ThinkEngine(
@@ -62,15 +62,16 @@ async def test_think_returns_decision():
         agent_uuid="test-uuid",
     )
     trigger = AgentEvent(source="cron", type="cron.daily")
-    decision = await engine.think(
+    decision, messages = await engine.think(
         agent_name="test",
         trigger=trigger,
         pending_events=[],
         autonomy_goals=[],
-        parent_session_id="loop-123",
     )
     assert decision.action == "execute"
     assert decision.task_prompt == "check email"
+    assert len(messages) > 0
+    assert messages[0].role == "user"
 
 
 @pytest.mark.asyncio
@@ -102,7 +103,7 @@ async def test_think_with_search_memory():
         mem0_client=mem0,
     )
     trigger = AgentEvent(source="cron", type="cron.daily")
-    decision = await engine.think("test", trigger, [], [], "loop-123")
+    decision, messages = await engine.think("test", trigger, [], [])
     assert decision.action == "execute"
     assert "PRs" in decision.task_prompt
     assert call_num == 2
@@ -124,7 +125,7 @@ async def test_think_no_tool_call_returns_skip():
         agent_uuid="test-uuid",
     )
     trigger = AgentEvent(source="internal", type="tick")
-    decision = await engine.think("test", trigger, [], [], "loop-123")
+    decision, messages = await engine.think("test", trigger, [], [])
     assert decision.action == "skip"
 
 
@@ -169,7 +170,7 @@ async def test_search_memory_disabled_when_no_mem0():
         mem0_client=None,
     )
     trigger = AgentEvent(source="cron", type="cron.daily")
-    decision = await engine.think("test", trigger, [], [], "loop-123")
+    decision, messages = await engine.think("test", trigger, [], [])
     assert decision.action == "skip"
 
 
@@ -206,7 +207,7 @@ async def test_break_down_goal_uses_state_store():
         agent_uuid="test-uuid",
     )
     trigger = AgentEvent(source="cron", type="cron.daily")
-    await engine.think("test", trigger, [], [], "loop-123")
+    await engine.think("test", trigger, [], [])
 
     state = await state_store.load("test-uuid")
     assert "g1" in state.goals_breakdown
@@ -247,7 +248,7 @@ async def test_record_learning_insight_uses_mem0():
         mem0_client=mem0,
     )
     trigger = AgentEvent(source="internal", type="internal.reflect")
-    await engine.think("test", trigger, [], [], "loop-123")
+    await engine.think("test", trigger, [], [])
 
     assert len(mem0.added) == 1
     content = mem0.added[0][0][0]["content"]

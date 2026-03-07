@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from everstaff.daemon.agent_loop import AgentLoop
 from everstaff.daemon.event_bus import EventBus
 from everstaff.daemon.think_engine import ThinkEngine
-from everstaff.protocols import AgentEvent, Decision, LLMResponse, ToolCallRequest
+from everstaff.protocols import AgentEvent, Decision, LLMResponse, Message, ToolCallRequest
 from everstaff.nulls import NullTracer
 from everstaff.daemon.state_store import DaemonState, DaemonStateStore
 
@@ -42,9 +42,9 @@ class MockThinkEngine:
         self.decision = decision
         self.called = False
 
-    async def think(self, agent_name, trigger, pending_events, autonomy_goals, parent_session_id):
+    async def think(self, agent_name, trigger, pending_events, autonomy_goals):
         self.called = True
-        return self.decision
+        return (self.decision, [Message(role="user", content="trigger", created_at="")])
 
 
 class MockRuntime:

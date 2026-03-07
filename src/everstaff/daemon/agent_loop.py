@@ -171,12 +171,11 @@ class AgentLoop:
 
         pending = self._bus.drain(self._agent_name)
         logger.debug("[Loop:%s] Think — pending_events=%d", self._agent_name, len(pending))
-        decision = await self._think.think(
+        decision, think_messages = await self._think.think(
             agent_name=self._agent_name,
             trigger=event,
             pending_events=pending,
             autonomy_goals=self._goals,
-            parent_session_id=loop_session_id,
         )
 
         logger.info("[Loop:%s] Think → decision=%s, task='%s', reasoning='%s'",
@@ -348,7 +347,7 @@ class AgentLoop:
                 content = f"Decision: skip\nReason: {decision.reasoning}"
             else:
                 content = f"Decision: {decision.action}\nReason: {decision.reasoning}"
-            data["messages"].append({"role": "assistant", "content": content})
+            data["messages"].append(Message(role="assistant", content=content, created_at=datetime.now(timezone.utc).isoformat()))
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))

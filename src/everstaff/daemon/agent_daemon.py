@@ -210,8 +210,6 @@ class AgentDaemon:
             daemon_state_store=self._state_store,
             agent_uuid=spec.uuid,
             mem0_client=self._mem0,
-            sessions_dir=self._sessions_dir,
-            session_index=self._session_index,
         )
 
         # Create per-agent runtime factory (closure captures agent spec)

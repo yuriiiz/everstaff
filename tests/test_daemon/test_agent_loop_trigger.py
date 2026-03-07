@@ -7,7 +7,7 @@ async def test_agent_loop_passes_trigger_to_factory():
     """AgentLoop.run_once() passes the triggering AgentEvent to the runtime factory."""
     from everstaff.daemon.agent_loop import AgentLoop
     from everstaff.daemon.event_bus import EventBus
-    from everstaff.protocols import AgentEvent, Decision
+    from everstaff.protocols import AgentEvent, Decision, Message
 
     received_kwargs = {}
 
@@ -18,8 +18,9 @@ async def test_agent_loop_passes_trigger_to_factory():
         return mock_runtime
 
     mock_think = MagicMock()
-    mock_think.think = AsyncMock(return_value=Decision(
-        action="execute", reasoning="test", task_prompt="do something"
+    mock_think.think = AsyncMock(return_value=(
+        Decision(action="execute", reasoning="test", task_prompt="do something"),
+        [Message(role="user", content="trigger", created_at="")],
     ))
 
     bus = EventBus()

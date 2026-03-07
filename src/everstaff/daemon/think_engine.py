@@ -16,13 +16,10 @@ Tools available to the LLM during thinking:
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from everstaff.daemon.goals import GoalBreakdown, SubGoal
 from everstaff.protocols import Decision, Message, ToolDefinition
@@ -277,14 +274,12 @@ class ThinkEngine:
         Optional ``Mem0Client`` for long-term semantic memory.
     """
 
-    def __init__(self, llm_client: Any, tracer: Any, daemon_state_store: Any, agent_uuid: str, mem0_client: Any = None, sessions_dir: str | Path | None = None, session_index: Any = None) -> None:
+    def __init__(self, llm_client: Any, tracer: Any, daemon_state_store: Any, agent_uuid: str, mem0_client: Any = None) -> None:
         self._llm = llm_client
         self._tracer = tracer
         self._state_store = daemon_state_store
         self._agent_uuid = agent_uuid
         self._mem0 = mem0_client
-        self._sessions_dir: Path | None = Path(sessions_dir) if sessions_dir else None
-        self._session_index = session_index
 
     # ------------------------------------------------------------------
     # Public API
@@ -296,8 +291,7 @@ class ThinkEngine:
         trigger: AgentEvent,
         pending_events: list[AgentEvent],
         autonomy_goals: list[Any],
-        parent_session_id: str,
-    ) -> Decision:
+    ) -> tuple[Decision, list[Message]]:
         """Run the think loop and return a :class:`Decision`.
 
         The loop sends messages (with context) to the LLM and processes
@@ -306,10 +300,6 @@ class ThinkEngine:
         """
         logger.info("[Think:%s] Starting — trigger=%s:%s, pending=%d, goals=%d",
                      agent_name, trigger.source, trigger.type, len(pending_events), len(autonomy_goals))
-
-        think_session_id = str(uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        self._write_think_session(think_session_id, agent_name, parent_session_id, now)
 
         # Load structured state from DaemonStateStore
         from everstaff.daemon.state_store import DaemonState
@@ -333,153 +323,74 @@ class ThinkEngine:
 
         decision: Decision | None = None
 
-        try:
-            # Tool loop — max _MAX_THINK_ITERATIONS rounds
-            for iteration in range(_MAX_THINK_ITERATIONS):
-                logger.debug("[Think:%s] LLM call iteration %d/%d", agent_name, iteration + 1, _MAX_THINK_ITERATIONS)
-                response = await self._llm.complete(messages, THINK_TOOLS, system=system_prompt)
+        # Tool loop — max _MAX_THINK_ITERATIONS rounds
+        for iteration in range(_MAX_THINK_ITERATIONS):
+            logger.debug("[Think:%s] LLM call iteration %d/%d", agent_name, iteration + 1, _MAX_THINK_ITERATIONS)
+            response = await self._llm.complete(messages, THINK_TOOLS, system=system_prompt)
 
-                if not response.tool_calls:
-                    # No tool call means the LLM declined to decide — skip.
-                    logger.info("[Think:%s] No tool call from LLM — defaulting to skip", agent_name)
-                    # Capture the LLM's response text before breaking
-                    if response.content:
-                        messages.append(Message(role="assistant", thinking=response.thinking, content=response.content, created_at=datetime.now(timezone.utc).isoformat()))
-                    decision = Decision(
-                        action="skip",
-                        reasoning=response.content or "No decision made",
-                    )
-                    break
+            if not response.tool_calls:
+                # No tool call means the LLM declined to decide — skip.
+                logger.info("[Think:%s] No tool call from LLM — defaulting to skip", agent_name)
+                # Capture the LLM's response text before breaking
+                if response.content:
+                    messages.append(Message(role="assistant", thinking=response.thinking, content=response.content, created_at=datetime.now(timezone.utc).isoformat()))
+                decision = Decision(
+                    action="skip",
+                    reasoning=response.content or "No decision made",
+                )
+                break
 
-                # Build a single assistant message with all tool calls
-                assistant_tool_calls = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": str(tc.args)},
-                    }
-                    for tc in response.tool_calls
-                ]
+            # Build a single assistant message with all tool calls
+            assistant_tool_calls = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": str(tc.args)},
+                }
+                for tc in response.tool_calls
+            ]
+            messages.append(Message(
+                role="assistant",
+                thinking=response.thinking,
+                content=response.content,
+                tool_calls=assistant_tool_calls,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ))
+
+            decided = False
+            ctx = ThinkToolContext(
+                agent_name=agent_name,
+                agent_uuid=self._agent_uuid,
+                state=state,
+                state_store=self._state_store,
+                mem0=self._mem0,
+            )
+            for tc in response.tool_calls:
+                handler = THINK_TOOL_HANDLERS.get(tc.name)
+                if handler is None:
+                    result_text, maybe_decision = f"Unknown tool: {tc.name}", None
+                else:
+                    result_text, maybe_decision = await handler(tc.args, ctx)
+                if maybe_decision is not None:
+                    decision = maybe_decision
+                    decided = True
                 messages.append(Message(
-                    role="assistant",
-                    thinking=response.thinking,
-                    content=response.content,
-                    tool_calls=assistant_tool_calls,
+                    role="tool",
+                    content=result_text,
+                    tool_call_id=tc.id,
                     created_at=datetime.now(timezone.utc).isoformat(),
                 ))
 
-                decided = False
-                ctx = ThinkToolContext(
-                    agent_name=agent_name,
-                    agent_uuid=self._agent_uuid,
-                    state=state,
-                    state_store=self._state_store,
-                    mem0=self._mem0,
-                )
-                for tc in response.tool_calls:
-                    handler = THINK_TOOL_HANDLERS.get(tc.name)
-                    if handler is None:
-                        result_text, maybe_decision = f"Unknown tool: {tc.name}", None
-                    else:
-                        result_text, maybe_decision = await handler(tc.args, ctx)
-                    if maybe_decision is not None:
-                        decision = maybe_decision
-                        decided = True
-                    messages.append(Message(
-                        role="tool",
-                        content=result_text,
-                        tool_call_id=tc.id,
-                        created_at=datetime.now(timezone.utc).isoformat(),
-                    ))
+            if decided:
+                break
 
-                if decided:
-                    break
+        if decision is None:
+            # Exhausted iterations without a decision
+            logger.warning("[Think:%s] Max iterations (%d) reached without decision — defaulting to skip",
+                            agent_name, _MAX_THINK_ITERATIONS)
+            decision = Decision(action="skip", reasoning="Max think iterations reached")
 
-            if decision is None:
-                # Exhausted iterations without a decision
-                logger.warning("[Think:%s] Max iterations (%d) reached without decision — defaulting to skip",
-                                agent_name, _MAX_THINK_ITERATIONS)
-                decision = Decision(action="skip", reasoning="Max think iterations reached")
-
-        finally:
-            # Always persist the think session, even if an exception occurred mid-loop
-            final_decision = decision or Decision(action="skip", reasoning="Think loop interrupted")
-            self._finish_think_session(think_session_id, agent_name, messages, final_decision, parent_session_id)
-
-        return decision
-
-    # ------------------------------------------------------------------
-    # Think session persistence
-    # ------------------------------------------------------------------
-
-    def _write_think_session(self, session_id: str, agent_name: str, parent_session_id: str, now: str) -> None:
-        """Write an initial session file for this think cycle.
-
-        Think sessions are children of the loop session, stored under
-        ``{parent}/sub_sessions/{session_id}.json``.
-        """
-        if self._sessions_dir is None:
-            return
-        sub_dir = self._sessions_dir / parent_session_id / "sub_sessions"
-        try:
-            sub_dir.mkdir(parents=True, exist_ok=True)
-            data = {
-                "session_id": session_id,
-                "agent_name": agent_name,
-                "status": "running",
-                "created_at": now,
-                "updated_at": now,
-                "parent_session_id": parent_session_id,
-                "root_session_id": parent_session_id,
-                "metadata": {"title": "Think"},
-                "messages": [],
-                "hitl_requests": [],
-            }
-            (sub_dir / f"{session_id}.json").write_text(json.dumps(data, indent=2))
-            if self._session_index is not None:
-                from everstaff.session.index import IndexEntry
-                self._session_index.upsert(IndexEntry(
-                    id=session_id, root=parent_session_id,
-                    parent=parent_session_id, agent=agent_name,
-                    agent_uuid=None, status="running",
-                    created_at=now, updated_at=now,
-                ))
-        except Exception as exc:
-            logger.warning("[Think:%s] Failed to write think session %s: %s", agent_name, session_id, exc)
-
-    def _finish_think_session(self, session_id: str, agent_name: str, messages: list[Message], decision: Decision, parent_session_id: str = "") -> None:
-        """Save accumulated messages and decision into the think session."""
-        if self._sessions_dir is None:
-            return
-        # Nested path: {parent}/sub_sessions/{session_id}.json
-        if parent_session_id:
-            meta_path = self._sessions_dir / parent_session_id / "sub_sessions" / f"{session_id}.json"
-        else:
-            meta_path = self._sessions_dir / session_id / "session.json"
-        if not meta_path.exists():
-            return
-        try:
-            data = json.loads(meta_path.read_text())
-            data["messages"] = [m.to_dict() for m in messages]
-            if decision.action == "execute":
-                summary = f"Decision: execute\nTask: {decision.task_prompt}\nReason: {decision.reasoning}"
-            else:
-                summary = f"Decision: {decision.action}\nReason: {decision.reasoning}"
-            data["messages"].append(Message(role="assistant", content=summary, created_at=datetime.now(timezone.utc).isoformat()))
-            data["status"] = "completed"
-            data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            meta_path.write_text(json.dumps(data, indent=2))
-            if self._session_index is not None:
-                from everstaff.session.index import IndexEntry
-                self._session_index.upsert(IndexEntry(
-                    id=session_id, root=parent_session_id or session_id,
-                    parent=parent_session_id or None, agent=agent_name,
-                    agent_uuid=None, status="completed",
-                    created_at=data.get("created_at", ""),
-                    updated_at=data["updated_at"],
-                ))
-        except Exception as exc:
-            logger.warning("[Think:%s] Failed to finish think session %s: %s", agent_name, session_id, exc)
+        return decision, messages
 
     # ------------------------------------------------------------------
     # Internal helpers
