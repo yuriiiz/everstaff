@@ -41,8 +41,10 @@ sessions_dir: ".agent/sessions"
 # ---------------------------------------------------------------------------
 # memory:
 #   enabled: true
-#   model_kind: fast
-#   vector_store: faiss
+#   llm_model_kind: fast          # model_mappings key for memory extraction LLM
+#   embedding_model_kind: embedding  # model_mappings key for embedding model
+#   vector_store: faiss           # faiss | chroma | qdrant
+#   vector_store_path: ".agent/memory/vectors"
 #   search_top_k: 10
 
 # ---------------------------------------------------------------------------
@@ -68,11 +70,21 @@ model_mappings:
     max_tokens: 4096
     temperature: 0.5
     supports_tools: true
-  # reasoning:
-  #   model_id: "anthropic/claude-opus-4-6"
-  #   max_tokens: 16384
-  #   temperature: 1.0
-  #   supports_tools: true
+  reasoning:
+    model_id: "anthropic/claude-opus-4-6"
+    max_tokens: 16384
+    temperature: 1.0
+    supports_tools: true
+
+  # Embedding model for mem0 memory.
+  # LLM providers (via litellm): openai, anthropic, minimax, groq, together,
+  #   deepseek, ollama, aws_bedrock, azure_openai, gemini, xai, etc.
+  # Embedding providers (via mem0): openai (default), ollama, huggingface,
+  #   azure_openai, gemini, vertexai, together, aws_bedrock, fastembed
+  # Examples: text-embedding-3-small, huggingface/all-MiniLM-L6-v2,
+  #           ollama/nomic-embed-text
+  embedding:
+    model_id: "text-embedding-3-small"
 
 # ---------------------------------------------------------------------------
 # Storage — session persistence backend

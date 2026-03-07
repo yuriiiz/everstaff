@@ -6,8 +6,8 @@ from everstaff.core.config import FrameworkConfig, MemoryConfig
 def test_memory_config_defaults():
     cfg = MemoryConfig()
     assert cfg.enabled is False
-    assert cfg.model_kind == "fast"
-    assert cfg.embedding_model == "text-embedding-3-small"
+    assert cfg.llm_model_kind == "fast"
+    assert cfg.embedding_model_kind == "embedding"
     assert cfg.vector_store == "faiss"
     assert cfg.vector_store_path == ".agent/memory/vectors"
     assert cfg.search_top_k == 10

@@ -41,6 +41,14 @@ class RuntimeEnvironment:
         from everstaff.llm.litellm_client import LiteLLMClient
         return LiteLLMClient(model=model, **kwargs)
 
+    def build_mem0_provider(self, **mem0_scope):
+        """Build Mem0Provider for long-term memory injection. Override in subclass."""
+        return None
+
+    def build_mem0_hook(self, provider, memory_store, **mem0_scope):
+        """Build Mem0Hook for memory lifecycle events. Override in subclass."""
+        return None
+
     def new_session_id(self) -> str:
         return str(uuid4())
 
@@ -120,8 +128,10 @@ class DefaultEnvironment(RuntimeEnvironment):
     def _get_or_create_mem0_client(self):
         if not hasattr(self, "_mem0_client"):
             from everstaff.memory.mem0_client import Mem0Client
-            mapping = self._config.resolve_model(self._config.memory.model_kind)
-            self._mem0_client = Mem0Client(self._config.memory, mapping)
+            mem = self._config.memory
+            llm_model_id = self._config.resolve_model(mem.llm_model_kind).model_id
+            embed_model_id = self._config.resolve_model(mem.embedding_model_kind).model_id
+            self._mem0_client = Mem0Client(mem, llm_model_id, embed_model_id)
         return self._mem0_client
 
     def build_tracer(self, session_id: str = "") -> TracingBackend:
