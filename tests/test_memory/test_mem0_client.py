@@ -3,21 +3,20 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from everstaff.core.config import MemoryConfig
-from everstaff.schema.model_config import ModelMapping
 
 
-class TestMem0ClientParseModelId:
-    def test_parse_openai_model(self):
+class TestMem0ClientParseEmbeddingModel:
+    def test_parse_openai_embedding(self):
         from everstaff.memory.mem0_client import Mem0Client
-        assert Mem0Client._parse_model_id("openai/gpt-4.1-nano") == ("openai", "gpt-4.1-nano")
+        assert Mem0Client._parse_embedding_model("openai/text-embedding-3-small") == ("openai", "text-embedding-3-small")
 
-    def test_parse_anthropic_model(self):
+    def test_parse_provider_embedding(self):
         from everstaff.memory.mem0_client import Mem0Client
-        assert Mem0Client._parse_model_id("anthropic/claude-haiku-4-5-20251001") == ("anthropic", "claude-haiku-4-5-20251001")
+        assert Mem0Client._parse_embedding_model("huggingface/all-MiniLM-L6-v2") == ("huggingface", "all-MiniLM-L6-v2")
 
     def test_parse_bare_model(self):
         from everstaff.memory.mem0_client import Mem0Client
-        assert Mem0Client._parse_model_id("gpt-4o") == ("openai", "gpt-4o")
+        assert Mem0Client._parse_embedding_model("text-embedding-3-small") == ("openai", "text-embedding-3-small")
 
 
 @pytest.mark.asyncio
@@ -30,8 +29,7 @@ class TestMem0ClientAdd:
 
             from everstaff.memory.mem0_client import Mem0Client
             config = MemoryConfig(enabled=True)
-            mapping = ModelMapping(model_id="openai/gpt-4.1-nano")
-            client = Mem0Client(config, mapping)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
 
             messages = [{"role": "user", "content": "I like Python"}]
             result = await client.add(messages, user_id="u1", agent_id="a1")
@@ -53,10 +51,30 @@ class TestMem0ClientSearch:
 
             from everstaff.memory.mem0_client import Mem0Client
             config = MemoryConfig(enabled=True, search_threshold=0.3)
-            mapping = ModelMapping(model_id="openai/gpt-4.1-nano")
-            client = Mem0Client(config, mapping)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
 
             results = await client.search("test query", user_id="u1")
 
             assert len(results) == 1
             assert results[0]["memory"] == "high relevance"
+
+
+class TestMem0ClientEmbedderApiKey:
+    def test_api_key_passed_to_embedder_config(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory:
+            MockMemory.from_config.return_value = MagicMock()
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small",
+                       embedder_api_key="sk-test")
+            call_args = MockMemory.from_config.call_args[0][0]
+            assert call_args["embedder"]["config"]["api_key"] == "sk-test"
+
+    def test_no_api_key_omits_field(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory:
+            MockMemory.from_config.return_value = MagicMock()
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+            call_args = MockMemory.from_config.call_args[0][0]
+            assert "api_key" not in call_args["embedder"]["config"]

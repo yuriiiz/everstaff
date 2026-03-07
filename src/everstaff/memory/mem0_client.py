@@ -7,7 +7,6 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from everstaff.core.config import MemoryConfig
-    from everstaff.schema.model_config import ModelMapping
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +22,30 @@ class Mem0Client:
     All blocking SDK calls are dispatched to a thread pool via asyncio.to_thread.
     """
 
-    def __init__(self, config: "MemoryConfig", model_mapping: "ModelMapping") -> None:
+    def __init__(
+        self,
+        config: "MemoryConfig",
+        llm_model_id: str,
+        embedding_model_id: str,
+        embedder_api_key: str | None = None,
+    ) -> None:
         if Memory is None:
             raise ImportError(
                 "mem0ai is required for memory integration. "
                 "Install it with: pip install 'everstaff[mem0]'"
             )
-        provider, model = self._parse_model_id(model_mapping.model_id)
+        embed_provider, embed_model = self._parse_embedding_model(embedding_model_id)
+        embedder_config: dict = {"model": embed_model}
+        if embedder_api_key:
+            embedder_config["api_key"] = embedder_api_key
         self._memory = Memory.from_config({
             "llm": {
-                "provider": provider,
-                "config": {"model": model},
+                "provider": "litellm",
+                "config": {"model": llm_model_id},
             },
             "embedder": {
-                "provider": provider,
-                "config": {"model": config.embedding_model},
+                "provider": embed_provider,
+                "config": embedder_config,
             },
             "vector_store": {
                 "provider": config.vector_store,
@@ -48,8 +56,11 @@ class Mem0Client:
         self._threshold = config.search_threshold
 
     @staticmethod
-    def _parse_model_id(model_id: str) -> tuple[str, str]:
-        """Parse litellm format 'provider/model' into (provider, model)."""
+    def _parse_embedding_model(model_id: str) -> tuple[str, str]:
+        """Parse embedding model string into (provider, model).
+
+        If 'provider/model' format, extracts provider; otherwise defaults to 'openai'.
+        """
         if "/" in model_id:
             provider, model = model_id.split("/", 1)
             return provider, model

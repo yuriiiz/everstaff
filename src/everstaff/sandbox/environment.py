@@ -16,6 +16,14 @@ if TYPE_CHECKING:
     from everstaff.sandbox.ipc.channel import IpcChannel
 
 
+_EMBEDDER_API_KEY_MAP = {
+    "openai": "OPENAI_API_KEY",
+    "azure_openai": "AZURE_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "together": "TOGETHER_API_KEY",
+}
+
+
 class SandboxEnvironment(RuntimeEnvironment):
     """RuntimeEnvironment for sandbox processes.
 
@@ -55,3 +63,36 @@ class SandboxEnvironment(RuntimeEnvironment):
     @property
     def secret_store(self) -> "SecretStore":
         return self._secret_store
+
+    # --- mem0 integration (runs directly in sandbox, no IPC needed) ---
+
+    def _get_or_create_mem0_client(self):
+        if not hasattr(self, "_mem0_client"):
+            from everstaff.memory.mem0_client import Mem0Client
+            mem = self._config.memory
+            llm_model_id = self._config.resolve_model(mem.llm_model_kind).model_id
+            embed_model_id = self._config.resolve_model(mem.embedding_model_kind).model_id
+            embed_provider, _ = Mem0Client._parse_embedding_model(embed_model_id)
+            embedder_api_key = self._secret_store.get(
+                _EMBEDDER_API_KEY_MAP.get(embed_provider, f"{embed_provider.upper()}_API_KEY")
+            )
+            self._mem0_client = Mem0Client(mem, llm_model_id, embed_model_id,
+                                           embedder_api_key=embedder_api_key)
+        return self._mem0_client
+
+    def build_mem0_provider(self, **mem0_scope):
+        if not self._config.memory.enabled:
+            return None
+        from everstaff.memory.mem0_provider import Mem0Provider
+        return Mem0Provider(self._get_or_create_mem0_client(), **mem0_scope)
+
+    def build_mem0_hook(self, provider, memory_store, **mem0_scope):
+        if not self._config.memory.enabled:
+            return None
+        from everstaff.memory.mem0_hook import Mem0Hook
+        return Mem0Hook(
+            mem0_provider=provider,
+            mem0_client=self._get_or_create_mem0_client(),
+            memory_store=memory_store,
+            **mem0_scope,
+        )
