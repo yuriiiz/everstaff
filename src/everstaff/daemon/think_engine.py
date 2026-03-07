@@ -20,6 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -130,6 +131,132 @@ THINK_TOOLS: list[ToolDefinition] = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Registry-based tool dispatch
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ThinkToolContext:
+    """Shared context passed to every think-tool handler."""
+
+    agent_name: str
+    agent_uuid: str
+    state: Any  # DaemonState
+    state_store: Any  # DaemonStateStore
+    mem0: Any  # Optional Mem0Client
+
+
+async def _handle_make_decision(
+    args: dict, ctx: ThinkToolContext,
+) -> tuple[str, Decision | None]:
+    decision = Decision(
+        action=args.get("action", "skip"),
+        reasoning=args.get("reasoning", ""),
+        task_prompt=args.get("task_prompt", ""),
+        priority=args.get("priority", "normal"),
+    )
+    logger.info(
+        "[Think:%s] Decision made — action=%s, priority=%s, task='%s'",
+        ctx.agent_name, decision.action, decision.priority,
+        decision.task_prompt[:80] if decision.task_prompt else "-",
+    )
+    return f"Decision '{decision.action}' recorded.", decision
+
+
+async def _handle_search_memory(
+    args: dict, ctx: ThinkToolContext,
+) -> tuple[str, Decision | None]:
+    query = args.get("query", "")
+    logger.debug("[Think:%s] Tool call: search_memory(query=%s)", ctx.agent_name, query[:80])
+    if ctx.mem0 is None:
+        content = "(memory not enabled)"
+    else:
+        results = await ctx.mem0.search(query, agent_id=ctx.agent_name)
+        if results:
+            content = "\n".join(r.get("memory", str(r)) for r in results)
+        else:
+            content = "(no results)"
+    return content, None
+
+
+async def _handle_break_down_goal(
+    args: dict, ctx: ThinkToolContext,
+) -> tuple[str, Decision | None]:
+    goal_id = args["goal_id"]
+    raw_subs = args.get("sub_goals", [])
+    logger.debug(
+        "[Think:%s] Tool call: break_down_goal(goal_id=%s, sub_goals=%d)",
+        ctx.agent_name, goal_id, len(raw_subs),
+    )
+    sub_goals = [
+        SubGoal(
+            description=s["description"],
+            acceptance_criteria=s.get("acceptance_criteria", ""),
+        )
+        for s in raw_subs
+    ]
+    gb = GoalBreakdown(goal_id=goal_id, sub_goals=sub_goals)
+    ctx.state.goals_breakdown[goal_id] = gb
+    await ctx.state_store.save(ctx.agent_uuid, ctx.state)
+    return f"Goal '{goal_id}' broken into {len(sub_goals)} sub-goals.", None
+
+
+async def _handle_update_goal_progress(
+    args: dict, ctx: ThinkToolContext,
+) -> tuple[str, Decision | None]:
+    goal_id = args["goal_id"]
+    idx = args["sub_goal_index"]
+    status = args["status"]
+    note = args.get("progress_note", "")
+    logger.debug(
+        "[Think:%s] Tool call: update_goal_progress(goal_id=%s, idx=%d, status=%s)",
+        ctx.agent_name, goal_id, idx, status,
+    )
+    if goal_id not in ctx.state.goals_breakdown:
+        result_text = f"Error: no breakdown for goal '{goal_id}'"
+    else:
+        gb = ctx.state.goals_breakdown[goal_id]
+        if idx < 0 or idx >= len(gb.sub_goals):
+            result_text = f"Error: sub_goal_index {idx} out of range (0-{len(gb.sub_goals) - 1})"
+        else:
+            gb.sub_goals[idx].status = status
+            if note:
+                gb.sub_goals[idx].progress_note = note
+            await ctx.state_store.save(ctx.agent_uuid, ctx.state)
+            result_text = f"Sub-goal {idx} of '{goal_id}' updated to '{status}'. Completion: {gb.completion_ratio:.0%}"
+    return result_text, None
+
+
+async def _handle_record_learning_insight(
+    args: dict, ctx: ThinkToolContext,
+) -> tuple[str, Decision | None]:
+    logger.debug(
+        "[Think:%s] Tool call: record_learning_insight(category=%s)",
+        ctx.agent_name, args.get("category"),
+    )
+    if ctx.mem0 is None:
+        result_text = "(memory not enabled, insight not persisted)"
+    else:
+        content = f"[{args['category']}] {args['insight']} (evidence: {args['evidence']})"
+        if args.get("action"):
+            content += f" -> action: {args['action']}"
+        await ctx.mem0.add(
+            [{"role": "assistant", "content": content}],
+            agent_id=ctx.agent_name,
+        )
+        result_text = "Insight recorded."
+    return result_text, None
+
+
+THINK_TOOL_HANDLERS: dict[str, Any] = {
+    "make_decision": _handle_make_decision,
+    "search_memory": _handle_search_memory,
+    "break_down_goal": _handle_break_down_goal,
+    "update_goal_progress": _handle_update_goal_progress,
+    "record_learning_insight": _handle_record_learning_insight,
+}
+
 _MAX_THINK_ITERATIONS = 5
 
 
@@ -235,120 +362,35 @@ class ThinkEngine:
                 ]
                 messages.append(Message(
                     role="assistant",
+                    thinking=response.thinking,
                     content=response.content,
                     tool_calls=assistant_tool_calls,
                     created_at=datetime.now(timezone.utc).isoformat(),
                 ))
 
                 decided = False
+                ctx = ThinkToolContext(
+                    agent_name=agent_name,
+                    agent_uuid=self._agent_uuid,
+                    state=state,
+                    state_store=self._state_store,
+                    mem0=self._mem0,
+                )
                 for tc in response.tool_calls:
-                    if tc.name == "make_decision":
-                        decision = Decision(
-                            action=tc.args.get("action", "skip"),
-                            reasoning=tc.args.get("reasoning", ""),
-                            task_prompt=tc.args.get("task_prompt", ""),
-                            priority=tc.args.get("priority", "normal"),
-                        )
-                        logger.info("[Think:%s] Decision made — action=%s, priority=%s, task='%s'",
-                                     agent_name, decision.action, decision.priority,
-                                     decision.task_prompt[:80] if decision.task_prompt else '-')
-                        messages.append(Message(
-                            role="tool",
-                            content=f"Decision '{decision.action}' recorded.",
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
+                    handler = THINK_TOOL_HANDLERS.get(tc.name)
+                    if handler is None:
+                        result_text, maybe_decision = f"Unknown tool: {tc.name}", None
+                    else:
+                        result_text, maybe_decision = await handler(tc.args, ctx)
+                    if maybe_decision is not None:
+                        decision = maybe_decision
                         decided = True
-
-                    elif tc.name == "search_memory":
-                        query = tc.args.get("query", "")
-                        logger.debug("[Think:%s] Tool call: search_memory(query=%s)", agent_name, query[:80])
-                        if self._mem0 is None:
-                            content = "(memory not enabled)"
-                        else:
-                            results = await self._mem0.search(query, agent_id=agent_name)
-                            if results:
-                                content = "\n".join(
-                                    r.get("memory", str(r)) for r in results
-                                )
-                            else:
-                                content = "(no results)"
-                        messages.append(Message(
-                            role="tool",
-                            content=content,
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
-
-                    elif tc.name == "break_down_goal":
-                        goal_id = tc.args["goal_id"]
-                        raw_subs = tc.args.get("sub_goals", [])
-                        logger.debug("[Think:%s] Tool call: break_down_goal(goal_id=%s, sub_goals=%d)",
-                                     agent_name, goal_id, len(raw_subs))
-                        sub_goals = [
-                            SubGoal(
-                                description=s["description"],
-                                acceptance_criteria=s.get("acceptance_criteria", ""),
-                            )
-                            for s in raw_subs
-                        ]
-                        gb = GoalBreakdown(goal_id=goal_id, sub_goals=sub_goals)
-                        state.goals_breakdown[goal_id] = gb
-                        await self._state_store.save(self._agent_uuid, state)
-                        messages.append(Message(
-                            role="tool",
-                            content=f"Goal '{goal_id}' broken into {len(sub_goals)} sub-goals.",
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
-
-                    elif tc.name == "update_goal_progress":
-                        goal_id = tc.args["goal_id"]
-                        idx = tc.args["sub_goal_index"]
-                        status = tc.args["status"]
-                        note = tc.args.get("progress_note", "")
-                        logger.debug("[Think:%s] Tool call: update_goal_progress(goal_id=%s, idx=%d, status=%s)",
-                                     agent_name, goal_id, idx, status)
-                        if goal_id not in state.goals_breakdown:
-                            result_text = f"Error: no breakdown for goal '{goal_id}'"
-                        else:
-                            gb = state.goals_breakdown[goal_id]
-                            if idx < 0 or idx >= len(gb.sub_goals):
-                                result_text = f"Error: sub_goal_index {idx} out of range (0-{len(gb.sub_goals) - 1})"
-                            else:
-                                gb.sub_goals[idx].status = status
-                                if note:
-                                    gb.sub_goals[idx].progress_note = note
-                                await self._state_store.save(self._agent_uuid, state)
-                                result_text = f"Sub-goal {idx} of '{goal_id}' updated to '{status}'. Completion: {gb.completion_ratio:.0%}"
-                        messages.append(Message(
-                            role="tool",
-                            content=result_text,
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
-
-                    elif tc.name == "record_learning_insight":
-                        args = tc.args
-                        logger.debug("[Think:%s] Tool call: record_learning_insight(category=%s)",
-                                     agent_name, args.get("category"))
-                        if self._mem0 is None:
-                            result_text = "(memory not enabled, insight not persisted)"
-                        else:
-                            content = f"[{args['category']}] {args['insight']} (evidence: {args['evidence']})"
-                            if args.get("action"):
-                                content += f" -> action: {args['action']}"
-                            await self._mem0.add(
-                                [{"role": "assistant", "content": content}],
-                                agent_id=agent_name,
-                            )
-                            result_text = "Insight recorded."
-                        messages.append(Message(
-                            role="tool",
-                            content=result_text,
-                            tool_call_id=tc.id,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        ))
+                    messages.append(Message(
+                        role="tool",
+                        content=result_text,
+                        tool_call_id=tc.id,
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
 
                 if decided:
                     break
@@ -423,7 +465,7 @@ class ThinkEngine:
                 summary = f"Decision: execute\nTask: {decision.task_prompt}\nReason: {decision.reasoning}"
             else:
                 summary = f"Decision: {decision.action}\nReason: {decision.reasoning}"
-            data["messages"].append({"role": "assistant", "content": summary})
+            data["messages"].append(Message(role="assistant", content=summary, created_at=datetime.now(timezone.utc).isoformat()))
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
