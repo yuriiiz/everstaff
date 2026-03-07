@@ -8,10 +8,32 @@ from everstaff.daemon.agent_daemon import AgentDaemon
 from everstaff.daemon.event_bus import EventBus
 from everstaff.daemon.sensor_manager import SensorManager
 from everstaff.daemon.loop_manager import LoopManager
-from everstaff.nulls import InMemoryStore, NullTracer
+from everstaff.daemon.state_store import DaemonStateStore
+from everstaff.nulls import NullTracer
 
 
-def _write_agent_yaml(agents_dir: Path, name: str, enabled: bool = True, level: str = "supervised"):
+class InMemoryFileStore:
+    def __init__(self):
+        self._data: dict[str, bytes] = {}
+    async def read(self, path: str) -> bytes:
+        if path not in self._data:
+            raise FileNotFoundError(path)
+        return self._data[path]
+    async def write(self, path: str, data: bytes) -> None:
+        self._data[path] = data
+    async def exists(self, path: str) -> bool:
+        return path in self._data
+    async def delete(self, path: str) -> None:
+        self._data.pop(path, None)
+    async def list(self, prefix: str) -> list[str]:
+        return [k for k in self._data if k.startswith(prefix)]
+
+
+def _make_state_store():
+    return DaemonStateStore(InMemoryFileStore())
+
+
+def _write_agent_yaml(agents_dir: Path, name: str, enabled: bool = True):
     """Helper to write a minimal autonomous agent YAML."""
     yaml_content = f"""
 uuid: "{name}-uuid"
@@ -20,7 +42,6 @@ description: "Test agent {name}"
 instructions: "You are {name}."
 autonomy:
   enabled: {str(enabled).lower()}
-  level: {level}
   triggers:
     - id: tick
       type: interval
@@ -39,7 +60,7 @@ async def test_start_discovers_autonomous_agents(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,  # Not needed for this test
         runtime_factory=lambda **kw: None,
@@ -61,7 +82,7 @@ async def test_ignores_non_autonomous_agents(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -82,7 +103,7 @@ async def test_hot_reload_starts_new_agent(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -110,7 +131,7 @@ async def test_hot_reload_stops_removed_agent(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -136,7 +157,7 @@ async def test_hot_reload_autonomy_disabled(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -158,15 +179,16 @@ async def test_daemon_passes_channel_registry_to_loop(tmp_path):
     """AgentDaemon passes channel_registry + triggers + agent_hitl_channels to AgentLoop."""
     import yaml
     from everstaff.daemon.agent_daemon import AgentDaemon
-    from everstaff.nulls import InMemoryStore, NullTracer
+    from everstaff.nulls import NullTracer
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     (agents_dir / "myagent.yaml").write_text(yaml.dump({
         "agent_name": "myagent",
+        "uuid": "myagent-uuid",
         "autonomy": {
             "enabled": True,
-            "level": "autonomous",
+
             "triggers": [{"id": "t1", "type": "interval", "every": 9999, "task": "do it"}],
         },
     }))
@@ -193,7 +215,7 @@ async def test_daemon_passes_channel_registry_to_loop(tmp_path):
     try:
         daemon = AgentDaemon(
             agents_dir=str(agents_dir),
-            memory=InMemoryStore(),
+            daemon_state_store=_make_state_store(),
             tracer=NullTracer(),
             llm_factory=lambda **kw: None,
             runtime_factory=lambda **kw: None,
@@ -219,7 +241,7 @@ def _write_agent_yaml_with_triggers(agents_dir: Path, name: str, triggers: list[
         "uuid": f"{name}-uuid",
         "autonomy": {
             "enabled": True,
-            "level": "autonomous",
+
             "triggers": triggers,
         },
     }))
@@ -237,7 +259,7 @@ async def test_webhook_triggers_create_webhook_sensor(tmp_path):
     fake_app = object()  # stand-in for FastAPI app
     daemon = AgentDaemon(
         agents_dir=str(agents_dir),
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -264,7 +286,7 @@ async def test_webhook_triggers_skipped_without_app(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=str(agents_dir),
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,
@@ -300,7 +322,7 @@ async def test_internal_triggers_create_internal_sensor(tmp_path):
     try:
         daemon = AgentDaemon(
             agents_dir=str(agents_dir),
-            memory=InMemoryStore(),
+            daemon_state_store=_make_state_store(),
             tracer=NullTracer(),
             llm_factory=lambda **kw: None,
             runtime_factory=lambda **kw: None,
@@ -334,7 +356,7 @@ async def test_file_watch_triggers_create_file_watch_sensor(tmp_path):
 
     daemon = AgentDaemon(
         agents_dir=str(agents_dir),
-        memory=InMemoryStore(),
+        daemon_state_store=_make_state_store(),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,

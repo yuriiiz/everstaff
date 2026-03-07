@@ -8,14 +8,27 @@ import pytest
 async def test_daemon_starts_and_stops(tmp_path):
     """AgentDaemon can be created, started, and stopped with minimal config."""
     from everstaff.daemon.agent_daemon import AgentDaemon
-    from everstaff.nulls import InMemoryStore, NullTracer
+    from everstaff.daemon.state_store import DaemonStateStore
+    from everstaff.nulls import NullTracer
+
+    class _InMemFS:
+        def __init__(self):
+            self._data: dict[str, bytes] = {}
+        async def read(self, path):
+            if path not in self._data:
+                raise FileNotFoundError(path)
+            return self._data[path]
+        async def write(self, path, data): self._data[path] = data
+        async def exists(self, path): return path in self._data
+        async def delete(self, path): self._data.pop(path, None)
+        async def list(self, prefix): return [k for k in self._data if k.startswith(prefix)]
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=InMemoryStore(),
+        daemon_state_store=DaemonStateStore(_InMemFS()),
         tracer=NullTracer(),
         llm_factory=lambda **kw: None,
         runtime_factory=lambda **kw: None,

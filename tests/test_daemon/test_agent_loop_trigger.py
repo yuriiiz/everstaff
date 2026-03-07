@@ -24,17 +24,17 @@ async def test_agent_loop_passes_trigger_to_factory():
 
     bus = EventBus()
 
-    mock_memory = MagicMock()
-    mock_memory.working_load = AsyncMock(return_value=MagicMock(recent_decisions=[]))
-    mock_memory.working_save = AsyncMock()
-    mock_memory.episode_append = AsyncMock()
+    mock_state_store = MagicMock()
+    mock_state_store.load = AsyncMock(return_value=MagicMock(recent_decisions=[]))
+    mock_state_store.save = AsyncMock()
 
     loop = AgentLoop(
         agent_name="test-agent",
         event_bus=bus,
         think_engine=mock_think,
         runtime_factory=mock_factory,
-        memory=mock_memory,
+        daemon_state_store=mock_state_store,
+        agent_uuid="test-agent-uuid",
         tracer=MagicMock(on_event=MagicMock()),
     )
 

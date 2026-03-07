@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from everstaff.protocols import MemoryStore, TracingBackend
+    from everstaff.protocols import TracingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,8 @@ class AgentDaemon:
     ----------
     agents_dir:
         Filesystem directory containing agent YAML definitions.
-    memory:
-        Object satisfying the ``MemoryStore`` protocol.
+    daemon_state_store:
+        ``DaemonStateStore`` instance for persisting daemon state.
     tracer:
         Object satisfying the ``TracingBackend`` protocol.
     llm_factory:
@@ -50,10 +50,11 @@ class AgentDaemon:
     def __init__(
         self,
         agents_dir: str | Path,
-        memory: "MemoryStore",
+        daemon_state_store: Any,
         tracer: "TracingBackend",
         llm_factory: Callable[..., Any],
         runtime_factory: Callable[..., Any],
+        mem0_client: Any = None,
         channel_manager: Any = None,
         channel_registry: dict[str, Any] | None = None,
         sessions_dir: str | Path | None = None,
@@ -61,7 +62,8 @@ class AgentDaemon:
         app: Any = None,
     ) -> None:
         self._agents_dir = Path(agents_dir)
-        self._memory = memory
+        self._state_store = daemon_state_store
+        self._mem0 = mem0_client
         self._tracer = tracer
         self._llm_factory = llm_factory
         self._runtime_factory = runtime_factory
@@ -139,8 +141,8 @@ class AgentDaemon:
                     spec = AgentSpec(agent_name=agent_name, **yaml_data)
                     if spec.autonomy.enabled:
                         result[spec.agent_name] = spec
-                        logger.debug("Discovered autonomous agent: %s (level=%s, triggers=%d)",
-                                     spec.agent_name, spec.autonomy.level, len(spec.autonomy.triggers))
+                        logger.debug("Discovered autonomous agent: %s (triggers=%d)",
+                                     spec.agent_name, len(spec.autonomy.triggers))
                 except Exception as exc:
                     logger.warning("Failed to load agent '%s': %s", yaml_file.name, exc)
 
@@ -158,8 +160,8 @@ class AgentDaemon:
         from everstaff.daemon.sensors.scheduler import SchedulerSensor
         from everstaff.daemon.agent_loop import AgentLoop
 
-        logger.info("Starting agent '%s' — level=%s, think_model=%s, act_model=%s",
-                     name, spec.autonomy.level, spec.autonomy.think_model, spec.autonomy.act_model)
+        logger.info("Starting agent '%s' — think_model=%s, act_model=%s",
+                     name, spec.autonomy.think_model, spec.autonomy.act_model)
 
         # Subscribe to EventBus
         self._event_bus.subscribe(name)
@@ -204,8 +206,10 @@ class AgentDaemon:
         think_llm = self._llm_factory(model_kind=spec.autonomy.think_model)
         think_engine = ThinkEngine(
             llm_client=think_llm,
-            memory=self._memory,
             tracer=self._tracer,
+            daemon_state_store=self._state_store,
+            agent_uuid=spec.uuid,
+            mem0_client=self._mem0,
             sessions_dir=self._sessions_dir,
             session_index=self._session_index,
         )
@@ -222,9 +226,10 @@ class AgentDaemon:
             event_bus=self._event_bus,
             think_engine=think_engine,
             runtime_factory=agent_runtime_factory,
-            memory=self._memory,
+            daemon_state_store=self._state_store,
+            agent_uuid=spec.uuid,
             tracer=self._tracer,
-            autonomy_level=spec.autonomy.level,
+            mem0_client=self._mem0,
             goals=spec.autonomy.goals,
             tick_interval=spec.autonomy.tick_interval,
             channel_manager=self._channel_manager,
@@ -259,7 +264,7 @@ class AgentDaemon:
         for name, spec in agents.items():
             try:
                 await self._start_agent(name, spec)
-                logger.info("✓ Agent '%s' started (level=%s)", name, spec.autonomy.level)
+                logger.info("Agent '%s' started", name)
             except Exception as exc:
                 logger.error("✗ Failed to start agent '%s': %s", name, exc)
         logger.info("====== AgentDaemon ready — %d agent(s) running ======", len(agents))

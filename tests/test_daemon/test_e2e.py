@@ -11,8 +11,26 @@ import pytest
 from pathlib import Path
 
 from everstaff.daemon.agent_daemon import AgentDaemon
-from everstaff.nulls import InMemoryStore, NullTracer
+from everstaff.daemon.state_store import DaemonStateStore
+from everstaff.nulls import NullTracer
 from everstaff.protocols import LLMResponse, ToolCallRequest, Decision
+
+
+class InMemoryFileStore:
+    def __init__(self):
+        self._data: dict[str, bytes] = {}
+    async def read(self, path: str) -> bytes:
+        if path not in self._data:
+            raise FileNotFoundError(path)
+        return self._data[path]
+    async def write(self, path: str, data: bytes) -> None:
+        self._data[path] = data
+    async def exists(self, path: str) -> bool:
+        return path in self._data
+    async def delete(self, path: str) -> None:
+        self._data.pop(path, None)
+    async def list(self, prefix: str) -> list[str]:
+        return [k for k in self._data if k.startswith(prefix)]
 
 
 class MockLLM:
@@ -79,13 +97,13 @@ async def test_daemon_full_cycle(tmp_path):
     agents_dir.mkdir()
     _write_autonomous_agent_yaml(agents_dir, "monitor")
 
-    memory = InMemoryStore()
+    state_store = DaemonStateStore(InMemoryFileStore())
     tracer = NullTracer()
     mock_runtime = MockRuntime()
 
     daemon = AgentDaemon(
         agents_dir=agents_dir,
-        memory=memory,
+        daemon_state_store=state_store,
         tracer=tracer,
         llm_factory=lambda **kw: MockLLM(),
         runtime_factory=lambda **kw: mock_runtime,
@@ -98,20 +116,14 @@ async def test_daemon_full_cycle(tmp_path):
     # Wait for at least one cycle to complete (sensor fires every 1s, plus processing time)
     for _ in range(30):
         await asyncio.sleep(0.5)
-        episodes = await memory.episode_query("monitor")
-        if len(episodes) > 0:
+        state = await state_store.load("monitor-uuid-001")
+        if len(state.recent_decisions) > 0:
             break
 
-    # Verify memory was updated
-    episodes = await memory.episode_query("monitor")
-    assert len(episodes) >= 1, f"Expected at least 1 episode, got {len(episodes)}"
-    assert episodes[0].action == "check system status"
-    assert "healthy" in episodes[0].result.lower() or "running" in episodes[0].result.lower()
-
-    # Verify working memory has recent decisions
-    ws = await memory.working_load("monitor")
-    assert len(ws.recent_decisions) >= 1
-    assert ws.recent_decisions[-1]["action"] == "execute"
+    # Verify state was updated with recent decisions
+    state = await state_store.load("monitor-uuid-001")
+    assert len(state.recent_decisions) >= 1, f"Expected at least 1 decision, got {len(state.recent_decisions)}"
+    assert state.recent_decisions[-1]["action"] == "execute"
 
     # Verify runtime was called
     assert mock_runtime.called
