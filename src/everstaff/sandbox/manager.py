@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from everstaff.core.secret_store import SecretStore
+    from everstaff.protocols import FileStore, MemoryStore
     from everstaff.sandbox.executor import SandboxExecutor
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,17 @@ class ExecutorManager:
     def __init__(
         self,
         factory: Callable[[], "SandboxExecutor"],
-        secret_store: "SecretStore",
+        secret_store: "SecretStore | None" = None,
+        memory_store: "MemoryStore | None" = None,
+        file_store: "FileStore | None" = None,
+        config_data: dict[str, Any] | None = None,
         idle_timeout: float | None = None,
     ) -> None:
         self._factory = factory
         self._secret_store = secret_store
+        self._memory_store = memory_store
+        self._file_store = file_store
+        self._config_data = config_data or {}
         self._executors: dict[str, "SandboxExecutor"] = {}
         self._idle_timeout = idle_timeout
         self._last_activity: dict[str, float] = {}
@@ -37,6 +44,14 @@ class ExecutorManager:
             del self._executors[session_id]
 
         executor = self._factory()
+        # Inject IPC dependencies from mixin
+        if hasattr(executor, 'configure_ipc'):
+            executor.configure_ipc(
+                secret_store=self._secret_store,
+                memory_store=self._memory_store,
+                file_store=self._file_store,
+                config_data=self._config_data,
+            )
         await executor.start(session_id)
         self._executors[session_id] = executor
         logger.info("Created sandbox executor for session %s", session_id)

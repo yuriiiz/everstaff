@@ -14,6 +14,7 @@ class ProxyMemoryStore:
 
     def __init__(self, channel: "IpcChannel") -> None:
         self._channel = channel
+        self._path_overrides: dict[str, str] = {}
 
     async def load(self, session_id: str) -> list[Message]:
         result = await self._channel.send_request("memory.load", {
@@ -32,6 +33,10 @@ class ProxyMemoryStore:
             for m in result.get("messages", [])
         ]
 
+    def set_session_path(self, session_id: str, relpath: str) -> None:
+        """Store path override locally. The IPC server handler derives it from root_session_id."""
+        self._path_overrides[session_id] = relpath
+
     async def save(
         self,
         session_id: str,
@@ -40,6 +45,7 @@ class ProxyMemoryStore:
         agent_name: str | None = None,
         agent_uuid: str | None = None,
         parent_session_id: str | None = None,
+        root_session_id: str | None = None,
         stats: Any | None = None,
         status: str | None = None,
         system_prompt: str | None = None,
@@ -57,6 +63,7 @@ class ProxyMemoryStore:
         for key, val in [
             ("agent_name", agent_name), ("agent_uuid", agent_uuid),
             ("parent_session_id", parent_session_id),
+            ("root_session_id", root_session_id),
             ("status", status), ("system_prompt", system_prompt),
             ("title", title), ("max_tokens", max_tokens),
             ("initiated_by", initiated_by),
@@ -74,10 +81,16 @@ class ProxyMemoryStore:
         await self._channel.send_request("memory.save", params)
 
     async def load_stats(self, session_id: str) -> Any:
+        from everstaff.schema.token_stats import SessionStats
         result = await self._channel.send_request("memory.load_stats", {
             "session_id": session_id,
         })
-        return result.get("stats")
+        raw = result.get("stats")
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return SessionStats(**raw)
+        return raw
 
     async def save_workflow(self, session_id: str, record: Any) -> None:
         await self._channel.send_request("memory.save_workflow", {

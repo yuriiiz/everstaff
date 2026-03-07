@@ -122,6 +122,12 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
         yield
 
+        # Shutdown: destroy all sandbox executors
+        executor_mgr = getattr(app.state, "executor_manager", None)
+        if executor_mgr is not None:
+            await executor_mgr.destroy_all()
+            _logger.info("All sandbox executors destroyed")
+
         # Shutdown: stop daemon if running
         daemon = getattr(app.state, "daemon", None)
         if daemon is not None:
@@ -160,6 +166,31 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     if not _session_index._path.exists() and _sessions_resolved.exists():
         _session_index.rebuild()
     app.state.session_index = _session_index
+
+    # Build and attach ExecutorManager if sandbox is enabled
+    if config.sandbox.enabled:
+        from everstaff.sandbox.manager import ExecutorManager
+        from everstaff.sandbox.process_sandbox import ProcessSandbox
+        from everstaff.core.secret_store import SecretStore
+        from everstaff.core.factories import build_memory_store as _build_memory_store
+
+        _secret_store = SecretStore.from_environ()
+        _sandbox_memory = _build_memory_store(config.storage, _sessions_path, config.memory_dir)
+        _sandbox_memory._index = _session_index
+        _sessions_resolved = Path(_sessions_path).expanduser().resolve()
+
+        def _sandbox_factory():
+            return ProcessSandbox(sessions_dir=_sessions_resolved)
+
+        _executor_manager = ExecutorManager(
+            factory=_sandbox_factory,
+            secret_store=_secret_store,
+            memory_store=_sandbox_memory,
+            file_store=_file_store,
+            config_data=config.model_dump(),
+            idle_timeout=config.sandbox.idle_timeout,
+        )
+        app.state.executor_manager = _executor_manager
 
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry

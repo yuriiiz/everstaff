@@ -48,7 +48,7 @@ class SandboxEnvironment(RuntimeEnvironment):
         from everstaff.llm.litellm_client import LiteLLMClient
         return LiteLLMClient(model=model, **kwargs)
 
-    def working_dir(self, session_id: str) -> Path:
+    def working_dir(self, session_id: str, root_session_id: str | None = None) -> Path:
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
         return self._workspace_dir
 

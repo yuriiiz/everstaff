@@ -43,3 +43,14 @@ class SandboxExecutor(ABC):
         self, hitl_id: str, decision: str, comment: str = ""
     ) -> None:
         """Push HITL resolution to sandbox. Default: no-op for simple backends."""
+
+    async def spawn_agent(self, agent_spec_json: str, user_input: str | None = None) -> None:
+        """Spawn agent process inside the sandbox."""
+        raise NotImplementedError
+
+    async def wait_finished(self, timeout: float | None = None) -> int:
+        """Wait for agent process to exit. Returns exit code."""
+        return 0
+
+    async def on_file_change(self, session_id: str, changed_paths: list[str]) -> None:
+        """Notify sandbox of file changes. Default: no-op."""

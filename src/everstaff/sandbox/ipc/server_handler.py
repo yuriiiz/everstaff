@@ -26,6 +26,8 @@ class IpcServerHandler:
         token_store: "EphemeralTokenStore | None" = None,
         secret_store: "SecretStore | None" = None,
         on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
+        on_stream_event: Callable[[dict], Awaitable[None]] | None = None,
+        config_data: dict[str, Any] | None = None,
     ) -> None:
         self._memory = memory_store
         self._tracer = tracer
@@ -33,6 +35,8 @@ class IpcServerHandler:
         self._token_store = token_store
         self._secret_store = secret_store
         self._on_hitl_detected = on_hitl_detected
+        self._on_stream_event = on_stream_event
+        self._config_data = config_data or {}
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
         """Route a single IPC message to the appropriate handler."""
@@ -51,6 +55,8 @@ class IpcServerHandler:
                 return await self._handle_memory_load_workflows(params)
             elif method == "tracer.event":
                 return self._handle_tracer_event(params)
+            elif method == "stream.event":
+                return await self._handle_stream_event(params)
             elif method.startswith("file."):
                 return await self._handle_file_op(method, params)
             elif method.startswith("memory."):
@@ -66,7 +72,7 @@ class IpcServerHandler:
         session_id = self._token_store.validate_and_consume(token)
         if session_id is None:
             return {"error": "Invalid or expired token"}
-        return {"session_id": session_id, "secrets": self._secret_store.as_dict()}
+        return {"session_id": session_id, "secrets": self._secret_store.as_dict(), "config": self._config_data}
 
     async def _handle_memory_save(self, params: dict[str, Any]) -> dict[str, Any]:
         params = dict(params)  # don't mutate caller's dict
@@ -97,6 +103,14 @@ class IpcServerHandler:
         # Detect HITL request for channel broadcast
         status = params.get("status")
         hitl_requests = params.get("hitl_requests")
+
+        # Set path override for sub-sessions so they get saved under root
+        root_session_id = params.get("root_session_id")
+        if root_session_id and root_session_id != session_id:
+            if hasattr(self._memory, "set_session_path"):
+                from everstaff.session.index import SessionIndex
+                relpath = SessionIndex.session_relpath(session_id, root_session_id)
+                self._memory.set_session_path(session_id, relpath)
 
         await self._memory.save(session_id, messages, stats=stats, trigger=trigger, **params)
 
@@ -139,6 +153,11 @@ class IpcServerHandler:
             parent_span_id=params.get("parent_span_id"),
         )
         self._tracer.on_event(event)
+        return {}
+
+    async def _handle_stream_event(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._on_stream_event:
+            await self._on_stream_event(params)
         return {}
 
     async def _handle_file_op(self, method: str, params: dict[str, Any]) -> dict[str, Any]:

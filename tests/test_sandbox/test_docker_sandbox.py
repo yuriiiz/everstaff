@@ -8,6 +8,13 @@ from everstaff.sandbox.docker_sandbox import DockerSandbox, DockerSandboxConfig
 from everstaff.sandbox.models import SandboxCommand
 
 
+def _make_docker_sandbox(tmp_path, secret_store=None, config=None):
+    """Create a DockerSandbox with IPC deps configured."""
+    sandbox = DockerSandbox(sessions_dir=tmp_path, config=config)
+    sandbox.configure_ipc(secret_store=secret_store or SecretStore())
+    return sandbox
+
+
 class TestDockerSandboxConfig:
     def test_defaults(self):
         cfg = DockerSandboxConfig()
@@ -24,13 +31,26 @@ class TestDockerSandboxConfig:
 
 @pytest.mark.asyncio
 class TestDockerSandbox:
-    async def test_start_creates_container(self, tmp_path):
-        """start() should create a Docker container with correct mounts."""
-        store = SecretStore({"API_KEY": "secret"})
-        config = DockerSandboxConfig(image="test-image:latest")
-        sandbox = DockerSandbox(
-            workdir=tmp_path, secret_store=store, config=config
+    async def test_start_creates_ipc(self, tmp_path):
+        """start() should create IPC server and be alive."""
+        sandbox = _make_docker_sandbox(
+            tmp_path,
+            SecretStore({"API_KEY": "secret"}),
+            DockerSandboxConfig(image="test-image:latest"),
         )
+        await sandbox.start("test-session")
+        assert sandbox.is_alive
+        assert sandbox._ipc_socket_path is not None
+        await sandbox.stop()
+
+    async def test_spawn_creates_container(self, tmp_path):
+        """_spawn() should create a Docker container with correct mounts."""
+        sandbox = _make_docker_sandbox(
+            tmp_path,
+            SecretStore({"API_KEY": "secret"}),
+            DockerSandboxConfig(image="test-image:latest"),
+        )
+        await sandbox.start("test-session")
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0
@@ -38,24 +58,16 @@ class TestDockerSandbox:
 
         with patch("everstaff.sandbox.docker_sandbox.asyncio_create_subprocess_exec",
                     new_callable=AsyncMock, return_value=mock_proc):
-            await sandbox.start("test-session")
-            assert sandbox.is_alive
+            await sandbox.spawn_agent(agent_spec_json='{"agent_name":"test"}')
             assert sandbox._container_id == "container-id-123"
 
-            # Clean up without actually calling docker
-            sandbox._container_id = None
-            sandbox._alive = False
-            if sandbox._ipc_server:
-                sandbox._ipc_server.close()
-                await sandbox._ipc_server.wait_closed()
+        # Clean up
+        sandbox._container_id = None
+        await sandbox.stop()
 
     async def test_stop_removes_container(self, tmp_path):
         """stop() should remove the Docker container."""
-        store = SecretStore()
-        config = DockerSandboxConfig()
-        sandbox = DockerSandbox(
-            workdir=tmp_path, secret_store=store, config=config
-        )
+        sandbox = _make_docker_sandbox(tmp_path)
         sandbox._alive = True
         sandbox._container_id = "test-container"
         sandbox._session_id = "s1"
@@ -68,15 +80,13 @@ class TestDockerSandbox:
                     new_callable=AsyncMock, return_value=mock_proc) as mock_exec:
             await sandbox.stop()
             assert not sandbox.is_alive
-            # Should have called docker rm
             mock_exec.assert_awaited()
             call_args = mock_exec.call_args
             assert "rm" in call_args[0]
 
     async def test_push_cancel(self, tmp_path):
         """push_cancel() should send cancel to container via IPC."""
-        store = SecretStore()
-        sandbox = DockerSandbox(workdir=tmp_path, secret_store=store)
+        sandbox = _make_docker_sandbox(tmp_path)
         sandbox._alive = True
         sandbox._client_writer = MagicMock()
         sandbox._client_writer.write = MagicMock()

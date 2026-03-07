@@ -176,6 +176,7 @@ def make_router(config) -> APIRouter:
 
                     cm = getattr(app.state, "channel_manager", None)
                     mcp_pool = getattr(app.state, "mcp_pool", None)
+                    executor_mgr = getattr(app.state, "executor_manager", None)
                     asyncio.create_task(
                         _resume_session_task(
                             session_id, agent_name, content, app.state.config,
@@ -185,6 +186,7 @@ def make_router(config) -> APIRouter:
                             mcp_pool=mcp_pool,
                             root_session_id=_ws_root,
                             session_index=_index,
+                            executor_manager=executor_mgr,
                         )
                     )
 
