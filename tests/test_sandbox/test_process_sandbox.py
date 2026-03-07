@@ -1,7 +1,10 @@
 """Tests for ProcessSandbox backend."""
+import asyncio
 import os
+import sys
 import pytest
 from pathlib import Path
+from unittest.mock import patch, AsyncMock, MagicMock
 from everstaff.core.secret_store import SecretStore
 from everstaff.sandbox.process_sandbox import ProcessSandbox
 from everstaff.sandbox.models import SandboxCommand
@@ -118,3 +121,142 @@ class TestProcessSandbox:
             assert result.finished_at >= result.started_at
         finally:
             await sandbox.stop()
+
+
+@pytest.mark.asyncio
+class TestProcessSandboxSpawn:
+    async def test_spawn_subprocess(self, tmp_path):
+        """spawn_agent starts a subprocess with correct args."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore({"KEY": "val"}))
+        await sandbox.start("test-session")
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.pid = 12345
+            mock_proc.returncode = None
+            mock_exec.return_value = mock_proc
+
+            await sandbox.spawn_agent(
+                agent_spec_json='{"agent_name": "test"}',
+                user_input="hello",
+            )
+
+            mock_exec.assert_called_once()
+            args = mock_exec.call_args[0]
+            assert sys.executable == args[0]
+            assert "-m" in args
+            assert "everstaff.sandbox.entry" in args
+            assert "--socket-path" in args
+            assert "--session-id" in args
+            assert "--agent-spec" in args
+            assert "--user-input" in args
+
+        await sandbox.stop()
+
+    async def test_spawn_agent_not_started(self, tmp_path):
+        """spawn_agent raises if sandbox not started."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+        with pytest.raises(RuntimeError, match="not started"):
+            await sandbox.spawn_agent(agent_spec_json='{}')
+
+    async def test_spawn_agent_already_spawned(self, tmp_path):
+        """spawn_agent raises if already spawned."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+        await sandbox.start("test-session")
+        sandbox._process = MagicMock()  # simulate already spawned
+
+        with pytest.raises(RuntimeError, match="already spawned"):
+            await sandbox.spawn_agent(agent_spec_json='{}')
+
+        sandbox._process = None  # clean up for stop
+        await sandbox.stop()
+
+    async def test_wait_finished(self, tmp_path):
+        """wait_finished returns exit code."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+        await sandbox.start("test-session")
+
+        mock_proc = AsyncMock()
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+        sandbox._process = mock_proc
+
+        code = await sandbox.wait_finished()
+        assert code == 0
+
+        sandbox._process = None  # clean up
+        await sandbox.stop()
+
+    async def test_wait_finished_no_process(self, tmp_path):
+        """wait_finished returns -1 if no process."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+        code = await sandbox.wait_finished()
+        assert code == -1
+
+    async def test_stop_terminates_subprocess(self, tmp_path):
+        """stop() terminates running subprocess."""
+        sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+        await sandbox.start("test-session")
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = None
+        mock_proc.wait = AsyncMock(return_value=0)
+        sandbox._process = mock_proc
+
+        await sandbox.stop()
+
+        mock_proc.terminate.assert_called_once()
+        assert sandbox._process is None
+
+
+@pytest.mark.asyncio
+async def test_stream_event_callback_wired(tmp_path):
+    """ProcessSandbox forwards stream events to on_stream_event callback."""
+    events = []
+    async def on_stream(event_data):
+        events.append(event_data)
+
+    sandbox = ProcessSandbox(
+        workdir=tmp_path, secret_store=SecretStore(),
+        on_stream_event=on_stream,
+    )
+    await sandbox.start("test-session")
+
+    result = await sandbox._ipc_handler.handle("stream.event", {
+        "type": "text_delta", "content": "hello", "session_id": "test-session",
+    })
+    assert result == {}
+    assert len(events) == 1
+    assert events[0]["type"] == "text_delta"
+    await sandbox.stop()
+
+
+@pytest.mark.asyncio
+async def test_workspace_dir_set_on_start(tmp_path):
+    """start() creates workspace at sessions_dir/session_id/workspaces."""
+    sandbox = ProcessSandbox(workdir=tmp_path, secret_store=SecretStore())
+    await sandbox.start("sess-123")
+
+    expected = tmp_path / "sess-123" / "workspaces"
+    assert sandbox._workdir == expected
+    assert expected.exists()
+    await sandbox.stop()
+
+
+@pytest.mark.asyncio
+async def test_ipc_handler_has_memory_tracer_filestore(tmp_path):
+    """ProcessSandbox IPC handler receives memory, tracer, file_store."""
+    memory = AsyncMock()
+    tracer = MagicMock()
+    file_store = AsyncMock()
+
+    sandbox = ProcessSandbox(
+        workdir=tmp_path, secret_store=SecretStore(),
+        memory_store=memory, tracer=tracer, file_store=file_store,
+    )
+    await sandbox.start("test-session")
+
+    assert sandbox._ipc_handler._memory is memory
+    assert sandbox._ipc_handler._tracer is tracer
+    assert sandbox._ipc_handler._file_store is file_store
+    await sandbox.stop()

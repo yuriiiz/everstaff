@@ -5,10 +5,11 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from everstaff.sandbox.executor import SandboxExecutor
 from everstaff.sandbox.ipc.server_handler import IpcServerHandler
@@ -18,6 +19,7 @@ from everstaff.sandbox.models import SandboxCommand, SandboxResult, SandboxStatu
 
 if TYPE_CHECKING:
     from everstaff.core.secret_store import SecretStore
+    from everstaff.protocols import FileStore, MemoryStore, TracingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,24 @@ class ProcessSandbox(SandboxExecutor):
     4. stop() -> closes IPC server, terminates process, cleans up socket
     """
 
-    def __init__(self, workdir: Path, secret_store: "SecretStore") -> None:
-        self._workdir = workdir
+    def __init__(
+        self,
+        workdir: Path,
+        secret_store: "SecretStore",
+        memory_store: "MemoryStore | None" = None,
+        tracer: "TracingBackend | None" = None,
+        file_store: "FileStore | None" = None,
+        on_stream_event: Callable[..., Awaitable[None]] | None = None,
+        on_hitl_detected: Callable[..., Awaitable[None]] | None = None,
+    ) -> None:
+        self._sessions_dir = workdir  # base sessions directory
+        self._workdir = workdir       # will be updated in start()
         self._secret_store = secret_store
+        self._memory_store = memory_store
+        self._tracer = tracer
+        self._file_store = file_store
+        self._on_stream_event = on_stream_event
+        self._on_hitl_detected = on_hitl_detected
         self._session_id: str = ""
         self._alive: bool = False
         self._started_at: float = 0.0
@@ -61,11 +78,13 @@ class ProcessSandbox(SandboxExecutor):
         self._ephemeral_token: str | None = None
         self._token_store: EphemeralTokenStore | None = None
         self._client_writer: asyncio.StreamWriter | None = None
+        self._process: asyncio.subprocess.Process | None = None
 
     # -- SandboxExecutor interface --
 
     async def start(self, session_id: str) -> None:
         self._session_id = session_id
+        self._workdir = self._sessions_dir / session_id / "workspaces"
         self._workdir.mkdir(parents=True, exist_ok=True)
 
         # Create IPC socket in temp directory
@@ -78,8 +97,13 @@ class ProcessSandbox(SandboxExecutor):
 
         # Start IPC server
         self._ipc_handler = IpcServerHandler(
+            memory_store=self._memory_store,
+            tracer=self._tracer,
+            file_store=self._file_store,
             token_store=self._token_store,
             secret_store=self._secret_store,
+            on_stream_event=self._on_stream_event,
+            on_hitl_detected=self._on_hitl_detected,
         )
         self._ipc_server = await asyncio.start_unix_server(
             self._handle_connection,
@@ -120,6 +144,52 @@ class ProcessSandbox(SandboxExecutor):
             self._client_writer = None
             writer.close()
 
+    async def spawn_agent(
+        self,
+        agent_spec_json: str,
+        user_input: str | None = None,
+    ) -> None:
+        """Spawn the sandbox subprocess running the agent."""
+        if not self._alive:
+            raise RuntimeError("Sandbox not started")
+        if self._process is not None:
+            raise RuntimeError("Agent already spawned")
+
+        cmd = [
+            sys.executable, "-m", "everstaff.sandbox.entry",
+            "--socket-path", self._ipc_socket_path,
+            "--token", self._ephemeral_token,
+            "--session-id", self._session_id,
+            "--agent-spec", agent_spec_json,
+            "--workspace-dir", str(self._workdir),
+        ]
+        if user_input is not None:
+            cmd.extend(["--user-input", user_input])
+
+        self._process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=self._subprocess_env,
+            cwd=self._workdir,
+        )
+        logger.info(
+            "Spawned sandbox subprocess pid=%s for session %s",
+            self._process.pid, self._session_id,
+        )
+
+    async def wait_finished(self, timeout: float | None = None) -> int:
+        """Wait for the sandbox subprocess to exit. Returns exit code."""
+        if self._process is None:
+            return -1
+        try:
+            if timeout:
+                await asyncio.wait_for(self._process.wait(), timeout)
+            else:
+                await self._process.wait()
+        except asyncio.TimeoutError:
+            self._process.terminate()
+            await self._process.wait()
+        return self._process.returncode or 0
+
     async def execute(self, command: SandboxCommand) -> SandboxResult:
         if not self._alive:
             return SandboxResult(success=False, error="Sandbox not running")
@@ -128,6 +198,19 @@ class ProcessSandbox(SandboxExecutor):
         return SandboxResult(success=False, error=f"Unknown command type: {command.type}")
 
     async def stop(self) -> None:
+        # Terminate subprocess if running
+        if self._process is not None:
+            try:
+                if self._process.returncode is None:
+                    self._process.terminate()
+                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
+
         # Close IPC server
         if self._ipc_server is not None:
             self._ipc_server.close()

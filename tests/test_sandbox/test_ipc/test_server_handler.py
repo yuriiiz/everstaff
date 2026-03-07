@@ -92,3 +92,24 @@ class TestIpcServerHandler:
         handler, _, _, _, _ = _make_handler()
         result = await handler.handle("unknown.method", {})
         assert "error" in result
+
+    async def test_stream_event_callback(self):
+        """stream.event routes to on_stream_event callback."""
+        events = []
+
+        async def on_stream(event_data):
+            events.append(event_data)
+
+        handler = IpcServerHandler(on_stream_event=on_stream)
+        result = await handler.handle("stream.event", {
+            "type": "text_delta", "content": "hello", "session_id": "s1",
+        })
+        assert result == {}
+        assert len(events) == 1
+        assert events[0]["type"] == "text_delta"
+
+    async def test_stream_event_no_callback(self):
+        """stream.event without callback does not crash."""
+        handler = IpcServerHandler()
+        result = await handler.handle("stream.event", {"type": "text_delta", "content": "hi"})
+        assert result == {}

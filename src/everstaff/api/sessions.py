@@ -55,6 +55,7 @@ async def _resume_session_task(
     mcp_pool=None,  # McpConnectionPool for cross-session connection reuse
     root_session_id: str | None = None,  # root of session tree; None for root sessions
     session_index=None,  # shared SessionIndex for index updates
+    executor_manager=None,  # sandbox ExecutorManager
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -187,6 +188,29 @@ async def _resume_session_task(
             created_at=_now,
             updated_at=_now,
         ))
+
+    # --- Sandbox path ---
+    if config.sandbox.enabled and executor_manager is not None:
+        # Build a session-specific tracer for the IPC handler so trace
+        # events forwarded from the sandbox subprocess are persisted.
+        from everstaff.core.factories import build_file_store as _build_fs, build_tracer as _build_tr
+        _sb_file_store = _build_fs(config.storage, str(sessions_dir))
+        _sb_tracer = _build_tr(config.tracers, session_id, _sb_file_store)
+
+        await _run_in_sandbox(
+            executor_manager=executor_manager,
+            session_id=session_id,
+            agent_spec_json=spec.model_dump_json(),
+            user_input=decision_text or None,
+            broadcast_fn=broadcast_fn,
+            sessions_dir=sessions_dir,
+            root_session_id=root_session_id,
+            session_index=session_index,
+            agent_name=agent_name,
+            agent_uuid=agent_uuid,
+            tracer=_sb_tracer,
+        )
+        return
 
     ctx = None
     try:
@@ -362,6 +386,65 @@ async def _resume_session_task(
             await ctx.aclose()
 
 
+async def _run_in_sandbox(
+    executor_manager,
+    session_id: str,
+    agent_spec_json: str,
+    user_input: str | None,
+    broadcast_fn,
+    sessions_dir: Path,
+    root_session_id: str | None,
+    session_index,
+    agent_name: str,
+    agent_uuid: str,
+    tracer=None,
+) -> None:
+    """Run agent in sandbox subprocess via ExecutorManager."""
+    _sid = session_id[:8]
+
+    # Wire stream event forwarding
+    async def _on_stream_event(event_data: dict) -> None:
+        if broadcast_fn is not None:
+            try:
+                await broadcast_fn(event_data)
+            except Exception as exc:
+                logger.debug("[sandbox] broadcast failed session=%s err=%s", _sid, exc)
+
+    executor = await executor_manager.get_or_create(session_id)
+
+    # Set stream callback and tracer on the executor's IPC handler
+    if hasattr(executor, '_ipc_handler') and executor._ipc_handler:
+        executor._ipc_handler._on_stream_event = _on_stream_event
+        if tracer is not None:
+            executor._ipc_handler._tracer = tracer
+
+    try:
+        await executor.spawn_agent(
+            agent_spec_json=agent_spec_json,
+            user_input=user_input,
+        )
+        exit_code = await executor.wait_finished()
+        if exit_code != 0:
+            logger.warning("[sandbox] subprocess exited with code %d session=%s", exit_code, _sid)
+        logger.info("[sandbox] end session=%s", _sid)
+    except Exception as e:
+        logger.error("[sandbox] error session=%s err=%s", _sid, e)
+        try:
+            meta_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
+            if meta_path.exists():
+                data = json.loads(meta_path.read_text())
+            else:
+                data = {"session_id": session_id, "agent_name": agent_name}
+            data["status"] = "failed"
+            data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            data["error"] = f"{type(e).__name__}: {e}"
+            meta_path.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+    finally:
+        await executor_manager.destroy(session_id)
+
+
 def _extract_broadcast_fn(channel_manager):
     """Extract _broadcast callable from the registered WebSocketChannel, if any."""
     from everstaff.channels.websocket import WebSocketChannel
@@ -517,6 +600,7 @@ def make_router(config) -> APIRouter:
         cm = getattr(request.app.state, "channel_manager", None)
         broadcast_fn = _extract_broadcast_fn(cm) if cm is not None else None
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
+        executor_mgr = getattr(request.app.state, "executor_manager", None)
         background_tasks.add_task(
             _resume_session_task, session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
@@ -524,6 +608,7 @@ def make_router(config) -> APIRouter:
             agent_uuid=agent_uuid,
             mcp_pool=mcp_pool,
             session_index=index,
+            executor_manager=executor_mgr,
         )
         return {"session_id": session_id, "status": "running"}
 
@@ -748,6 +833,17 @@ def make_router(config) -> APIRouter:
                 await store.write(session_relpath, json.dumps(session_data, ensure_ascii=False).encode())
         except Exception:
             pass  # cancel.signal is the primary mechanism; this is best-effort
+
+        # Push cancel to sandbox executor if active
+        executor_mgr = getattr(request.app.state, "executor_manager", None)
+        if executor_mgr and executor_mgr.has_active(session_id):
+            executor = executor_mgr._executors.get(session_id)
+            if executor:
+                try:
+                    await executor.push_cancel()
+                except Exception as e:
+                    logger.debug("[session] sandbox cancel push failed: %s", e)
+
         return {"status": "cancelled", "force": force, "session_id": session_id}
 
     @router.post("/sessions/{session_id}/resume", status_code=202)
@@ -790,6 +886,7 @@ def make_router(config) -> APIRouter:
         agent_uuid = session_raw.get("agent_uuid", "")
         cm = getattr(request.app.state, "channel_manager", None)
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
+        executor_mgr = getattr(request.app.state, "executor_manager", None)
 
         # For cancelled/failed/interrupted: resume with optional user input
         if current_status in ("cancelled", "failed", "interrupted"):
@@ -802,6 +899,7 @@ def make_router(config) -> APIRouter:
                 agent_uuid=agent_uuid,
                 mcp_pool=mcp_pool,
                 session_index=_idx,
+                executor_manager=executor_mgr,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -822,6 +920,7 @@ def make_router(config) -> APIRouter:
             agent_uuid=agent_uuid,
             mcp_pool=mcp_pool,
             session_index=_idx,
+            executor_manager=executor_mgr,
         )
         return {"status": "resuming", "session_id": session_id}
 
