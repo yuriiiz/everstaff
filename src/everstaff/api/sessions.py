@@ -124,7 +124,7 @@ async def _resume_session_task(
                             pass
 
     if not agent_path:
-        logger.error("Resume: agent spec not found for %s (uuid=%s)", agent_name, agent_uuid)
+        logger.error("agent spec not found agent=%s uuid=%s", agent_name, agent_uuid)
         return
 
     from everstaff.utils.yaml_loader import load_yaml
@@ -147,11 +147,11 @@ async def _resume_session_task(
     try:
         if _cancel_file.exists():
             _cancel_file.unlink()
-            logger.debug("[session] cleared leftover cancel.signal  session=%s", _sid)
+            logger.debug("cleared leftover cancel.signal session=%s", _sid)
     except Exception:
         pass
 
-    logger.info("[session] start  agent=%s  session=%s", agent_name, _sid)
+    logger.info("start agent=%s session=%s", agent_name, _sid)
 
     # Ensure session.json exists and status is "running" BEFORE build(),
     # so the session is always visible in the UI — even if build() crashes.
@@ -254,8 +254,7 @@ async def _resume_session_task(
                     # dangling tool calls, silently auto-rejecting the HITL.
                     if pending_hitls and not resolved_hitls:
                         logger.warning(
-                            "[session] aborting resume for session %s: "
-                            "%d pending HITL(s) with no resolved ones to process",
+                            "aborting resume session=%s pending_hitls=%d resolved_hitls=0",
                             _sid, len(pending_hitls),
                         )
                         return
@@ -315,7 +314,7 @@ async def _resume_session_task(
                                         result = await ctx.tool_pipeline.execute(tcc)
                                         messages.append(Message(role="tool", content=result.content, tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
                                     except Exception as exec_err:
-                                        logger.warning("[session] tool execution failed after HITL approval: %s", exec_err)
+                                        logger.warning("tool execution failed after HITL approval err=%s", exec_err)
                                         messages.append(Message(role="tool", content=f"Tool execution failed: {exec_err}", tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
 
                                     # Remove temporary grant for "once" scope
@@ -337,7 +336,7 @@ async def _resume_session_task(
                                                 agent_path=agent_path,
                                             )
                                         except Exception as wr_err:
-                                            logger.warning("Failed to write permanent grant for %s: %s", perm_pattern, wr_err)
+                                            logger.warning("failed to write permanent grant pattern=%s err=%s", perm_pattern, wr_err)
                                 else:
                                     # Rejected — inject error tool result
                                     messages.append(Message(
@@ -358,7 +357,7 @@ async def _resume_session_task(
                             merged = list(dict.fromkeys(existing + extra_perms))
                             await mem.save(session_id, messages, extra_permissions=merged)
                 except Exception as read_err:
-                    logger.warning("[session] failed to read session.json for HITL resume  session=%s  err=%s",
+                    logger.warning("failed to read session.json for HITL resume session=%s err=%s",
                                    _sid, read_err)
         else:
             # Legacy path: no tool_call_id stored (old sessions), fall back to user message
@@ -369,14 +368,14 @@ async def _resume_session_task(
                 try:
                     await broadcast_fn({**event.model_dump(), "session_id": session_id})
                 except Exception as exc:
-                    logger.debug("[session] broadcast failed  session=%s  event=%s  err=%s",
+                    logger.debug("broadcast failed session=%s event=%s err=%s",
                                  _sid, type(event).__name__, exc)
-        logger.info("[session] end agent=%s session=%s", agent_name, _sid)
+        logger.info("end agent=%s session=%s", agent_name, _sid)
     except HumanApprovalRequired:
         # HITL pause — runtime already wrote status="waiting_for_human".
-        logger.info("[session] paused for HITL  agent=%s  session=%s", agent_name, _sid)
+        logger.info("paused for HITL agent=%s session=%s", agent_name, _sid)
     except Exception as e:
-        logger.error("[session] error agent=%s session=%s err=%s", agent_name, _sid, e)
+        logger.error("error agent=%s session=%s err=%s", agent_name, _sid, e)
         # Mark session as failed with error details so the UI shows why.
         try:
             _fail_meta = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
@@ -417,52 +416,55 @@ async def _run_in_sandbox(
             try:
                 await broadcast_fn(event_data)
             except Exception as exc:
-                logger.debug("[sandbox] broadcast failed session=%s err=%s", _sid, exc)
+                logger.debug("broadcast failed session=%s err=%s", _sid, exc)
 
-    executor = await executor_manager.get_or_create(session_id)
+    # Serialize per-session: if a previous run is still in its finally block
+    # (wait_drained / aflush / destroy), the new run waits here until it finishes.
+    async with executor_manager.session_lock(session_id):
+        executor = await executor_manager.get_or_create(session_id)
 
-    # Set per-session callbacks via public API
-    if hasattr(executor, 'set_session_callbacks'):
-        executor.set_session_callbacks(
-            on_stream_event=_on_stream_event,
-            tracer=tracer,
-        )
+        # Set per-session callbacks via public API
+        if hasattr(executor, 'set_session_callbacks'):
+            executor.set_session_callbacks(
+                on_stream_event=_on_stream_event,
+                tracer=tracer,
+            )
 
-    try:
-        await executor.spawn_agent(
-            agent_spec_json=agent_spec_json,
-            user_input=user_input,
-        )
-        exit_code = await executor.wait_finished()
-        if exit_code != 0:
-            logger.warning("[sandbox] subprocess exited with code %d session=%s", exit_code, _sid)
-        logger.info("[sandbox] end session=%s", _sid)
-    except Exception as e:
-        logger.error("[sandbox] error session=%s err=%s", _sid, e)
         try:
-            meta_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
-            if meta_path.exists():
-                data = json.loads(meta_path.read_text())
-            else:
-                data = {"session_id": session_id, "agent_name": agent_name}
-            data["status"] = "failed"
-            data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            data["error"] = f"{type(e).__name__}: {e}"
-            meta_path.write_text(json.dumps(data, indent=2))
-        except Exception:
-            pass
-    finally:
-        # Wait for IPC handler to finish processing all buffered messages
-        # (including tracer.event session_end) before flushing the tracer.
-        if hasattr(executor, "wait_drained"):
-            await executor.wait_drained()
-        # Flush the orchestrator-side tracer so buffered events (including
-        # session_end) are persisted before the tracer goes out of scope.
-        if tracer and hasattr(tracer, "aflush"):
+            await executor.spawn_agent(
+                agent_spec_json=agent_spec_json,
+                user_input=user_input,
+            )
+            exit_code = await executor.wait_finished()
+            if exit_code != 0:
+                logger.warning("subprocess exited code=%d session=%s", exit_code, _sid)
+            logger.info("end session=%s", _sid)
+        except Exception as e:
+            logger.error("error session=%s err=%s", _sid, e)
             try:
-                await tracer.aflush()
+                meta_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
+                if meta_path.exists():
+                    data = json.loads(meta_path.read_text())
+                else:
+                    data = {"session_id": session_id, "agent_name": agent_name}
+                data["status"] = "failed"
+                data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                data["error"] = f"{type(e).__name__}: {e}"
+                meta_path.write_text(json.dumps(data, indent=2))
             except Exception:
                 pass
+        finally:
+            # Wait for IPC connection to finish processing all buffered messages
+            # (including session_end) before flushing, then destroy the executor
+            # so the next run gets a fresh sandbox.
+            if hasattr(executor, "wait_drained"):
+                await executor.wait_drained()
+            if tracer and hasattr(tracer, "aflush"):
+                try:
+                    await tracer.aflush()
+                except Exception:
+                    pass
+            await executor_manager.destroy(session_id)
 
 
 def _extract_broadcast_fn(channel_manager):
@@ -494,7 +496,7 @@ def _parse_session_metadata(raw_metadata: dict) -> SessionMetadata:
     try:
         return SessionMetadata.model_validate(raw_metadata)
     except Exception as exc:
-        logger.debug("Failed to parse session metadata: %s", exc)
+        logger.debug("failed to parse session metadata err=%s", exc)
         # Robust fallback: if validation fails, at least try to preserve the system_prompt
         # if it's present and looks like a string.
         meta = SessionMetadata()
@@ -692,7 +694,7 @@ def make_router(config) -> APIRouter:
                         error=raw.get("error"),
                     ))
                 except Exception as exc:
-                    logger.debug("Failed to read session metadata %s: %s", entry.id, exc)
+                    logger.debug("failed to read session metadata session=%s err=%s", entry.id, exc)
             return sessions
 
         # Fallback: iterdir when no index available (root + sub_sessions)
@@ -739,7 +741,7 @@ def make_router(config) -> APIRouter:
                     raw = json.loads(meta_path.read_text())
                     _append_session(raw, d.name, d)
                 except Exception as exc:
-                    logger.debug("Failed to read session metadata %s: %s", d, exc)
+                    logger.debug("failed to read session metadata session=%s err=%s", d, exc)
             # Also include child sessions from sub_sessions/
             sub_dir = d / "sub_sessions"
             if sub_dir.is_dir():
@@ -749,7 +751,7 @@ def make_router(config) -> APIRouter:
                             raw = json.loads(sub_file.read_text())
                             _append_session(raw, sub_file.stem, d)
                         except Exception as exc:
-                            logger.debug("Failed to read child session %s: %s", sub_file, exc)
+                            logger.debug("failed to read child session path=%s err=%s", sub_file, exc)
 
         return sessions
 
@@ -808,7 +810,7 @@ def make_router(config) -> APIRouter:
             try:
                 child_path.unlink()
             except (FileNotFoundError, OSError) as e:
-                logger.warning("Failed to delete child session %s: %s", session_id, e)
+                logger.warning("failed to delete child session session=%s err=%s", session_id, e)
         else:
             # Root session: rmtree the whole directory (including sub_sessions/)
             d = sessions_dir / session_id
@@ -821,11 +823,11 @@ def make_router(config) -> APIRouter:
             try:
                 shutil.rmtree(d)
             except (FileNotFoundError, OSError) as e:
-                logger.warning("Failed to delete session %s: %s", session_id, e)
+                logger.warning("failed to delete session session=%s err=%s", session_id, e)
 
         if index:
             index.remove(session_id)
-        logger.info("Deleted session %s", session_id)
+        logger.info("deleted session=%s", session_id)
 
     @router.post("/sessions/{session_id}/stop")
     async def stop_session(request: Request, session_id: str, force: bool = False) -> dict:
@@ -864,7 +866,7 @@ def make_router(config) -> APIRouter:
                 try:
                     await executor.push_cancel()
                 except Exception as e:
-                    logger.debug("[session] sandbox cancel push failed: %s", e)
+                    logger.debug("sandbox cancel push failed err=%s", e)
 
         return {"status": "cancelled", "force": force, "session_id": session_id}
 

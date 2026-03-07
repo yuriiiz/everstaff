@@ -13,7 +13,7 @@ daemon_router = APIRouter(prefix="/api/daemon", tags=["daemon"])
 async def daemon_status(request: Request):
     daemon = getattr(request.app.state, "daemon", None)
     if daemon is None:
-        logger.debug("[DaemonAPI] GET /status — daemon not configured")
+        logger.debug("daemon not configured")
         return {"enabled": False, "running": False, "webhooks": []}
     webhooks = []
     for sensor, agent_name in daemon.sensor_manager._sensors:
@@ -23,7 +23,7 @@ async def daemon_status(request: Request):
                 "path": sensor._route_path,
             })
     status = {"enabled": True, "running": daemon.is_running, "webhooks": webhooks}
-    logger.debug("[DaemonAPI] GET /status — %s", status)
+    logger.debug("status=%s", status)
     return status
 
 
@@ -33,7 +33,7 @@ async def daemon_loops(request: Request):
     if daemon is None:
         return {"loops": {}}
     loops = daemon.loop_manager.get_status()
-    logger.debug("[DaemonAPI] GET /loops — %d loop(s)", len(loops))
+    logger.debug("loops=%d", len(loops))
     return {"loops": loops}
 
 
@@ -41,10 +41,10 @@ async def daemon_loops(request: Request):
 async def daemon_reload(request: Request):
     daemon = getattr(request.app.state, "daemon", None)
     if daemon is None:
-        logger.warning("[DaemonAPI] POST /reload — daemon not running")
+        logger.warning("reload requested but daemon not running")
         return {"status": "daemon not running"}
-    logger.info("[DaemonAPI] POST /reload — triggering hot reload")
+    logger.info("triggering hot reload")
     await daemon.reload()
     loops = daemon.loop_manager.get_status()
-    logger.info("[DaemonAPI] POST /reload — complete, %d loop(s) active", len(loops))
+    logger.info("reload complete loops=%d", len(loops))
     return {"status": "reloaded", "loops": loops}

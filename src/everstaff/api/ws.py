@@ -76,7 +76,7 @@ def make_router(config) -> APIRouter:
         entry = (websocket, session_id)
         app.state.ws_connections.add(entry)
         _sid = (session_id or "")[:8] or "?"
-        logger.info("[WS] connect  session=%s  active=%d", _sid, len(app.state.ws_connections))
+        logger.info("connect session=%s active=%d", _sid, len(app.state.ws_connections))
         try:
             async for raw in websocket.iter_text():
                 try:
@@ -98,7 +98,7 @@ def make_router(config) -> APIRouter:
                 if msg_type == "user_message" and session_id:
                     content = msg.get("content", "")
                     client_id = msg.get("client_id", "")
-                    logger.info("[WS] ← user_message  session=%s  chars=%d", _sid, len(content))
+                    logger.info("user_message received session=%s chars=%d", _sid, len(content))
 
                     # Broadcast echo to all clients watching this session
                     if _broadcast_fn is not None:
@@ -110,7 +110,7 @@ def make_router(config) -> APIRouter:
                                 "client_id": client_id,
                             })
                         except Exception as echo_err:
-                            logger.debug("[WS] user_message_echo broadcast failed: %s", echo_err)
+                            logger.debug("user_message_echo broadcast failed err=%s", echo_err)
 
                     # Look up agent_name, agent_uuid, and session status from session file
                     agent_name = ""
@@ -131,17 +131,16 @@ def make_router(config) -> APIRouter:
                             r.get("status") == "pending"
                             for r in session_raw.get("hitl_requests", [])
                         )
-                        logger.debug("[WS] resolved agent=%r uuid=%r status=%r pending_hitl=%s  session=%s",
+                        logger.debug("resolved agent=%r uuid=%r status=%r pending_hitl=%s session=%s",
                                      agent_name, agent_uuid, _session_status, _has_pending_hitl, _sid)
                     except Exception as e:
-                        logger.warning("[WS] failed to read agent_name  session=%s  err=%s", _sid, e)
+                        logger.warning("failed to read agent_name session=%s err=%s", _sid, e)
 
                     # Guard: don't resume a session that is waiting for HITL resolution.
                     # Sending a user_message while HITLs are pending would cause the
                     # runtime to drop dangling tool calls, silently auto-rejecting them.
                     if _session_status == "waiting_for_human" and _has_pending_hitl:
-                        logger.warning("[WS] ignoring user_message for session %s: "
-                                       "session is waiting_for_human with pending HITL(s)", _sid)
+                        logger.warning("ignoring user_message session=%s status=waiting_for_human pending_hitl=true", _sid)
                         if _broadcast_fn is not None:
                             try:
                                 await _broadcast_fn({
@@ -155,7 +154,7 @@ def make_router(config) -> APIRouter:
                         continue
 
                     if not agent_name:
-                        logger.warning("[WS] agent_name empty  session=%s  (resume may fail)", _sid)
+                        logger.warning("agent_name empty session=%s (resume may fail)", _sid)
 
                     # If the session is still running (e.g. stuck in a loop),
                     # write cancel.signal to stop it before starting a new resume.
@@ -168,11 +167,11 @@ def make_router(config) -> APIRouter:
                                 SessionIndex.signal_relpath(session_id, _ws_root),
                                 _json.dumps({"force": False}).encode(),
                             )
-                            logger.info("[WS] auto-stopping running session before resume  session=%s", _sid)
+                            logger.info("auto-stopping running session before resume session=%s", _sid)
                             # Give the old runtime a moment to detect the signal
                             await asyncio.sleep(1)
                         except Exception as stop_err:
-                            logger.warning("[WS] failed to auto-stop session %s: %s", _sid, stop_err)
+                            logger.warning("failed to auto-stop session=%s err=%s", _sid, stop_err)
 
                     cm = getattr(app.state, "channel_manager", None)
                     mcp_pool = getattr(app.state, "mcp_pool", None)
@@ -200,7 +199,7 @@ def make_router(config) -> APIRouter:
                     if not grant_scope and decision.startswith("approve_"):
                         grant_scope = decision.replace("approve_", "")  # approve_once→once, approve_session→session, approve_permanent→permanent
                     if hitl_id and decision:
-                        logger.info("[WS] ← hitl_resolve  hitl=%s  decision=%s  pattern=%s  session=%s",
+                        logger.info("hitl_resolve received hitl=%s decision=%s pattern=%s session=%s",
                                     hitl_id[:8], decision, permission_pattern, _sid)
                         asyncio.create_task(
                             _resolve_hitl_internal(app, hitl_id, decision, comment,
@@ -210,12 +209,12 @@ def make_router(config) -> APIRouter:
                         )
 
                 elif msg_type:
-                    logger.debug("[WS] ← unknown type=%r  session=%s", msg_type, _sid)
+                    logger.debug("unknown message type=%r session=%s", msg_type, _sid)
 
         except WebSocketDisconnect:
             pass
         finally:
             app.state.ws_connections.discard(entry)
-            logger.info("[WS] disconnect  session=%s  active=%d", _sid, len(app.state.ws_connections))
+            logger.info("disconnect session=%s active=%d", _sid, len(app.state.ws_connections))
 
     return router

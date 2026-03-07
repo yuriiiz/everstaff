@@ -28,11 +28,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         # Startup: start all channels
         cm = app.state.channel_manager
         await cm.start_all()
-        logger.info("All channels started (%d registered)", len(cm._channels))
+        logger.info("all channels started count=%d", len(cm._channels))
 
         # Startup: optionally start daemon
         if config.daemon.enabled:
-            logger.info("Daemon enabled — initializing AgentDaemon (agents_dir=%s)", config.agents_dir)
+            logger.info("daemon enabled, initializing AgentDaemon agents_dir=%s", config.agents_dir)
             try:
                 from everstaff.daemon.agent_daemon import AgentDaemon
                 from everstaff.core.factories import build_file_store
@@ -46,7 +46,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 def _daemon_llm_factory(*, model_kind: str = "fast", **kw):
                     """Create a real LLM client for daemon ThinkEngine."""
                     mapping = config.resolve_model(model_kind)
-                    logger.debug("Daemon llm_factory: model_kind=%s → model_id=%s", model_kind, mapping.model_id)
+                    logger.debug("daemon llm_factory model_kind=%s model_id=%s", model_kind, mapping.model_id)
                     return LiteLLMClient(model=mapping.model_id, max_tokens=mapping.max_tokens, temperature=mapping.temperature)
 
                 class _DaemonRuntimeProxy:
@@ -109,11 +109,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 )
                 await daemon.start()
                 app.state.daemon = daemon
-                logger.info("AgentDaemon started successfully")
+                logger.info("AgentDaemon started")
             except Exception:
-                logger.exception("Failed to start AgentDaemon")
+                logger.exception("failed to start AgentDaemon")
         else:
-            logger.info("Daemon disabled — skipping AgentDaemon startup")
+            logger.info("daemon disabled, skipping AgentDaemon startup")
 
         yield
 
@@ -121,7 +121,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         executor_mgr = getattr(app.state, "executor_manager", None)
         if executor_mgr is not None:
             await executor_mgr.destroy_all()
-            logger.info("All sandbox executors destroyed")
+            logger.info("all sandbox executors destroyed")
 
         # Shutdown: stop daemon if running
         daemon = getattr(app.state, "daemon", None)
@@ -137,7 +137,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
         # Shutdown: stop all channels
         await cm.stop_all()
-        logger.info("All channels stopped")
+        logger.info("all channels stopped")
 
     app = FastAPI(title="Agent Framework API", version="0.2.0", lifespan=lifespan)
     app.state.config = config
@@ -185,7 +185,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 _embed_model_id = config.resolve_model(config.memory.embedding_model_kind).model_id
                 _mem0_client = Mem0Client(config.memory, _llm_model_id, _embed_model_id)
             except Exception as _exc:
-                logger.warning("Failed to create Mem0Client for sandbox: %s", _exc)
+                logger.warning("failed to create Mem0Client for sandbox err=%s", _exc)
 
         _executor_manager = ExecutorManager(
             factory=_sandbox_factory,
@@ -207,7 +207,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             _api_embed = config.resolve_model(config.memory.embedding_model_kind).model_id
             app.state.mem0_client = _MemClient(config.memory, _api_llm, _api_embed)
         except Exception as _exc:
-            logger.warning("Failed to create shared Mem0Client: %s", _exc)
+            logger.warning("failed to create shared Mem0Client err=%s", _exc)
 
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry
@@ -250,7 +250,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         ]
 
         if event_type not in _WS_NOISY_TYPES:
-            broadcast_logger.debug("[WS] → %-22s  session=%s  recipients=%d",
+            broadcast_logger.debug("broadcast type=%-22s session=%s recipients=%d",
                           event_type, (event_session_id or "")[:8] or "?", len(eligible))
 
         async def _send(conn_tuple):
@@ -260,7 +260,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             try:
                 await ws.send_text(data)
             except Exception as e:
-                broadcast_logger.debug("[WS] send failed  session=%s  type=%s  err=%s",
+                broadcast_logger.debug("send failed session=%s type=%s err=%s",
                               (event_session_id or "")[:8] or "?", event_type, e)
 
         await asyncio.gather(*[_send(c) for c in connections], return_exceptions=True)
@@ -337,7 +337,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     async def generic_exception_handler(request: Request, exc: Exception):
         from everstaff.schema.api_models import ErrorResponse
         import logging
-        logging.getLogger(__name__).error("Unhandled error: %s", exc, exc_info=True)
+        logging.getLogger(__name__).error("unhandled error err=%s", exc, exc_info=True)
         return JSONResponse(
             status_code=500,
             content=ErrorResponse(error="Internal server error", detail=str(exc)).model_dump(),
