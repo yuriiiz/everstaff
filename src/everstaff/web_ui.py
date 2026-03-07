@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _resolve_static_dir() -> Path:
@@ -26,7 +26,7 @@ def mount_web_ui(app: FastAPI) -> None:
     static_dir = _resolve_static_dir()
 
     if not static_dir.exists():
-        _logger.warning(
+        logger.warning(
             "web.enabled=true but web_static/ not found at %s. "
             "Skipping UI mount. Run 'make build-web' to build the frontend.",
             static_dir,
