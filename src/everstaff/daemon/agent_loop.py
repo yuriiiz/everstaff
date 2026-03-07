@@ -336,6 +336,8 @@ class AgentLoop:
             return
         meta_path = self._sessions_dir / session_id / "session.json"
         if not meta_path.exists():
+            logger.debug("[Loop:%s] Session file not found for appending think messages: %s",
+                         self._agent_name, session_id)
             return
         try:
             data = json.loads(meta_path.read_text())
