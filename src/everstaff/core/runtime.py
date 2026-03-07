@@ -193,6 +193,10 @@ class AgentRuntime:
             injection = provider.get_prompt_injection()
             if injection:
                 parts.append(injection)
+        for provider in ctx.extra_providers:
+            injection = provider.get_prompt_injection()
+            if injection:
+                parts.append(injection)
         # Conditional HITL rules: inject when request_human_input is available
         if ctx.tool_registry.has_tool("request_human_input"):
             from everstaff.tools.hitl_tool import RequestHumanInputTool

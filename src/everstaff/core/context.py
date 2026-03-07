@@ -16,7 +16,7 @@ from everstaff.nulls import (
 )
 from everstaff.protocols import (
     AgentEvent, CancellationEvent, FileStore, Hook, KnowledgeProvider, McpProvider,
-    MemoryStore, PermissionChecker,
+    MemoryStore, PermissionChecker, PromptInjector,
     SkillProvider, SubAgentProvider, ToolRegistry, TracingBackend,
 )
 
@@ -54,6 +54,7 @@ class AgentContext:
     file_store: FileStore | None = None  # FileStore for stateless cancellation signals
     workdir: "Path | None" = None  # workspace directory for file change tracking
     channel_manager: Any = None          # ChannelManager for HITL broadcast (set by API/CLI layer)
+    extra_providers: list[PromptInjector] = field(default_factory=list)  # extensible prompt injectors (e.g. Mem0)
     _env: "RuntimeEnvironment | None" = field(default=None, repr=False)  # set by AgentBuilder after build()
 
     async def aclose(self) -> None:
