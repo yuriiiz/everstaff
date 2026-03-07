@@ -78,3 +78,39 @@ class TestMem0ClientEmbedderApiKey:
             Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
             call_args = MockMemory.from_config.call_args[0][0]
             assert "api_key" not in call_args["embedder"]["config"]
+
+
+@pytest.mark.asyncio
+class TestMem0ClientGetAll:
+    async def test_get_all_calls_mem0_with_scope(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory:
+            mock_instance = MagicMock()
+            mock_instance.get_all.return_value = {"results": [
+                {"id": "m1", "memory": "likes python", "created_at": "2026-01-01", "updated_at": "2026-01-02"},
+                {"id": "m2", "memory": "prefers chinese", "created_at": "2026-01-01", "updated_at": "2026-01-02"},
+            ]}
+            MockMemory.from_config.return_value = mock_instance
+
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+
+            results = await client.get_all(user_id="u1", agent_id="a1", limit=50)
+
+            mock_instance.get_all.assert_called_once_with(user_id="u1", agent_id="a1", limit=50)
+            assert len(results) == 2
+            assert results[0]["memory"] == "likes python"
+
+    async def test_get_all_filters_none_scope(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory:
+            mock_instance = MagicMock()
+            mock_instance.get_all.return_value = {"results": []}
+            MockMemory.from_config.return_value = mock_instance
+
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+
+            await client.get_all(user_id="u1", agent_id=None, limit=100)
+
+            mock_instance.get_all.assert_called_once_with(user_id="u1", limit=100)

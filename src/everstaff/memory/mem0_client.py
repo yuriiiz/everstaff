@@ -85,3 +85,10 @@ class Mem0Client:
         response = await asyncio.to_thread(self._memory.search, query, **kwargs)
         results = response.get("results", []) if isinstance(response, dict) else response
         return [r for r in results if r.get("score", 0) >= self._threshold]
+
+    async def get_all(self, *, limit: int = 100, **scope: Any) -> list[dict]:
+        """List all memories matching the given scope."""
+        kwargs = {k: v for k, v in scope.items() if v is not None}
+        kwargs["limit"] = limit
+        result = await asyncio.to_thread(self._memory.get_all, **kwargs)
+        return result.get("results", []) if isinstance(result, dict) else result
