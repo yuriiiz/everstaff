@@ -1,6 +1,7 @@
 """Bridge SecretStore to litellm's secret manager interface."""
 from __future__ import annotations
 
+import os
 from typing import Optional, Union, TYPE_CHECKING
 
 import httpx
@@ -13,16 +14,20 @@ if TYPE_CHECKING:
 
 
 class SecretStoreBridge(CustomSecretManager):
-    """litellm CustomSecretManager backed by everstaff SecretStore."""
+    """litellm CustomSecretManager backed by everstaff SecretStore.
+
+    Falls back to os.environ for non-secret config keys (e.g.
+    USE_LITELLM_PROXY) so litellm doesn't log noisy ERROR tracebacks.
+    """
 
     def __init__(self, secret_store: "SecretStore") -> None:
         super().__init__(secret_manager_name="everstaff")
         self._store = secret_store
 
-    def _read(self, secret_name: str) -> str:
+    def _read(self, secret_name: str) -> Optional[str]:
         value = self._store.get(secret_name)
         if value is None:
-            raise KeyError(secret_name)
+            value = os.environ.get(secret_name)
         return value
 
     async def async_read_secret(

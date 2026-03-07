@@ -11,12 +11,25 @@ class TestSecretStoreBridge:
         bridge = SecretStoreBridge(store)
         assert bridge.sync_read_secret("OPENAI_API_KEY") == "sk-test-123"
 
-    def test_sync_read_missing_key_raises(self):
+    def test_sync_read_missing_key_returns_none(self):
         from everstaff.llm.secret_bridge import SecretStoreBridge
         store = SecretStore({})
         bridge = SecretStoreBridge(store)
-        with pytest.raises(KeyError):
-            bridge.sync_read_secret("MISSING_KEY")
+        assert bridge.sync_read_secret("MISSING_KEY") is None
+
+    def test_falls_back_to_os_environ(self):
+        from everstaff.llm.secret_bridge import SecretStoreBridge
+        store = SecretStore({})
+        bridge = SecretStoreBridge(store)
+        with patch.dict("os.environ", {"SOME_CONFIG": "from_env"}):
+            assert bridge.sync_read_secret("SOME_CONFIG") == "from_env"
+
+    def test_secret_store_takes_precedence_over_environ(self):
+        from everstaff.llm.secret_bridge import SecretStoreBridge
+        store = SecretStore({"KEY": "from_store"})
+        bridge = SecretStoreBridge(store)
+        with patch.dict("os.environ", {"KEY": "from_env"}):
+            assert bridge.sync_read_secret("KEY") == "from_store"
 
     @pytest.mark.asyncio
     async def test_async_read_existing_key(self):
