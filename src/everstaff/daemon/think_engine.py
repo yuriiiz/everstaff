@@ -130,6 +130,23 @@ THINK_TOOLS: list[ToolDefinition] = [
             "required": ["goal_id", "sub_goal_index", "status"],
         },
     ),
+    ToolDefinition(
+        name="record_learning_insight",
+        description="Record a learning insight from analyzing recent episodes. Insights are persisted and inform future decisions.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["pattern", "optimization", "risk", "capability_gap"],
+                },
+                "insight": {"type": "string", "description": "What was learned"},
+                "evidence": {"type": "string", "description": "Episode IDs or summary supporting this"},
+                "action": {"type": "string", "description": "Recommended follow-up action"},
+            },
+            "required": ["category", "insight", "evidence"],
+        },
+    ),
 ]
 
 _MAX_THINK_ITERATIONS = 5
@@ -338,6 +355,23 @@ class ThinkEngine:
                             created_at=datetime.now(timezone.utc).isoformat(),
                         ))
 
+                    elif tc.name == "record_learning_insight":
+                        args = tc.args
+                        logger.debug("[Think:%s] Tool call: record_learning_insight(category=%s)",
+                                     agent_name, args.get("category"))
+                        existing = await self._memory.semantic_read(agent_name, "learning_insights")
+                        entry = f"\n[{args['category']}] {args['insight']} (evidence: {args['evidence']})"
+                        if args.get("action"):
+                            entry += f" -> action: {args['action']}"
+                        updated = (existing + entry) if existing else entry
+                        await self._memory.semantic_write(agent_name, "learning_insights", updated)
+                        messages.append(Message(
+                            role="tool",
+                            content="Insight recorded.",
+                            tool_call_id=tc.id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+
                 if decided:
                     break
 
@@ -483,6 +517,10 @@ class ThinkEngine:
         if topics:
             parts.append(f"\n## Semantic memory topics: {topics}")
             parts.append("Use recall_semantic_detail tool to read any topic.")
+
+        if "learning_insights" in topics:
+            parts.append("\n## Learning Insights (from past reflections)")
+            parts.append("[Available via recall_semantic_detail tool with topic='learning_insights']")
 
         parts.append("\nCall make_decision when you've decided what to do.")
         return "\n".join(parts)
