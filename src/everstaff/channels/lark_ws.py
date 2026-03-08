@@ -562,6 +562,81 @@ class LarkWsChannel:
             "elements": elements,
         }
 
+    async def _list_agents(self) -> list[dict]:
+        """List available agents from builtin + user agents_dir. User agents override builtins by uuid."""
+        from pathlib import Path
+        from everstaff.utils.yaml_loader import load_yaml
+        from everstaff.core.config import _builtin_agents_path
+
+        agents_by_uuid: dict[str, dict] = {}
+
+        # Collect builtin agents first
+        builtin_path = _builtin_agents_path()
+        if builtin_path:
+            bp = Path(builtin_path)
+            for f in sorted(bp.glob("*.yaml")):
+                try:
+                    spec = load_yaml(f)
+                    uid = spec.get("uuid", f.stem)
+                    agents_by_uuid[uid] = spec
+                except Exception as exc:
+                    logger.warning("skip builtin agent %s err=%s", f.name, exc)
+
+        # Collect user agents (override by uuid)
+        if self._config and self._config.agents_dir:
+            user_dir = Path(self._config.agents_dir).expanduser().resolve()
+            if user_dir.is_dir():
+                for f in sorted(user_dir.glob("*.yaml")):
+                    try:
+                        spec = load_yaml(f)
+                        uid = spec.get("uuid", f.stem)
+                        agents_by_uuid[uid] = spec
+                    except Exception as exc:
+                        logger.warning("skip user agent %s err=%s", f.name, exc)
+
+        return list(agents_by_uuid.values())
+
+    def _build_agent_selection_card(self, agents: list[dict], requester_open_id: str) -> dict:
+        """Build a Lark interactive card with a dropdown for agent selection."""
+        options = []
+        for agent in agents:
+            name = agent.get("agent_name", "Unknown")
+            desc = agent.get("description", "")[:50]
+            uid = agent.get("uuid", name)
+            options.append({
+                "text": {"tag": "plain_text", "content": f"{name} - {desc}"},
+                "value": json.dumps({"agent_name": name, "agent_uuid": uid}),
+            })
+
+        elements: list[dict] = [
+            {
+                "tag": "form",
+                "name": "agent_selection_form",
+                "elements": [
+                    {
+                        "tag": "select_static",
+                        "name": "agent_choice",
+                        "placeholder": {"tag": "plain_text", "content": "Choose an agent..."},
+                        "options": options,
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "Start"},
+                        "type": "primary",
+                        "action_type": "form_submit",
+                        "name": "submit",
+                        "value": {"action": "select_agent", "requester": requester_open_id},
+                    },
+                ],
+            },
+        ]
+
+        return {
+            "config": {"wide_screen_mode": True, "update_multi": True},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Select Agent"}, "template": "blue"},
+            "elements": elements,
+        }
+
     def _build_notify_card(self, request: "HitlRequest") -> dict:
         elements: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content": f"**{request.prompt}**"}},
