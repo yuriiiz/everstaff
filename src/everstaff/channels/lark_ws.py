@@ -649,6 +649,39 @@ class LarkWsChannel:
             "elements": elements,
         }
 
+    def _build_reply_card(self, reply_text: str, session_id: str, agent_name: str, source_chat_id: str) -> dict:
+        """Build a reply card with agent response and 'New Conversation' button."""
+        elements: list[dict] = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": reply_text}},
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "New Conversation"},
+                        "type": "primary",
+                        "value": {
+                            "action": "new_conversation",
+                            "session_id": session_id,
+                            "agent_name": agent_name,
+                            "source_chat_id": source_chat_id,
+                        },
+                    },
+                ],
+            },
+        ]
+
+        short_id = session_id[:8].upper()
+        if self._web_url:
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"[Session {short_id}]({self._web_url}/sessions/{session_id})"}})
+
+        return {
+            "config": {"wide_screen_mode": True, "update_multi": True},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"}, "template": "green"},
+            "elements": elements,
+        }
+
     # ── HitlChannel protocol ────────────────────────────────────
 
     async def send_request(self, session_id: str, request: "HitlRequest") -> None:
@@ -1104,6 +1137,58 @@ class LarkWsChannel:
             reply_to=reply_to,
         )
 
+    async def _handle_new_conversation(
+        self,
+        open_id: str,
+        agent_name: str,
+        source_session_id: str,
+        source_chat_id: str,
+    ) -> None:
+        """Create a new Lark group for continued conversation."""
+        logger.info("new_conversation open_id=%s agent=%s", open_id, agent_name)
+        try:
+            token = await self._get_access_token()
+
+            # Resolve username for group name
+            username = await self._resolve_username(open_id)
+            group_name = f"{self._bot_name} - {username} - {agent_name}"
+
+            # Create group
+            new_chat_id = await self._create_chat_group(token, group_name, open_id)
+            if not new_chat_id:
+                logger.error("failed to create chat group")
+                return
+
+            # Add user to group
+            await self._add_chat_members(token, new_chat_id, [open_id])
+
+            # Create a new session for this group
+            from uuid import uuid4
+            session_id = str(uuid4())
+
+            # Load agent_uuid from agents list
+            agent_uuid = ""
+            agents = await self._list_agents()
+            for a in agents:
+                if a.get("agent_name") == agent_name:
+                    agent_uuid = a.get("uuid", "")
+                    break
+
+            # Persist group state
+            await self._save_conv_state(f"group/{new_chat_id}", {
+                "session_id": session_id,
+                "agent_name": agent_name,
+                "agent_uuid": agent_uuid,
+                "is_conversation_group": True,
+            })
+
+            # Send welcome message
+            welcome = f"Conversation started with **{agent_name}**. Send messages directly to chat."
+            await self._send_message(token, new_chat_id, "text", json.dumps({"text": welcome}))
+
+        except Exception as exc:
+            logger.error("new_conversation failed err=%s", exc, exc_info=True)
+
     # ── WS client setup ─────────────────────────────────────────
 
     def _build_ws_client(self, loop: asyncio.AbstractEventLoop):
@@ -1248,6 +1333,21 @@ class LarkWsChannel:
                         )
 
                     return {"toast": {"type": "success", "content": f"Starting {agent_name}..."}}
+
+                if value.get("action") == "new_conversation":
+                    operator = getattr(event, "operator", None)
+                    clicker_open_id = getattr(operator, "open_id", "") if operator else ""
+                    session_id = value.get("session_id", "")
+                    agent_name = value.get("agent_name", "")
+                    source_chat_id = value.get("source_chat_id", "")
+
+                    if self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_new_conversation(clicker_open_id, agent_name, session_id, source_chat_id),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": "Creating new conversation group..."}}
 
             # ── HITL handling (existing logic) ──
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
