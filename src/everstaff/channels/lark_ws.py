@@ -797,6 +797,30 @@ class LarkWsChannel:
         except Exception as exc:
             logger.error("handle_card_action failed err=%s", exc, exc_info=True)
 
+    # ── Message routing ────────────────────────────────────────
+
+    async def _route_message(
+        self,
+        chat_type: str,
+        chat_id: str,
+        open_id: str,
+        text: str,
+        message_id: str,
+        parent_id: str = "",
+        is_mentioned: bool = False,
+    ) -> None:
+        """Route an incoming message to the appropriate handler."""
+        # Check whitelist first
+        if not await self._check_whitelist(open_id, message_id):
+            return
+
+        if chat_type == "p2p":
+            await self._handle_private_message(open_id, text, message_id, chat_id)
+        elif chat_type == "group" and is_mentioned:
+            await self._handle_group_message(open_id, text, message_id, chat_id, parent_id)
+        else:
+            logger.debug("ignoring message chat_type=%s mentioned=%s", chat_type, is_mentioned)
+
     # ── WS client setup ─────────────────────────────────────────
 
     def _build_ws_client(self, loop: asyncio.AbstractEventLoop):
@@ -816,6 +840,7 @@ class LarkWsChannel:
             P2CardActionTrigger,
             P2CardActionTriggerResponse,
         )
+        from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
         from lark_oapi.ws.enum import MessageType
         from lark_oapi.ws.const import (
             HEADER_TYPE, HEADER_MESSAGE_ID, HEADER_TRACE_ID,
@@ -823,6 +848,56 @@ class LarkWsChannel:
         )
         from lark_oapi.ws.model import Response as WsResp
         from lark_oapi.core.const import UTF_8
+
+        def message_handler(data: P2ImMessageReceiveV1):
+            """Handle incoming im.message.receive_v1 events."""
+            try:
+                event = data.event
+                message = event.message
+                sender = event.sender
+
+                chat_type = message.chat_type  # "p2p" or "group"
+                chat_id = message.chat_id
+                message_id = message.message_id
+                open_id = sender.sender_id.open_id
+                parent_id = message.parent_id or ""
+
+                # Extract text content
+                text = ""
+                if message.message_type == "text":
+                    try:
+                        content = json.loads(message.content)
+                        text = content.get("text", "")
+                    except (json.JSONDecodeError, TypeError):
+                        text = ""
+
+                # Check for @bot mentions and strip them from text
+                is_mentioned = False
+                mentions = message.mentions or []
+                for mention in mentions:
+                    if mention.id and mention.id.user_id:
+                        pass  # regular user mention
+                    # Bot mentions have name matching bot_name
+                    if mention.name == self._bot_name or mention.key:
+                        is_mentioned = True
+                        # Strip @mention from text
+                        if mention.key:
+                            text = text.replace(mention.key, "").strip()
+
+                logger.info(
+                    "message_handler chat_type=%s chat_id=%s open_id=%s text=%r message_id=%s parent_id=%s mentioned=%s",
+                    chat_type, chat_id, open_id, text, message_id, parent_id, is_mentioned,
+                )
+
+                if self._app_loop is not None and self._app_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._route_message(chat_type, chat_id, open_id, text, message_id, parent_id, is_mentioned),
+                        self._app_loop,
+                    )
+                else:
+                    logger.error("message_handler app loop unavailable, message dropped")
+            except Exception as exc:
+                logger.error("message_handler failed err=%s", exc, exc_info=True)
 
         def sync_card_handler(data: P2CardActionTrigger):
             """Parse card action and dispatch resolution to the app event loop.
@@ -860,6 +935,7 @@ class LarkWsChannel:
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_card_action_trigger(sync_card_handler)
+            .register_p2_im_message_receive_v1(message_handler)
             .build()
         )
 
