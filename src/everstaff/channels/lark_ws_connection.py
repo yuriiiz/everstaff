@@ -53,6 +53,7 @@ class LarkWsConnection:
         # Injected after construction
         self._channel_manager: ChannelManager | None = None
         self._event_bus: EventBus | None = None
+        self._message_handler: Any = None  # LarkMessageHandler, set by API startup
 
         # chat_id → agent_name routing for incoming messages
         self._chat_to_agent: dict[str, str] = {}
@@ -167,6 +168,13 @@ class LarkWsConnection:
 
         if action_type == "hitl":
             return await self._handle_hitl_action(parsed, open_id)
+        elif action_type == "agent_select":
+            if self._message_handler is not None:
+                context = getattr(event, "context", None)
+                msg_id = getattr(context, "open_message_id", "") if context else ""
+                return await self._message_handler.on_agent_selected(msg_id, parsed, open_id)
+            logger.warning("agent_select action dropped: no message_handler")
+            return {}
         else:
             if self._event_bus is not None:
                 from everstaff.protocols import AgentEvent
