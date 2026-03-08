@@ -136,6 +136,131 @@ class LarkWsChannel:
             self._username_cache[open_id] = open_id
             return open_id
 
+    async def _send_message(
+        self,
+        token: str,
+        receive_id: str,
+        msg_type: str,
+        content: str,
+        *,
+        receive_id_type: str = "chat_id",
+        reply_to: str | None = None,
+    ) -> str:
+        """Send a text or interactive message. Uses reply API when reply_to is set."""
+        import aiohttp
+
+        if reply_to:
+            url = f"{self._api_base}/im/v1/messages/{reply_to}/reply"
+            body = {"msg_type": msg_type, "content": content}
+        else:
+            url = f"{self._api_base}/im/v1/messages?receive_id_type={receive_id_type}"
+            body = {"receive_id": receive_id, "msg_type": msg_type, "content": content}
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        logger.info("POST url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                logger.info("POST response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+                mid = data.get("data", {}).get("message_id", "")
+                if not mid:
+                    logger.error("send_message failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                return mid
+
+    async def _delete_message(self, token: str, message_id: str) -> None:
+        """Recall/delete a bot message."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/messages/{message_id}"
+        headers = {"Authorization": f"Bearer {token}"}
+        logger.info("DELETE url=%s", url)
+        async with aiohttp.ClientSession() as s:
+            async with s.delete(url, headers=headers) as r:
+                data = await r.json()
+                logger.info("DELETE response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+
+    async def _add_reaction(self, token: str, message_id: str, emoji_type: str = "OK") -> None:
+        """Add an emoji reaction to a message."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/messages/{message_id}/reactions"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"reaction_type": {"emoji_type": emoji_type}}
+        logger.info("POST url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                logger.info("POST reaction response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+
+    async def _get_message(self, token: str, message_id: str) -> dict:
+        """Fetch a message by ID."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/messages/{message_id}"
+        headers = {"Authorization": f"Bearer {token}"}
+        logger.info("GET url=%s", url)
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers) as r:
+                data = await r.json()
+                logger.info("GET message response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+                return data.get("data", {})
+
+    async def _resolve_email(self, open_id: str) -> str:
+        """Resolve open_id to email via contact API. Cached with 'email:' prefix key."""
+        cache_key = f"email:{open_id}"
+        if cache_key in self._username_cache:
+            return self._username_cache[cache_key]
+        try:
+            import aiohttp
+            token = await self._get_access_token()
+            url = f"{self._api_base}/contact/v3/users/{open_id}?user_id_type=open_id"
+            headers = {"Authorization": f"Bearer {token}"}
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, headers=headers) as r:
+                    data = await r.json()
+                    code = data.get("code", 0)
+                    if code != 0:
+                        logger.warning("resolve_email API error open_id=%s code=%s msg=%s", open_id, code, data.get("msg"))
+                        self._username_cache[cache_key] = ""
+                        return ""
+                    email = data.get("data", {}).get("user", {}).get("email", "")
+                    logger.info("resolve_email open_id=%s -> email=%s", open_id, email)
+                    self._username_cache[cache_key] = email
+                    return email
+        except Exception as exc:
+            logger.warning("resolve_email failed open_id=%s err=%s", open_id, exc)
+            self._username_cache[cache_key] = ""
+            return ""
+
+    async def _create_chat_group(self, token: str, name: str, owner_open_id: str) -> str:
+        """Create a new Lark group chat. Returns the chat_id."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/chats"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"name": name, "owner_id": owner_open_id, "user_id_type": "open_id"}
+        logger.info("POST url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                logger.info("POST create_chat response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+                chat_id = data.get("data", {}).get("chat_id", "")
+                if not chat_id:
+                    logger.error("create_chat failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                return chat_id
+
+    async def _add_chat_members(self, token: str, chat_id: str, open_ids: list[str]) -> None:
+        """Add members to a Lark group chat."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/chats/{chat_id}/members"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"id_list": open_ids, "member_id_type": "open_id"}
+        logger.info("POST url=%s body=%s", url, json.dumps(body, ensure_ascii=False))
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                logger.info("POST add_chat_members response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+
     # ── Card builders ────────────────────────────────────────────
 
     def _build_card(self, request: "HitlRequest", hitl_id: str, session_id: str = "") -> dict:
