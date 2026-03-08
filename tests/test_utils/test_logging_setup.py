@@ -13,9 +13,7 @@ def reset_logging_state():
     for h in root.handlers[:]:
         root.removeHandler(h)
         h.close()
-    for name in ul._NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(logging.NOTSET)
-    for name in ul._LITELLM_LOGGERS:
+    for name in ul._HIJACKED_LOGGERS:
         lg = logging.getLogger(name)
         lg.setLevel(logging.NOTSET)
         lg.handlers.clear()
@@ -26,9 +24,7 @@ def reset_logging_state():
     for h in logging.getLogger().handlers[:]:
         logging.getLogger().removeHandler(h)
         h.close()
-    for name in ul._NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(logging.NOTSET)
-    for name in ul._LITELLM_LOGGERS:
+    for name in ul._HIJACKED_LOGGERS:
         lg = logging.getLogger(name)
         lg.setLevel(logging.NOTSET)
         lg.handlers.clear()

@@ -32,7 +32,7 @@ class ToolManager:
                 name = t.definition.name
                 if name in self._index:
                     logger.warning(
-                        "Duplicate tool '%s' — %s ignored, keeping %s",
+                        "duplicate tool name=%s ignored=%s keeping=%s",
                         name, py_file, self._index[name][0],
                     )
                     continue

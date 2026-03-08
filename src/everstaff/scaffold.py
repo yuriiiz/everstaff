@@ -231,6 +231,7 @@ def main():
         host=args.host,
         port=args.port,
         reload=args.reload,
+        log_config=None,
     )
 
 

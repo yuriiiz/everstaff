@@ -30,6 +30,15 @@ _NOISY_LOGGERS = [
 
 _LITELLM_LOGGERS = ["LiteLLM", "LiteLLM Router", "LiteLLM Proxy"]
 
+# Loggers that install their own handlers/formatters — we clear handlers
+# and force propagation so they use our root formatter instead.
+_HIJACKED_LOGGERS = [
+    *_NOISY_LOGGERS,
+    *_LITELLM_LOGGERS,
+    "uvicorn",
+    "uvicorn.error",
+]
+
 
 def setup_logging(
     *,
@@ -73,9 +82,24 @@ def setup_logging(
         fh.setLevel(numeric_level)
         root.addHandler(fh)
 
-    # Suppress noisy third-party loggers and force them through our formatter
-    for name in [*_NOISY_LOGGERS, *_LITELLM_LOGGERS]:
+    _hijack_third_party_loggers()
+
+
+def _hijack_third_party_loggers() -> None:
+    """Clear handlers from third-party loggers and force propagation to root."""
+    for name in _HIJACKED_LOGGERS:
         lib_logger = logging.getLogger(name)
-        lib_logger.setLevel(logging.WARNING)
         lib_logger.handlers.clear()
         lib_logger.propagate = True
+
+    # Cap chatty loggers at WARNING (uvicorn stays at root level for startup msgs)
+    for name in [*_NOISY_LOGGERS, *_LITELLM_LOGGERS]:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def reclaim_loggers() -> None:
+    """Re-apply handler cleanup after frameworks (e.g. uvicorn) reconfigure logging.
+
+    Call this from app lifespan startup to ensure uvicorn's handlers are replaced.
+    """
+    _hijack_third_party_loggers()

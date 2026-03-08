@@ -25,6 +25,10 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Re-claim loggers after uvicorn has configured its own handlers
+        from everstaff.utils.logging import reclaim_loggers
+        reclaim_loggers()
+
         # Startup: start all channels
         cm = app.state.channel_manager
         await cm.start_all()
@@ -63,35 +67,112 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                         runtime, _ctx = await self._builder.build()
                         return await runtime.run(prompt)
 
+                class _DaemonSandboxProxy:
+                    """Runs agent in sandbox, reusing the API's _run_in_sandbox."""
+
+                    def __init__(self, agent_spec, session_id: str, agent_name: str, agent_uuid: str):
+                        self._spec = agent_spec
+                        self._session_id = session_id
+                        self._agent_name = agent_name
+                        self._agent_uuid = agent_uuid
+
+                    async def run(self, prompt: str, **kw) -> str:
+                        from everstaff.api.sessions import _run_in_sandbox
+                        from everstaff.session.index import SessionIndex
+
+                        executor_mgr = getattr(app.state, "executor_manager", None)
+                        if executor_mgr is None:
+                            raise RuntimeError("sandbox enabled but executor_manager not available")
+
+                        sessions_dir = Path(config.sessions_dir).expanduser().resolve()
+                        session_index = getattr(app.state, 'session_index', None)
+
+                        await _run_in_sandbox(
+                            executor_manager=executor_mgr,
+                            session_id=self._session_id,
+                            agent_spec_json=self._spec.model_dump_json(),
+                            user_input=prompt,
+                            broadcast_fn=None,
+                            sessions_dir=sessions_dir,
+                            root_session_id=self._session_id,
+                            session_index=session_index,
+                            agent_name=self._agent_name,
+                            agent_uuid=self._agent_uuid,
+                        )
+
+                        # Read result from session.json
+                        import json as _json
+                        meta_path = sessions_dir / SessionIndex.session_relpath(
+                            self._session_id, self._session_id)
+                        if meta_path.exists():
+                            data = _json.loads(meta_path.read_text())
+                            status = data.get("status", "")
+                            if status == "waiting_for_human":
+                                from everstaff.protocols import HumanApprovalRequired, HitlRequest
+                                requests = []
+                                for h in data.get("hitl_requests", []):
+                                    if h.get("status") == "pending":
+                                        req_data = h.get("request", {})
+                                        requests.append(HitlRequest(
+                                            hitl_id=h["hitl_id"],
+                                            type=req_data.get("type", "tool_permission"),
+                                            prompt=req_data.get("prompt", ""),
+                                            tool_call_id=h.get("tool_call_id"),
+                                            tool_name=req_data.get("tool_name"),
+                                            tool_args=req_data.get("tool_args"),
+                                            options=req_data.get("options"),
+                                            context=req_data.get("context"),
+                                            tool_permission_options=req_data.get("tool_permission_options"),
+                                            origin_session_id=h.get("origin_session_id"),
+                                            origin_agent_name=h.get("origin_agent_name"),
+                                        ))
+                                if requests:
+                                    raise HumanApprovalRequired(requests)
+                            # Extract last assistant message as result
+                            msgs = data.get("messages", [])
+                            for m in reversed(msgs):
+                                if m.get("role") == "assistant" and m.get("content"):
+                                    return m["content"]
+                        return ""
+
                 def _daemon_runtime_factory(*, agent_spec=None, **kw):
-                    """Build a DaemonRuntimeProxy for the daemon Act phase.
+                    """Build a runtime proxy for the daemon Act phase.
 
                     Called by AgentLoop with session_id (the loop session id).
-                    Returns a proxy whose .run(prompt) lazily builds and runs
-                    a full AgentRuntime via AgentBuilder.
+                    Uses sandbox when config.sandbox.enabled, otherwise runs in-process.
                     """
-                    from everstaff.builder.agent_builder import AgentBuilder
-                    from everstaff.builder.environment import DefaultEnvironment
-
                     session_id = kw.get("session_id", "")
                     trigger = kw.get("trigger")
-                    # Use scoped channel_manager from AgentLoop if provided, else fall back to global
                     scoped_cm = kw.get("channel_manager", cm)
 
-                    env = DefaultEnvironment(
-                        sessions_dir=config.sessions_dir,
-                        session_id=session_id,
-                        config=config,
-                        channel_manager=scoped_cm,
-                        mcp_pool=app.state.mcp_pool,
-                    )
                     if agent_spec is None:
                         from everstaff.schema.agent_spec import AgentSpec
                         agent_spec = AgentSpec(agent_name="daemon-task")
 
+                    # Sandbox path: reuse API's _run_in_sandbox
+                    if config.sandbox.enabled and getattr(app.state, "executor_manager", None) is not None:
+                        return _DaemonSandboxProxy(
+                            agent_spec, session_id,
+                            agent_name=agent_spec.agent_name,
+                            agent_uuid=agent_spec.uuid or "",
+                        )
+
+                    # In-process path: build and run directly
+                    from everstaff.builder.agent_builder import AgentBuilder
+                    from everstaff.builder.environment import DefaultEnvironment
+
+                    env = DefaultEnvironment(
+                        sessions_dir=config.sessions_dir,
+                        config=config,
+                        channel_manager=scoped_cm,
+                        mcp_pool=app.state.mcp_pool,
+                        session_index=getattr(app.state, 'session_index', None),
+                    )
+
                     builder = AgentBuilder(
                         spec=agent_spec,
                         env=env,
+                        session_id=session_id,
                         trigger=trigger,
                     )
                     return _DaemonRuntimeProxy(builder)
@@ -168,6 +249,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         from everstaff.sandbox.process_sandbox import ProcessSandbox
         from everstaff.core.secret_store import SecretStore
         from everstaff.core.factories import build_memory_store as _build_memory_store
+        from everstaff.nulls import NullTracer
 
         _secret_store = SecretStore.from_environ()
         _sandbox_memory = _build_memory_store(config.storage, _sessions_path)
@@ -195,6 +277,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             config_data=config.model_dump(),
             idle_timeout=config.sandbox.idle_timeout,
             mem0_client=_mem0_client,
+            tracer=NullTracer(),
         )
         app.state.executor_manager = _executor_manager
 
