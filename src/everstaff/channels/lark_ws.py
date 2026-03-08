@@ -860,49 +860,76 @@ class LarkWsChannel:
             self._pending_agent_selection[open_id]["selection_message_id"] = sel_mid
         logger.info("sent agent selection card to open_id=%s mid=%s", open_id, sel_mid)
 
-    async def _handle_group_message(self, open_id: str, text: str, message_id: str, chat_id: str, parent_id: str = "") -> None:
-        """Handle a group message where bot is mentioned."""
-        conv_key = f"group/{chat_id}"
+    async def _handle_group_message(
+        self,
+        open_id: str,
+        text: str,
+        message_id: str,
+        chat_id: str,
+        parent_id: str = "",
+    ) -> None:
+        """Handle a group chat message where bot was @mentioned."""
+        logger.info("handle_group open_id=%s chat=%s text=%s parent=%s", open_id, chat_id, text[:100], parent_id)
 
-        # /new command: reset conversation state
-        if text.strip().lower() == "/new":
-            await self._delete_conv_state(conv_key)
+        # Fetch quoted message content if present
+        full_text = text
+        if parent_id:
+            try:
+                token = await self._get_access_token()
+                msg_data = await self._get_message(token, parent_id)
+                items = msg_data.get("items", [])
+                if items:
+                    quoted_content = items[0].get("body", {}).get("content", "")
+                    try:
+                        quoted_parsed = json.loads(quoted_content)
+                        quoted_text = quoted_parsed.get("text", "")
+                    except (json.JSONDecodeError, TypeError):
+                        quoted_text = quoted_content
+                    if quoted_text:
+                        full_text = f"[Quoted]\n{quoted_text}\n\n[Message]\n{text}"
+            except Exception as exc:
+                logger.warning("fetch quoted message failed parent=%s err=%s", parent_id, exc)
 
-        # Check for existing active session
-        if text.strip().lower() != "/new":
-            state = await self._load_conv_state(conv_key)
-            if state and state.get("session_id"):
-                await self._send_to_session(
-                    session_id=state["session_id"],
-                    agent_name=state.get("agent_name", ""),
-                    agent_uuid=state.get("agent_uuid", ""),
-                    text=text,
-                    message_id=message_id,
-                    chat_id=chat_id,
-                    reply_to=parent_id or message_id,
-                )
-                return
+        # Check if this is a spawned conversation group (acts like private chat)
+        state = await self._load_conv_state(f"group/{chat_id}")
+        if state and state.get("is_conversation_group"):
+            await self._send_to_session(
+                session_id=state["session_id"],
+                agent_name=state.get("agent_name", ""),
+                agent_uuid=state.get("agent_uuid", ""),
+                text=full_text,
+                message_id=message_id,
+                chat_id=chat_id,
+                reply_to=None,  # in spawned group, reply as new message
+            )
+            return
 
-        # No active session — show agent selection
+        # Always show agent selection for group chats (every @bot is a new session)
         agents = await self._list_agents()
         if not agents:
             token = await self._get_access_token()
-            await self._send_message(token, chat_id, "text", json.dumps({"text": "No agents available."}))
+            await self._send_message(
+                token, chat_id, "text",
+                json.dumps({"text": "No agents available."}),
+                reply_to=message_id,
+            )
             return
 
+        # Store pending context
         self._pending_agent_selection[open_id] = {
-            "text": text,
+            "text": full_text,
             "message_id": message_id,
             "chat_id": chat_id,
             "chat_type": "group",
-            "parent_id": parent_id,
+            "reply_to": message_id,
         }
+
+        # Send agent selection card
         token = await self._get_access_token()
         card = self._build_agent_selection_card(agents, open_id)
-        sel_mid = await self._send_card_to(token, chat_id, card)
-        if sel_mid:
-            self._pending_agent_selection[open_id]["selection_message_id"] = sel_mid
-        logger.info("sent agent selection card to group chat_id=%s mid=%s", chat_id, sel_mid)
+        mid = await self._send_card_to(token, chat_id, card)
+        if mid:
+            self._pending_agent_selection[open_id]["selection_card_id"] = mid
 
     async def _send_to_session(
         self,
