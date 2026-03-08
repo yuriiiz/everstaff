@@ -812,6 +812,10 @@ class LarkWsChannel:
 
     async def _handle_card_action(self, hitl_id: str, decision: str, resolved_by: str, grant_scope: str | None = None, permission_pattern: str | None = None) -> None:
         """Resolve HITL via channel_manager (broadcasts + persists)."""
+        if not await self._check_whitelist(resolved_by):
+            logger.info("hitl card action rejected by whitelist open_id=%s", resolved_by)
+            return
+
         logger.info("handle_card_action hitl_id=%s decision=%r by=%s grant_scope=%s pattern=%s", hitl_id, decision, resolved_by, grant_scope, permission_pattern)
         try:
             from everstaff.protocols import HitlResolution
@@ -1274,6 +1278,15 @@ class LarkWsChannel:
             Card update to "Resolved" state is handled by on_resolved() via broadcast.
             """
             logger.info("sync_card_handler entered")
+
+            # Quick whitelist check using cached emails
+            if self._allowed_emails:
+                operator = getattr(getattr(data, "event", data), "operator", None)
+                op_open_id = getattr(operator, "open_id", "") if operator else ""
+                email_key = f"email:{op_open_id}"
+                cached_email = self._username_cache.get(email_key)
+                if cached_email is not None and cached_email not in self._allowed_emails:
+                    return {"toast": {"type": "error", "content": "No permission"}}
 
             # ── Check for agent selection action BEFORE HITL handling ──
             event = getattr(data, "event", data)
