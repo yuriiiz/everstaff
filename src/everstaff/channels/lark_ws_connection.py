@@ -19,7 +19,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from everstaff.channels.manager import ChannelManager
-    from everstaff.daemon.event_bus import EventBus
+    from everstaff.core.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -392,13 +392,32 @@ class LarkWsConnection:
 
         def _run_ws():
             import lark_oapi.ws.client as _ws_mod
-            ws_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(ws_loop)
-            _ws_mod.loop = ws_loop
-            try:
+            from lark_oapi.ws.exception import ClientException
+
+            async def _ws_main():
+                # Set the module-level loop while the loop is already running,
+                # so all SDK internals (create_task, etc.) and websockets
+                # Futures share the exact same running loop reference.
+                _ws_mod.loop = asyncio.get_running_loop()
                 client = self._build_ws_client(loop)
                 logger.info("WS connection started app=%s", self._app_id)
-                client.start()
+                try:
+                    await client._connect()
+                except ClientException:
+                    raise
+                except Exception:
+                    await client._disconnect()
+                    if client._auto_reconnect:
+                        await client._reconnect()
+                    else:
+                        raise
+                asyncio.get_running_loop().create_task(client._ping_loop())
+                # Keep the loop alive (replaces _select in SDK).
+                while True:
+                    await asyncio.sleep(3600)
+
+            try:
+                asyncio.run(_ws_main())
             except Exception as exc:
                 logger.error("WS thread failed app=%s err=%s", self._app_id, exc, exc_info=True)
 
