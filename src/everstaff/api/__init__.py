@@ -469,6 +469,8 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         from everstaff.api.sessions import _resume_session_task, _extract_broadcast_fn
 
         session_id = str(uuid4())
+        chat_id = source_info.get("chat_id", "")
+
         if _session_index:
             from everstaff.session.index import IndexEntry
             _now = datetime.now(timezone.utc).isoformat()
@@ -478,16 +480,53 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 created_at=_now, updated_at=_now,
             ))
 
-        _asyncio.create_task(_resume_session_task(
-            session_id, agent_name, user_input, config,
-            broadcast_fn=_extract_broadcast_fn(channel_manager),
-            channel_manager=channel_manager,
-            mcp_pool=mcp_pool,
-            session_index=_session_index,
-            executor_manager=getattr(app.state, 'executor_manager', None),
-            hitl_router=hitl_router,
-        ))
+        async def _run_and_deliver():
+            """Run session and deliver result back to Lark chat."""
+            try:
+                await _resume_session_task(
+                    session_id, agent_name, user_input, config,
+                    broadcast_fn=_extract_broadcast_fn(channel_manager),
+                    channel_manager=channel_manager,
+                    mcp_pool=mcp_pool,
+                    session_index=_session_index,
+                    executor_manager=getattr(app.state, 'executor_manager', None),
+                    hitl_router=hitl_router,
+                )
+            except Exception:
+                logger.exception("channel session failed session=%s", session_id[:8])
+
+            # Deliver result back to source chat
+            if chat_id:
+                try:
+                    result = _read_session_result(session_id)
+                    if result:
+                        # Find the message handler for this source
+                        for h in getattr(app.state, 'message_handlers', []):
+                            await h.deliver_result(session_id, chat_id, result)
+                            break  # deliver via first handler (they share the same adapter pool)
+                except Exception as exc:
+                    logger.warning("result delivery failed session=%s err=%s", session_id[:8], exc)
+
+        _asyncio.create_task(_run_and_deliver())
         return session_id
+
+    def _read_session_result(session_id: str) -> str:
+        """Read the last assistant message from a completed session."""
+        import json as _json
+        sessions_dir = Path(config.sessions_dir).expanduser().resolve()
+        from everstaff.session.index import SessionIndex
+        meta_path = sessions_dir / SessionIndex.session_relpath(session_id, session_id)
+        if not meta_path.exists():
+            return ""
+        try:
+            data = _json.loads(meta_path.read_text())
+            msgs = data.get("messages", [])
+            for m in reversed(msgs):
+                if m.get("role") == "assistant" and m.get("content"):
+                    return m["content"]
+        except Exception:
+            pass
+        return ""
 
     # Create LarkMessageHandler instances for each connection
     from everstaff.channels.lark_adapter import LarkChannelAdapter
