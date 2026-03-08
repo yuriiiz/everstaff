@@ -47,9 +47,7 @@ def _safe_filename(app_id: str, user_open_id: str) -> str:
 class FileTokenStore:
     """File-based token store. Tokens stored as JSON in a restricted directory."""
 
-    def __init__(self, base_dir: Path | None = None) -> None:
-        if base_dir is None:
-            base_dir = Path.home() / ".everstaff" / "feishu-tokens"
+    def __init__(self, base_dir: Path) -> None:
         self._dir = Path(base_dir)
 
     async def get(self, app_id: str, user_open_id: str) -> StoredToken | None:

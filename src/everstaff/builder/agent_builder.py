@@ -424,6 +424,17 @@ class AgentBuilder:
                         auth_handler = FeishuAuthHandler(ch)
                         break
 
+            # Resolve Feishu open_id from trigger payload (set by LarkWsChannel
+            # message handler when a Feishu user sends a message to the bot).
+            feishu_open_id = ""
+            if self._trigger is not None:
+                feishu_open_id = self._trigger.payload.get("sender_open_id", "")
+
+            from everstaff.feishu.token_store import FileTokenStore
+            token_store = FileTokenStore(
+                base_dir=Path(self._env.config.sessions_dir).expanduser() / "feishu-tokens"
+            )
+
             from everstaff.feishu.tools.registry import create_feishu_tools
             tools = create_feishu_tools(
                 app_id=ch_cfg.app_id,
@@ -431,6 +442,8 @@ class AgentBuilder:
                 domain=ch_cfg.domain,
                 categories=ch_cfg.feishu_tools,
                 auth_handler=auth_handler,
+                user_open_id=feishu_open_id,
+                token_store=token_store,
             )
             for t in tools:
                 reg.register_native(t)

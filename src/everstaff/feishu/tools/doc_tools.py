@@ -8,17 +8,19 @@ from everstaff.tools.native import tool
 logger = logging.getLogger(__name__)
 
 
-def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None):
-    """Create Feishu doc NativeTools bound to a specific app."""
+def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None, user_open_id: str = "", token_store=None):
+    """Create Feishu doc NativeTools bound to a specific app.
+
+    ``user_open_id`` is captured in closures so the LLM never needs to supply it.
+    """
     from everstaff.feishu.mcp_proxy import call_feishu_mcp
     from everstaff.feishu.uat_client import call_with_uat
-    from everstaff.feishu.token_store import FileTokenStore
     from everstaff.feishu.errors import UserAuthRequiredError
 
-    store = FileTokenStore()
+    store = token_store
 
     @tool(name="feishu_fetch_doc", description="获取飞书云文档内容，返回 Markdown 格式。")
-    async def feishu_fetch_doc(doc_id: str, user_open_id: str) -> str:
+    async def feishu_fetch_doc(doc_id: str) -> str:
         """Fetch a Feishu document's content as markdown."""
         async def _call(uat: str) -> str:
             result = await call_feishu_mcp(tool_name="fetch-doc", args={"doc_id": doc_id}, uat=uat)
@@ -45,7 +47,7 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
             return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     @tool(name="feishu_create_doc", description="创建飞书云文档。")
-    async def feishu_create_doc(title: str, content: str, user_open_id: str, folder_token: str = "") -> str:
+    async def feishu_create_doc(title: str, content: str, folder_token: str = "") -> str:
         """Create a new Feishu document."""
         async def _call(uat: str) -> str:
             args = {"title": title, "content": content}
@@ -72,7 +74,7 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
             return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     @tool(name="feishu_update_doc", description="更新飞书云文档内容。")
-    async def feishu_update_doc(doc_id: str, content: str, user_open_id: str) -> str:
+    async def feishu_update_doc(doc_id: str, content: str) -> str:
         """Update a Feishu document's content."""
         async def _call(uat: str) -> str:
             result = await call_feishu_mcp(

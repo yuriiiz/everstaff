@@ -52,7 +52,7 @@ async def handle_auth_error(
         dict with status info.
     """
     if token_store is None:
-        token_store = FileTokenStore()
+        raise ValueError("token_store is required")
 
     scope = " ".join(err.required_scopes)
 

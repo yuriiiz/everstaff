@@ -8,19 +8,21 @@ from everstaff.tools.native import tool
 logger = logging.getLogger(__name__)
 
 
-def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None):
-    """Create Feishu calendar NativeTools."""
+def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None, user_open_id: str = "", token_store=None):
+    """Create Feishu calendar NativeTools.
+
+    ``user_open_id`` is captured in closures so the LLM never needs to supply it.
+    """
     from everstaff.feishu.uat_client import call_with_uat
-    from everstaff.feishu.token_store import FileTokenStore
     from everstaff.feishu.errors import UserAuthRequiredError
     import httpx
 
-    store = FileTokenStore()
+    store = token_store
     api_base = "https://open.feishu.cn" if domain != "lark" else "https://open.larksuite.com"
 
     @tool(name="feishu_create_event", description="在飞书日历上创建日程。")
     async def feishu_create_event(
-        summary: str, start_time: str, end_time: str, user_open_id: str,
+        summary: str, start_time: str, end_time: str,
         description: str = "", attendees: str = "",
     ) -> str:
         """Create a calendar event.
@@ -29,7 +31,6 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
             summary: Event title.
             start_time: Unix timestamp string (seconds since epoch).
             end_time: Unix timestamp string (seconds since epoch).
-            user_open_id: User's open_id.
             description: Optional event description.
             attendees: Comma-separated open_ids of attendees.
         """
@@ -74,12 +75,11 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
 
     @tool(name="feishu_list_events", description="查询飞书日历日程列表。")
     async def feishu_list_events(
-        user_open_id: str, start_time: str = "", end_time: str = "",
+        start_time: str = "", end_time: str = "",
     ) -> str:
         """List calendar events.
 
         Args:
-            user_open_id: User's open_id.
             start_time: Optional Unix timestamp string (seconds since epoch) for start filter.
             end_time: Optional Unix timestamp string (seconds since epoch) for end filter.
         """
@@ -117,12 +117,11 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
 
     @tool(name="feishu_freebusy", description="查询飞书用户忙闲状态。")
     async def feishu_freebusy(
-        user_open_id: str, start_time: str, end_time: str,
+        start_time: str, end_time: str,
     ) -> str:
         """Query free/busy status for a time range.
 
         Args:
-            user_open_id: User's open_id.
             start_time: Unix timestamp string (seconds since epoch).
             end_time: Unix timestamp string (seconds since epoch).
         """

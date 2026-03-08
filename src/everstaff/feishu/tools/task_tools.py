@@ -8,25 +8,26 @@ from everstaff.tools.native import tool
 logger = logging.getLogger(__name__)
 
 
-def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None):
-    """Create Feishu task NativeTools."""
+def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None, user_open_id: str = "", token_store=None):
+    """Create Feishu task NativeTools.
+
+    ``user_open_id`` is captured in closures so the LLM never needs to supply it.
+    """
     from everstaff.feishu.uat_client import call_with_uat
-    from everstaff.feishu.token_store import FileTokenStore
     from everstaff.feishu.errors import UserAuthRequiredError
     import httpx
 
-    store = FileTokenStore()
+    store = token_store
     api_base = "https://open.feishu.cn" if domain != "lark" else "https://open.larksuite.com"
 
     @tool(name="feishu_create_task", description="创建飞书任务。")
     async def feishu_create_task(
-        summary: str, user_open_id: str, due: str = "", description: str = "",
+        summary: str, due: str = "", description: str = "",
     ) -> str:
         """Create a Feishu task.
 
         Args:
             summary: Task title.
-            user_open_id: User's open_id.
             due: Optional due date (ISO 8601).
             description: Optional task description.
         """
@@ -63,12 +64,8 @@ def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu",
             return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     @tool(name="feishu_list_tasks", description="查询飞书任务列表。")
-    async def feishu_list_tasks(user_open_id: str) -> str:
-        """List user's tasks.
-
-        Args:
-            user_open_id: User's open_id.
-        """
+    async def feishu_list_tasks() -> str:
+        """List user's tasks."""
         async def _call(uat: str) -> str:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(

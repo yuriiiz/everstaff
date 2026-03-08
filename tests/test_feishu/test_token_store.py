@@ -66,6 +66,11 @@ async def test_file_store_get_missing(tmp_path: Path):
     assert await store.get("nope", "nope") is None
 
 
+def test_file_store_requires_base_dir():
+    with pytest.raises(TypeError):
+        FileTokenStore()
+
+
 @pytest.mark.asyncio
 async def test_file_store_remove(tmp_path: Path):
     store = FileTokenStore(base_dir=tmp_path)
