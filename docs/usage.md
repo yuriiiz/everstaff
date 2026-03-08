@@ -86,11 +86,14 @@ tracers:
 
 # Lark channel (optional):
 # channels:
-#   - type: lark_ws
+#   lark-ws-main:
+#     type: lark_ws
 #     app_id: "cli_xxx"
 #     app_secret: "xxx"
 #     chat_id: "oc_xxx"
 #     bot_name: "MyAgent"
+#     feishu_tools: ["im", "docs", "calendar", "tasks"]
+#     auto_allow_tools: ["*"]
 ```
 
 ---

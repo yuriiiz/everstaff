@@ -138,6 +138,17 @@ daemon:
 # Supported types: "lark", "lark_ws", "webhook"
 # ---------------------------------------------------------------------------
 # channels:
+#   lark-ws-main:
+#     type: "lark_ws"
+#     app_id: "${{LARK_APP_ID}}"
+#     app_secret: "${{LARK_APP_SECRET}}"
+#     chat_id: "oc_xxxxx"
+#     bot_name: "Agent"
+#     domain: "feishu"
+#     web_url: "http://localhost:5173"
+#     feishu_tools: ["im", "docs", "calendar", "tasks"]  # Feishu user-identity tool categories
+#     auto_allow_tools: ["*"]    # ["*"] = allow all, or list specific tool names
+#
 #   lark-main:
 #     type: "lark"
 #     app_id: "${{LARK_APP_ID}}"
