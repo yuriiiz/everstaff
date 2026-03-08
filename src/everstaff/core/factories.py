@@ -69,27 +69,35 @@ def build_tracer(
     return CompositeTracer(backends)
 
 
-def build_channel_manager(config, file_store: "FileStore"):
-    """Construct a ChannelManager with all configured channels.
+def build_lark_connections(channel_configs: dict) -> dict:
+    """Build a {app_id: LarkWsConnection} registry, deduplicating by app_id."""
+    from everstaff.core.config import LarkWsChannelConfig
+    from everstaff.channels.lark_ws_connection import LarkWsConnection
 
-    Handles post-injection of channel_manager + config into LarkWsChannel
-    instances (circular dependency: channel needs its own manager).
-    """
+    connections: dict[str, LarkWsConnection] = {}
+    for name, cfg in channel_configs.items():
+        if not isinstance(cfg, LarkWsChannelConfig):
+            continue
+        if cfg.app_id not in connections:
+            connections[cfg.app_id] = LarkWsConnection(
+                app_id=cfg.app_id,
+                app_secret=cfg.app_secret,
+                domain=cfg.domain,
+            )
+    return connections
+
+
+def build_channel_manager(config, file_store: "FileStore"):
+    """Construct a ChannelManager with all configured channels."""
     from everstaff.channels.manager import ChannelManager
     cm = ChannelManager()
     for name, ch_cfg in (config.channels or {}).items():
         ch = build_channel(ch_cfg, file_store)
         cm.register(ch)
-    # Post-inject into LarkWsChannel instances
-    from everstaff.channels.lark_ws import LarkWsChannel
-    for ch in cm._channels:
-        if isinstance(ch, LarkWsChannel):
-            ch._channel_manager = cm
-            ch._config = config
     return cm
 
 
-def build_channel(cfg: "ChannelConfig", file_store: "FileStore") -> "HitlChannel":
+def build_channel(cfg: "ChannelConfig", file_store: "FileStore", lark_connections: dict | None = None) -> "HitlChannel":
     """Construct a HitlChannel from a typed ChannelConfig."""
     from everstaff.core.config import LarkChannelConfig, LarkWsChannelConfig, WebhookChannelConfig
     if isinstance(cfg, LarkChannelConfig):
@@ -111,6 +119,12 @@ def build_channel(cfg: "ChannelConfig", file_store: "FileStore") -> "HitlChannel
                 "lark-oapi is required for LarkWsChannel. "
                 "Install it with: pip install 'everstaff[lark]'"
             ) from None
+        conn = None
+        if lark_connections:
+            conn = lark_connections.get(cfg.app_id)
+        if conn is None:
+            from everstaff.channels.lark_ws_connection import LarkWsConnection
+            conn = LarkWsConnection(app_id=cfg.app_id, app_secret=cfg.app_secret, domain=cfg.domain)
         from everstaff.channels.lark_ws import LarkWsChannel
         return LarkWsChannel(
             app_id=cfg.app_id,
@@ -128,11 +142,11 @@ def build_channel(cfg: "ChannelConfig", file_store: "FileStore") -> "HitlChannel
     raise ValueError(f"Unknown channel type: {cfg.type!r}")
 
 
-def build_channel_registry(config, file_store: "FileStore") -> dict:
+def build_channel_registry(config, file_store: "FileStore", lark_connections: dict | None = None) -> dict:
     """Return {name: HitlChannel} for all configured named channels."""
     registry = {}
     for name, ch_cfg in (config.channels or {}).items():
-        registry[name] = build_channel(ch_cfg, file_store)
+        registry[name] = build_channel(ch_cfg, file_store, lark_connections=lark_connections)
     return registry
 
 
@@ -142,17 +156,10 @@ def build_channel_manager_from_registry(registry: dict, config) -> "ChannelManag
     Unlike build_channel_manager(), this function reuses the channel instances
     already created in the registry so that both the ChannelManager and the
     channel_registry dict point to the same objects.  This ensures channels are
-    started/stopped exactly once and that LarkWsChannel post-injection reaches
-    the same instances that are looked up by name at runtime.
+    started/stopped exactly once.
     """
     from everstaff.channels.manager import ChannelManager
     cm = ChannelManager()
     for ch in registry.values():
         cm.register(ch)
-    # Post-inject into LarkWsChannel instances
-    from everstaff.channels.lark_ws import LarkWsChannel
-    for ch in cm._channels:
-        if isinstance(ch, LarkWsChannel):
-            ch._channel_manager = cm
-            ch._config = config
     return cm

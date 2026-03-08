@@ -35,6 +35,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         await cm.start_all()
         logger.info("all channels started count=%d", len(cm._channels))
 
+        # Start LarkWs connections
+        for conn in getattr(app.state, 'lark_connections', {}).values():
+            await conn.start()
+        logger.info("LarkWs connections started count=%d", len(getattr(app.state, 'lark_connections', {})))
+
         # Startup: optionally start daemon
         if config.daemon.enabled:
             logger.info("daemon enabled, initializing AgentDaemon agents_dir=%s", config.agents_dir)
@@ -256,6 +261,10 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             await mcp_pool.close()
             logger.info("MCP connection pool closed")
 
+        # Shutdown: stop LarkWs connections
+        for conn in getattr(app.state, 'lark_connections', {}).values():
+            await conn.stop()
+
         # Shutdown: stop all channels
         await cm.stop_all()
         logger.info("all channels stopped")
@@ -270,7 +279,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.state.mcp_pool = mcp_pool
 
     # Build and attach FileStore to app.state before registering routers
-    from everstaff.core.factories import build_file_store, build_channel_manager_from_registry, build_channel_registry
+    from everstaff.core.factories import build_file_store, build_channel_manager_from_registry, build_channel_registry, build_lark_connections
     _sessions_path = sessions_dir or config.sessions_dir
     _file_store = build_file_store(config.storage, _sessions_path)
     app.state.file_store = _file_store
@@ -338,9 +347,18 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     # LarkWsChannel post-injection reaches the instances looked up at runtime.
     from everstaff.channels.websocket import WebSocketChannel
 
-    channel_registry = build_channel_registry(config, _file_store)
+    # Build LarkWs connection registry (one WS per app_id)
+    lark_connections = build_lark_connections(config.channels or {})
+
+    channel_registry = build_channel_registry(config, _file_store, lark_connections=lark_connections)
     channel_manager = build_channel_manager_from_registry(channel_registry, config)
+
+    # Inject channel_manager into connections (for HITL card action handling)
+    for conn in lark_connections.values():
+        conn._channel_manager = channel_manager
+
     app.state.channel_registry = channel_registry
+    app.state.lark_connections = lark_connections
 
     # Extract lark channels for webhook token verification
     from everstaff.channels.lark import LarkChannel as _LarkChannel
