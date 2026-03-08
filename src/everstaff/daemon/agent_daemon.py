@@ -65,6 +65,7 @@ class AgentDaemon:
         sessions_dir: str | Path | None = None,
         session_index: Any = None,
         app: Any = None,
+        lark_connections: dict | None = None,
     ) -> None:
         self._agents_dir = Path(agents_dir)
         self._state_store = daemon_state_store
@@ -77,6 +78,7 @@ class AgentDaemon:
         self._sessions_dir = sessions_dir
         self._session_index = session_index
         self._app = app
+        self._lark_connections = lark_connections or {}
         self._running = False
         self._watcher_task: asyncio.Task | None = None
         self._reload_debounce: float = 1.0  # seconds
@@ -173,6 +175,19 @@ class AgentDaemon:
         # Subscribe to EventBus
         self._event_bus.subscribe(name)
 
+        # Register chat_id → agent routes on LarkWsConnections
+        for ref in spec.hitl_channels:
+            channel = self._channel_registry.get(ref.ref)
+            if channel is None:
+                continue
+            overrides = ref.overrides()
+            chat_id = overrides.get("chat_id") or getattr(channel, "_chat_id", "")
+            if chat_id:
+                app_id = getattr(channel, "_app_id", "")
+                conn = self._lark_connections.get(app_id)
+                if conn:
+                    conn.register_chat_route(chat_id, name)
+
         # Create and register sensors for this agent's triggers
         cron_triggers = [
             t for t in spec.autonomy.triggers
@@ -265,6 +280,11 @@ class AgentDaemon:
         logger.info("daemon starting")
         logger.info("agents_dir=%s", self._agents_dir)
         self._running = True
+
+        # Inject EventBus into LarkWs connections
+        for conn in self._lark_connections.values():
+            conn._event_bus = self._event_bus
+
         agents = self._discover_autonomous_agents()
         for name, spec in agents.items():
             try:

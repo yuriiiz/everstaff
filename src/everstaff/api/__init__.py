@@ -232,6 +232,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     sessions_dir=config.sessions_dir,
                     session_index=getattr(app.state, 'session_index', None),
                     mem0_client=app.state.mem0_client,
+                    lark_connections=getattr(app.state, 'lark_connections', {}),
                 )
                 await daemon.start()
                 app.state.daemon = daemon
