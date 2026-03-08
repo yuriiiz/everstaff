@@ -1023,6 +1023,60 @@ class LarkWsChannel:
         else:
             logger.debug("ignoring message chat_type=%s mentioned=%s", chat_type, is_mentioned)
 
+    async def _handle_agent_selected(self, open_id: str, agent_name: str, agent_uuid: str) -> None:
+        """Handle agent selection from the card callback."""
+        import uuid as _uuid
+
+        pending = self._pending_agent_selection.pop(open_id, None)
+        if not pending:
+            logger.warning("handle_agent_selected no pending context for open_id=%s", open_id)
+            return
+
+        # Delete the selection card
+        selection_mid = pending.get("selection_message_id")
+        if selection_mid:
+            try:
+                token = await self._get_access_token()
+                await self._delete_message(token, selection_mid)
+            except Exception as exc:
+                logger.warning("handle_agent_selected delete card failed err=%s", exc)
+
+        chat_id = pending["chat_id"]
+        chat_type = pending.get("chat_type", "p2p")
+        text = pending.get("text", "")
+        message_id = pending.get("message_id", "")
+        parent_id = pending.get("parent_id", "")
+
+        # Create new session
+        session_id = str(_uuid.uuid4())
+
+        # Save conversation state
+        if chat_type == "p2p":
+            conv_key = f"private/{open_id}"
+        else:
+            conv_key = f"group/{chat_id}"
+
+        await self._save_conv_state(conv_key, {
+            "session_id": session_id,
+            "agent_name": agent_name,
+            "agent_uuid": agent_uuid,
+            "open_id": open_id,
+            "chat_id": chat_id,
+            "chat_type": chat_type,
+        })
+
+        # Send the pending message to the new session
+        reply_to = (parent_id or message_id) if chat_type == "group" else None
+        await self._send_to_session(
+            session_id=session_id,
+            agent_name=agent_name,
+            agent_uuid=agent_uuid,
+            text=text,
+            message_id=message_id,
+            chat_id=chat_id,
+            reply_to=reply_to,
+        )
+
     # ── WS client setup ─────────────────────────────────────────
 
     def _build_ws_client(self, loop: asyncio.AbstractEventLoop):
@@ -1108,6 +1162,67 @@ class LarkWsChannel:
             Card update to "Resolved" state is handled by on_resolved() via broadcast.
             """
             logger.info("sync_card_handler entered")
+
+            # ── Check for agent selection action BEFORE HITL handling ──
+            event = getattr(data, "event", data)
+            action = getattr(event, "action", None)
+            if action is not None:
+                raw_value = getattr(action, "value", None)
+                if isinstance(raw_value, str):
+                    try:
+                        value = json.loads(raw_value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = {}
+                elif isinstance(raw_value, dict):
+                    value = raw_value
+                else:
+                    value = {}
+
+                if value.get("action") == "select_agent":
+                    requester_open_id = value.get("requester", "")
+                    operator = getattr(event, "operator", None)
+                    clicker_open_id = getattr(operator, "open_id", "") if operator else ""
+
+                    if requester_open_id and clicker_open_id and requester_open_id != clicker_open_id:
+                        logger.warning("agent selection requester mismatch requester=%s clicker=%s", requester_open_id, clicker_open_id)
+                        return {"toast": {"type": "info", "content": "Only the requester can select an agent."}}
+
+                    # Extract agent choice from form_value
+                    raw_form = getattr(action, "form_value", None)
+                    if isinstance(raw_form, str):
+                        try:
+                            form_dict = json.loads(raw_form)
+                        except (json.JSONDecodeError, TypeError):
+                            form_dict = {}
+                    elif isinstance(raw_form, dict):
+                        form_dict = raw_form
+                    else:
+                        form_dict = {}
+
+                    agent_choice_raw = form_dict.get("agent_choice", "")
+                    if isinstance(agent_choice_raw, str):
+                        try:
+                            agent_choice = json.loads(agent_choice_raw)
+                        except (json.JSONDecodeError, TypeError):
+                            agent_choice = {}
+                    elif isinstance(agent_choice_raw, dict):
+                        agent_choice = agent_choice_raw
+                    else:
+                        agent_choice = {}
+
+                    agent_name = agent_choice.get("agent_name", "")
+                    agent_uuid = agent_choice.get("agent_uuid", "")
+                    logger.info("sync_card_handler agent selection agent_name=%s agent_uuid=%s open_id=%s", agent_name, agent_uuid, requester_open_id or clicker_open_id)
+
+                    if agent_name and self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_agent_selected(requester_open_id or clicker_open_id, agent_name, agent_uuid),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": f"Starting {agent_name}..."}}
+
+            # ── HITL handling (existing logic) ──
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
             if not hitl_id:
                 logger.warning("sync_card_handler parse failed, returning empty response")
