@@ -691,7 +691,7 @@ class LarkWsChannel:
                 token = await self._get_access_token()
                 await self._send_card(token, self._build_notify_card(request))
             except Exception as exc:
-                logger.error("send_request notify failed hitl_id=%s err=%s", request.hitl_id, exc)
+                logger.error("send_request notify failed hitl_id=%s err=%s", request.hitl_id, exc, exc_info=True)
             return
 
         self._hitl_requests[request.hitl_id] = request
@@ -711,7 +711,7 @@ class LarkWsChannel:
             else:
                 logger.warning("no message_id for hitl_id=%s", request.hitl_id)
         except Exception as exc:
-            logger.error("send_request failed hitl_id=%s err=%s", request.hitl_id, exc)
+            logger.error("send_request failed hitl_id=%s err=%s", request.hitl_id, exc, exc_info=True)
 
     async def on_resolved(self, hitl_id: str, resolution: "HitlResolution") -> None:
         logger.info("on_resolved hitl_id=%s decision=%s", hitl_id, resolution.decision)
@@ -748,8 +748,8 @@ class LarkWsChannel:
             if self._file_store is not None:
                 try:
                     await self._file_store.delete(f"hitl-lark-ws/{hitl_id}.json")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("on_resolved file_store cleanup failed hitl_id=%s err=%s", hitl_id, exc)
             self._hitl_message_ids.pop(hitl_id, None)
             self._hitl_requests.pop(hitl_id, None)
             self._hitl_session_ids.pop(hitl_id, None)
