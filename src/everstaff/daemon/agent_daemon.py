@@ -66,6 +66,7 @@ class AgentDaemon:
         session_index: Any = None,
         app: Any = None,
         lark_connections: dict | None = None,
+        event_bus: Any = None,
     ) -> None:
         self._agents_dir = Path(agents_dir)
         self._state_store = daemon_state_store
@@ -83,11 +84,11 @@ class AgentDaemon:
         self._watcher_task: asyncio.Task | None = None
         self._reload_debounce: float = 1.0  # seconds
 
-        from everstaff.daemon.event_bus import EventBus
+        from everstaff.core.event_bus import EventBus
         from everstaff.daemon.sensor_manager import SensorManager
         from everstaff.daemon.loop_manager import LoopManager
 
-        self._event_bus = EventBus()
+        self._event_bus = event_bus or EventBus()
         self._sensor_manager = SensorManager(self._event_bus)
         self._loop_manager = LoopManager()
 
@@ -280,10 +281,6 @@ class AgentDaemon:
         logger.info("daemon starting")
         logger.info("agents_dir=%s", self._agents_dir)
         self._running = True
-
-        # Inject EventBus into LarkWs connections
-        for conn in self._lark_connections.values():
-            conn._event_bus = self._event_bus
 
         agents = self._discover_autonomous_agents()
         for name, spec in agents.items():

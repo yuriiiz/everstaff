@@ -233,6 +233,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     session_index=getattr(app.state, 'session_index', None),
                     mem0_client=app.state.mem0_client,
                     lark_connections=getattr(app.state, 'lark_connections', {}),
+                    event_bus=event_bus,
                 )
                 await daemon.start()
                 app.state.daemon = daemon
@@ -342,6 +343,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         except Exception as _exc:
             logger.warning("failed to create shared Mem0Client err=%s", _exc, exc_info=True)
 
+    # Create shared EventBus — available to all entry layers (Channel, Daemon, etc.)
+    from everstaff.core.event_bus import EventBus
+    event_bus = EventBus()
+    app.state.event_bus = event_bus
+
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry
     # share the same channel instances — channels are started/stopped once and
@@ -354,9 +360,10 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     channel_registry = build_channel_registry(config, _file_store, lark_connections=lark_connections)
     channel_manager = build_channel_manager_from_registry(channel_registry, config)
 
-    # Inject channel_manager into connections (for HITL card action handling)
+    # Inject channel_manager and event_bus into connections
     for conn in lark_connections.values():
         conn._channel_manager = channel_manager
+        conn._event_bus = event_bus
 
     app.state.channel_registry = channel_registry
     app.state.lark_connections = lark_connections
