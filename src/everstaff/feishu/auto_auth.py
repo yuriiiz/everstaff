@@ -15,18 +15,10 @@ from typing import Any, Awaitable, Callable
 
 from everstaff.feishu.auth_cards import build_auth_card, build_auth_success_card, build_auth_failed_card
 from everstaff.feishu.device_flow import request_device_authorization, poll_device_token
+from everstaff.feishu.errors import UserAuthRequiredError
 from everstaff.feishu.token_store import FileTokenStore, StoredToken
 
 logger = logging.getLogger(__name__)
-
-
-class UserAuthRequiredError(Exception):
-    """Raised when a Feishu tool call requires user authorization."""
-    def __init__(self, user_open_id: str, required_scopes: list[str], app_id: str = "") -> None:
-        self.user_open_id = user_open_id
-        self.required_scopes = required_scopes
-        self.app_id = app_id
-        super().__init__(f"User {user_open_id} needs authorization for scopes: {required_scopes}")
 
 
 async def handle_auth_error(

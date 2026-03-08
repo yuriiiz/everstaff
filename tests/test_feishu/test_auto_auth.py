@@ -4,7 +4,8 @@ import json
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from everstaff.feishu.auto_auth import handle_auth_error, UserAuthRequiredError
+from everstaff.feishu.auto_auth import handle_auth_error
+from everstaff.feishu.errors import UserAuthRequiredError
 
 
 @pytest.mark.asyncio

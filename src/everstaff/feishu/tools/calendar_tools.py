@@ -1,13 +1,18 @@
-"""Feishu calendar tools — direct OAPI calls via lark-oapi SDK."""
+"""Feishu calendar tools -- direct OAPI calls via lark-oapi SDK."""
 from __future__ import annotations
+
+import logging
 
 from everstaff.tools.native import tool
 
+logger = logging.getLogger(__name__)
 
-def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feishu"):
+
+def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None):
     """Create Feishu calendar NativeTools."""
     from everstaff.feishu.uat_client import call_with_uat
     from everstaff.feishu.token_store import FileTokenStore
+    from everstaff.feishu.errors import UserAuthRequiredError
     import httpx
 
     store = FileTokenStore()
@@ -22,8 +27,8 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
 
         Args:
             summary: Event title.
-            start_time: ISO 8601 start time (e.g. 2026-03-10T14:00:00+08:00).
-            end_time: ISO 8601 end time.
+            start_time: Unix timestamp string (seconds since epoch).
+            end_time: Unix timestamp string (seconds since epoch).
             user_open_id: User's open_id.
             description: Optional event description.
             attendees: Comma-separated open_ids of attendees.
@@ -36,6 +41,11 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
             }
             if description:
                 body["description"] = description
+            if attendees:
+                body["attendees"] = [
+                    {"type": "user", "user_id": uid.strip()}
+                    for uid in attendees.split(",") if uid.strip()
+                ]
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     f"{api_base}/open-apis/calendar/v4/calendars/primary/events",
@@ -44,10 +54,23 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
                 )
             return resp.text
 
-        return await call_with_uat(
-            user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-            domain=domain, fn=_call, token_store=store,
-        )
+        try:
+            return await call_with_uat(
+                user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
+                domain=domain, fn=_call, token_store=store,
+            )
+        except UserAuthRequiredError as e:
+            if auth_handler is None:
+                raise
+            from everstaff.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or ["calendar:calendar"]
+            result = await handle_auth_error(
+                err=e, app_id=app_id, app_secret=app_secret, domain=domain,
+                send_card_fn=auth_handler.send_card,
+                update_card_fn=auth_handler.update_card,
+                token_store=store,
+            )
+            return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     @tool(name="feishu_list_events", description="查询飞书日历日程列表。")
     async def feishu_list_events(
@@ -57,8 +80,8 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
 
         Args:
             user_open_id: User's open_id.
-            start_time: Optional ISO 8601 start time filter.
-            end_time: Optional ISO 8601 end time filter.
+            start_time: Optional Unix timestamp string (seconds since epoch) for start filter.
+            end_time: Optional Unix timestamp string (seconds since epoch) for end filter.
         """
         async def _call(uat: str) -> str:
             params: dict = {}
@@ -74,10 +97,23 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
                 )
             return resp.text
 
-        return await call_with_uat(
-            user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-            domain=domain, fn=_call, token_store=store,
-        )
+        try:
+            return await call_with_uat(
+                user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
+                domain=domain, fn=_call, token_store=store,
+            )
+        except UserAuthRequiredError as e:
+            if auth_handler is None:
+                raise
+            from everstaff.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or ["calendar:calendar:readonly"]
+            result = await handle_auth_error(
+                err=e, app_id=app_id, app_secret=app_secret, domain=domain,
+                send_card_fn=auth_handler.send_card,
+                update_card_fn=auth_handler.update_card,
+                token_store=store,
+            )
+            return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     @tool(name="feishu_freebusy", description="查询飞书用户忙闲状态。")
     async def feishu_freebusy(
@@ -87,8 +123,8 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
 
         Args:
             user_open_id: User's open_id.
-            start_time: ISO 8601 start time.
-            end_time: ISO 8601 end time.
+            start_time: Unix timestamp string (seconds since epoch).
+            end_time: Unix timestamp string (seconds since epoch).
         """
         async def _call(uat: str) -> str:
             async with httpx.AsyncClient() as client:
@@ -99,9 +135,22 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
                 )
             return resp.text
 
-        return await call_with_uat(
-            user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-            domain=domain, fn=_call, token_store=store,
-        )
+        try:
+            return await call_with_uat(
+                user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
+                domain=domain, fn=_call, token_store=store,
+            )
+        except UserAuthRequiredError as e:
+            if auth_handler is None:
+                raise
+            from everstaff.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or ["calendar:calendar:readonly"]
+            result = await handle_auth_error(
+                err=e, app_id=app_id, app_secret=app_secret, domain=domain,
+                send_card_fn=auth_handler.send_card,
+                update_card_fn=auth_handler.update_card,
+                token_store=store,
+            )
+            return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
 
     return [feishu_create_event, feishu_list_events, feishu_freebusy]

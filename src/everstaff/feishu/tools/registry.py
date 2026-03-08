@@ -1,4 +1,4 @@
-"""Feishu tool registry — creates tool sets by category."""
+"""Feishu tool registry -- creates tool sets by category."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,6 +10,7 @@ def create_feishu_tools(
     app_secret: str,
     domain: str = "feishu",
     categories: list[str] | None = None,
+    auth_handler: Any = None,
 ) -> list[Any]:
     """Create Feishu NativeTools filtered by category.
 
@@ -21,14 +22,14 @@ def create_feishu_tools(
 
     if "docs" in all_categories:
         from everstaff.feishu.tools.doc_tools import make_feishu_doc_tools
-        tools.extend(make_feishu_doc_tools(app_id, app_secret, domain))
+        tools.extend(make_feishu_doc_tools(app_id, app_secret, domain, auth_handler=auth_handler))
 
     if "calendar" in all_categories:
         from everstaff.feishu.tools.calendar_tools import make_feishu_calendar_tools
-        tools.extend(make_feishu_calendar_tools(app_id, app_secret, domain))
+        tools.extend(make_feishu_calendar_tools(app_id, app_secret, domain, auth_handler=auth_handler))
 
     if "tasks" in all_categories:
         from everstaff.feishu.tools.task_tools import make_feishu_task_tools
-        tools.extend(make_feishu_task_tools(app_id, app_secret, domain))
+        tools.extend(make_feishu_task_tools(app_id, app_secret, domain, auth_handler=auth_handler))
 
     return tools

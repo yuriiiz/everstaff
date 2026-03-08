@@ -8,16 +8,13 @@ from typing import Any, Callable, Awaitable
 import httpx
 
 from everstaff.feishu.device_flow import resolve_oauth_endpoints
+from everstaff.feishu.errors import UserAuthRequiredError
 from everstaff.feishu.token_store import FileTokenStore, StoredToken, token_status
 
 logger = logging.getLogger(__name__)
 
-
-class NeedAuthorizationError(Exception):
-    """Raised when user needs to re-authorize (no valid token or refresh failed)."""
-    def __init__(self, user_open_id: str) -> None:
-        self.user_open_id = user_open_id
-        super().__init__(f"User {user_open_id} needs authorization")
+# Backward-compat alias
+NeedAuthorizationError = UserAuthRequiredError
 
 
 async def refresh_uat(

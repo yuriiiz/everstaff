@@ -3,7 +3,8 @@ import pytest
 import time
 from unittest.mock import AsyncMock, patch
 
-from everstaff.feishu.auto_auth import handle_auth_error, UserAuthRequiredError
+from everstaff.feishu.auto_auth import handle_auth_error
+from everstaff.feishu.errors import UserAuthRequiredError
 from everstaff.feishu.token_store import FileTokenStore, StoredToken
 from everstaff.feishu.uat_client import call_with_uat
 

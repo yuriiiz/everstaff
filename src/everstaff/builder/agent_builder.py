@@ -400,7 +400,43 @@ class AgentBuilder:
         if hitl_mode != "never":
             from everstaff.tools.hitl_tool import RequestHumanInputTool
             reg.register_native(RequestHumanInputTool(mode=hitl_mode))
+
+        # Register Feishu user-identity tools if configured on any Lark channel
+        self._register_feishu_tools(reg)
+
         return reg
+
+    def _register_feishu_tools(self, reg: DefaultToolRegistry) -> None:
+        """Register Feishu user-identity tools if any LarkWs channel has feishu_tools configured."""
+        from everstaff.core.config import LarkWsChannelConfig
+
+        for name, ch_cfg in (self._env.config.channels or {}).items():
+            if not isinstance(ch_cfg, LarkWsChannelConfig) or not ch_cfg.feishu_tools:
+                continue
+
+            # Find the matching channel instance for card sending
+            auth_handler = None
+            if self._env.channel_manager is not None:
+                from everstaff.channels.lark_ws import LarkWsChannel
+                for ch in self._env.channel_manager._channels:
+                    if isinstance(ch, LarkWsChannel) and ch._app_id == ch_cfg.app_id:
+                        from everstaff.feishu.auth_handler import FeishuAuthHandler
+                        auth_handler = FeishuAuthHandler(ch)
+                        break
+
+            from everstaff.feishu.tools.registry import create_feishu_tools
+            tools = create_feishu_tools(
+                app_id=ch_cfg.app_id,
+                app_secret=ch_cfg.app_secret,
+                domain=ch_cfg.domain,
+                categories=ch_cfg.feishu_tools,
+                auth_handler=auth_handler,
+            )
+            for t in tools:
+                reg.register_native(t)
+
+            logger.info("registered %d feishu tools from channel %s: %s", len(tools), name, ch_cfg.feishu_tools)
+            break  # Only register once (first channel with feishu_tools)
 
     def _split_framework_tools(self, tool_names: list[str]) -> tuple[list, list[str]]:
         """Separate framework tools from regular tools.
