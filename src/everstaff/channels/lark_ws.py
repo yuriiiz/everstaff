@@ -52,6 +52,7 @@ class LarkWsChannel:
         channel_manager: "ChannelManager | None" = None,
         domain: str = "feishu",
         web_url: str = "",
+        allowed_emails: list[str] | None = None,
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
@@ -67,6 +68,7 @@ class LarkWsChannel:
         self._hitl_requests: dict[str, "HitlRequest"] = {}
         self._hitl_session_ids: dict[str, str] = {}   # hitl_id -> session_id
         self._username_cache: dict[str, str] = {}     # open_id -> display name
+        self._allowed_emails: set[str] = set(allowed_emails) if allowed_emails else set()
         self._started: bool = False
         self._ws_thread: threading.Thread | None = None
         self._app_loop: asyncio.AbstractEventLoop | None = None
@@ -230,6 +232,26 @@ class LarkWsChannel:
             logger.warning("resolve_email failed open_id=%s err=%s", open_id, exc)
             self._username_cache[cache_key] = ""
             return ""
+
+    async def _check_whitelist(self, open_id: str, message_id: str | None = None) -> bool:
+        """Check if user is in the allowed_emails whitelist.
+
+        Returns True if whitelist is empty (disabled) or email is allowed.
+        Adds THUMBSDOWN reaction if message_id is provided and user is denied.
+        """
+        if not self._allowed_emails:
+            return True
+        email = await self._resolve_email(open_id)
+        if email in self._allowed_emails:
+            return True
+        logger.warning("whitelist denied open_id=%s email=%s", open_id, email)
+        if message_id:
+            try:
+                token = await self._get_access_token()
+                await self._add_reaction(token, message_id, emoji_type="THUMBSDOWN")
+            except Exception as exc:
+                logger.warning("whitelist reaction failed err=%s", exc)
+        return False
 
     async def _create_chat_group(self, token: str, name: str, owner_open_id: str) -> str:
         """Create a new Lark group chat. Returns the chat_id."""

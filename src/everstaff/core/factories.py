@@ -120,6 +120,7 @@ def build_channel(cfg: "ChannelConfig", file_store: "FileStore") -> "HitlChannel
             file_store=file_store,
             domain=cfg.domain,
             web_url=cfg.web_url,
+            allowed_emails=cfg.allowed_emails,
         )
     elif isinstance(cfg, WebhookChannelConfig):
         from everstaff.channels.http_webhook import HttpWebhookChannel
