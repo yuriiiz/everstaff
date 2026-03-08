@@ -40,6 +40,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             await conn.start()
         logger.info("LarkWs connections started count=%d", len(getattr(app.state, 'lark_connections', {})))
 
+        # Start LarkMessageHandlers (channel entry layer)
+        for handler in getattr(app.state, 'message_handlers', []):
+            await handler.start()
+        logger.info("LarkMessageHandlers started count=%d", len(getattr(app.state, 'message_handlers', [])))
+
         # Startup: optionally start daemon
         if config.daemon.enabled:
             logger.info("daemon enabled, initializing AgentDaemon agents_dir=%s", config.agents_dir)
@@ -209,6 +214,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                         sessions_dir=config.sessions_dir,
                         config=config,
                         channel_manager=scoped_cm,
+                        hitl_router=hitl_router,
                         mcp_pool=app.state.mcp_pool,
                         session_index=getattr(app.state, 'session_index', None),
                     )
@@ -262,6 +268,10 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         if mcp_pool is not None:
             await mcp_pool.close()
             logger.info("MCP connection pool closed")
+
+        # Shutdown: stop LarkMessageHandlers
+        for handler in getattr(app.state, 'message_handlers', []):
+            await handler.stop()
 
         # Shutdown: stop LarkWs connections
         for conn in getattr(app.state, 'lark_connections', {}).values():
@@ -348,6 +358,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     event_bus = EventBus()
     app.state.event_bus = event_bus
 
+    # Create shared HitlRouter — source-first HITL routing with broadcast fallback
+    from everstaff.core.hitl_router import HitlRouter
+    hitl_router = HitlRouter()
+    app.state.hitl_router = hitl_router
+
     # Set up ChannelManager with all configured channels.
     # Build the registry first so both the ChannelManager and channel_registry
     # share the same channel instances — channels are started/stopped once and
@@ -433,6 +448,64 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
         await _resolve_hitl_internal(app, hitl_id, decision, comment, grant_scope=grant_scope, permission_pattern=permission_pattern)
 
     channel_manager._on_resolve = _on_resolve
+
+    # Wire HitlRouter: set channel_manager as fallback
+    hitl_router.channel_manager = channel_manager
+
+    # Register Lark HITL handler on HitlRouter
+    async def _lark_hitl_handler(session_id, request, context):
+        chat_id = context.get("chat_id", "")
+        if not chat_id:
+            raise ValueError("no chat_id in lark source context")
+        await channel_manager.broadcast(session_id, request)
+
+    hitl_router.register_handler("lark", _lark_hitl_handler)
+
+    # Session creation helper for channel entry (LarkMessageHandler)
+    import asyncio as _asyncio
+
+    async def _create_session_from_channel(agent_name: str, user_input: str, source_info: dict) -> str:
+        from uuid import uuid4
+        from everstaff.api.sessions import _resume_session_task, _extract_broadcast_fn
+
+        session_id = str(uuid4())
+        if _session_index:
+            from everstaff.session.index import IndexEntry
+            _now = datetime.now(timezone.utc).isoformat()
+            _session_index.upsert(IndexEntry(
+                id=session_id, root=session_id, parent=None,
+                agent=agent_name, status="running",
+                created_at=_now, updated_at=_now,
+            ))
+
+        _asyncio.create_task(_resume_session_task(
+            session_id, agent_name, user_input, config,
+            broadcast_fn=_extract_broadcast_fn(channel_manager),
+            channel_manager=channel_manager,
+            mcp_pool=mcp_pool,
+            session_index=_session_index,
+            executor_manager=getattr(app.state, 'executor_manager', None),
+            hitl_router=hitl_router,
+        ))
+        return session_id
+
+    # Create LarkMessageHandler instances for each connection
+    from everstaff.channels.lark_adapter import LarkChannelAdapter
+    from everstaff.channels.lark_message_handler import LarkMessageHandler
+
+    _message_handlers: list[LarkMessageHandler] = []
+    for _app_id, _conn in lark_connections.items():
+        _adapter = LarkChannelAdapter(_conn)
+        _msg_handler = LarkMessageHandler(
+            adapter=_adapter,
+            event_bus=event_bus,
+            agents_dir=config.agents_dir,
+            session_create_fn=_create_session_from_channel,
+            hitl_router=hitl_router,
+        )
+        _conn._message_handler = _msg_handler
+        _message_handlers.append(_msg_handler)
+    app.state.message_handlers = _message_handlers
 
     app.add_middleware(
         CORSMiddleware,

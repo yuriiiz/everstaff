@@ -65,6 +65,7 @@ async def _resume_session_task(
     session_index=None,  # shared SessionIndex for index updates
     executor_manager=None,  # sandbox ExecutorManager
     user_id: str | None = None,
+    hitl_router=None,  # HitlRouter for source-aware HITL routing
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -135,6 +136,7 @@ async def _resume_session_task(
         sessions_dir=str(sessions_dir),
         config=config,
         channel_manager=channel_manager,
+        hitl_router=hitl_router,
         mcp_pool=mcp_pool,
         session_index=session_index,
     )
@@ -740,6 +742,7 @@ def make_router(config) -> APIRouter:
         mcp_pool = getattr(request.app.state, "mcp_pool", None)
         executor_mgr = getattr(request.app.state, "executor_manager", None)
         user_id = _resolve_user_id(request)
+        hitl_router = getattr(request.app.state, "hitl_router", None)
         background_tasks.add_task(
             _resume_session_task, session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
@@ -749,6 +752,7 @@ def make_router(config) -> APIRouter:
             session_index=index,
             executor_manager=executor_mgr,
             user_id=user_id,
+            hitl_router=hitl_router,
         )
         return {"session_id": session_id, "status": "running"}
 
@@ -1029,6 +1033,7 @@ def make_router(config) -> APIRouter:
         executor_mgr = getattr(request.app.state, "executor_manager", None)
         user_id = _resolve_user_id(request)
 
+        hitl_router = getattr(request.app.state, "hitl_router", None)
         # For cancelled/failed/interrupted: resume with optional user input
         if current_status in ("cancelled", "failed", "interrupted"):
             user_input = (body.user_input if body else "") or ""
@@ -1042,6 +1047,7 @@ def make_router(config) -> APIRouter:
                 session_index=_idx,
                 executor_manager=executor_mgr,
                 user_id=user_id,
+                hitl_router=hitl_router,
             )
             return {"status": "resuming", "session_id": session_id}
 
@@ -1064,6 +1070,7 @@ def make_router(config) -> APIRouter:
             session_index=_idx,
             executor_manager=executor_mgr,
             user_id=user_id,
+            hitl_router=hitl_router,
         )
         return {"status": "resuming", "session_id": session_id}
 
