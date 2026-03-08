@@ -200,6 +200,17 @@ async def _resume_session_task(
 
     # --- Sandbox path ---
     if config.sandbox.enabled and executor_manager is not None:
+        # Process HITL resolutions BEFORE spawning sandbox so permission
+        # grants are written to session.json and rejection messages are
+        # injected.  The sandbox will pick up extra_permissions via
+        # AgentBuilder._load_session_grants().
+        if not decision_text:
+            await _process_hitl_for_sandbox(
+                session_id, sessions_dir, root_session_id,
+                agents_dir, agent_uuid, agent_name,
+                agent_path=agent_path,
+            )
+
         # Build a session-specific tracer for the IPC handler so trace
         # events forwarded from the sandbox subprocess are persisted.
         from everstaff.core.factories import build_file_store as _build_fs, build_tracer as _build_tr
@@ -350,12 +361,12 @@ async def _resume_session_task(
                                 dtxt = _format_decision_message(req, resp.get("decision", ""), resp.get("comment"))
                                 messages.append(Message(role="tool", content=dtxt, tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))
 
-                        await mem.save(session_id, messages)
+                        # Merge with existing session grants (additive)
+                        merged_perms = None
                         if extra_perms:
-                            # Merge with existing session grants (additive)
                             existing = session_raw.get("extra_permissions", [])
-                            merged = list(dict.fromkeys(existing + extra_perms))
-                            await mem.save(session_id, messages, extra_permissions=merged)
+                            merged_perms = list(dict.fromkeys(existing + extra_perms))
+                        await mem.save(session_id, messages, extra_permissions=merged_perms)
                 except Exception as read_err:
                     logger.warning("failed to read session.json for HITL resume session=%s err=%s",
                                    _sid, read_err)
@@ -392,6 +403,111 @@ async def _resume_session_task(
     finally:
         if ctx is not None:
             await ctx.aclose()
+
+
+async def _process_hitl_for_sandbox(
+    session_id: str,
+    sessions_dir: Path,
+    root_session_id: str | None,
+    agents_dir: Path,
+    agent_uuid: str,
+    agent_name: str,
+    agent_path: Path | None = None,
+) -> None:
+    """Pre-process resolved HITL requests before spawning a sandbox resume.
+
+    For tool_permission HITLs:
+    - Approved: write grant to extra_permissions so the sandbox runtime
+      picks it up via AgentBuilder._load_session_grants().  Also persist
+      permanent grants to the agent YAML.
+    - Rejected: inject a rejection tool-result message so the LLM sees it.
+
+    For other HITL types: inject a formatted decision message.
+    """
+    session_path = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
+    if not session_path.exists():
+        return
+    try:
+        session_raw = json.loads(session_path.read_text())
+    except Exception:
+        return
+
+    hitl_requests = session_raw.get("hitl_requests", [])
+    resolved_hitls = [
+        item for item in hitl_requests
+        if item.get("status") == "resolved" and item.get("response")
+    ]
+    if not resolved_hitls:
+        return
+
+    messages = session_raw.get("messages", [])
+    extra_perms: list[str] = []
+
+    _APPROVE_DECISIONS = {
+        "approved", "approve_once", "approve_session", "approve_permanent",
+        "approve_session_narrow", "approve_permanent_narrow",
+    }
+    _DECISION_TO_SCOPE = {
+        "approve_once": "once",
+        "approve_session": "session",
+        "approve_session_narrow": "session",
+        "approve_permanent": "permanent",
+        "approve_permanent_narrow": "permanent",
+        "approved": "once",
+    }
+
+    for item in resolved_hitls:
+        req = item.get("request", {})
+        resp = item.get("response", {})
+        tc_id = item.get("tool_call_id", "")
+        decision_val = resp.get("decision", "")
+
+        if req.get("type") == "tool_permission":
+            tool_name = req.get("tool_name", "")
+            if decision_val in _APPROVE_DECISIONS:
+                grant_scope = resp.get("grant_scope") or _DECISION_TO_SCOPE.get(decision_val, "once")
+                perm_pattern = resp.get("permission_pattern") or tool_name
+
+                if grant_scope in ("session", "permanent"):
+                    extra_perms.append(perm_pattern)
+                elif grant_scope == "once":
+                    # For "once", grant bare tool name temporarily
+                    extra_perms.append(tool_name)
+
+                if grant_scope == "permanent":
+                    try:
+                        from everstaff.permissions.definition_writer import YamlAgentDefinitionWriter
+                        writer = YamlAgentDefinitionWriter(agents_dir=str(agents_dir))
+                        await writer.add_allow_permission(
+                            agent_uuid or agent_name, perm_pattern,
+                            agent_path=agent_path,
+                        )
+                    except Exception as wr_err:
+                        logger.warning("failed to write permanent grant pattern=%s err=%s", perm_pattern, wr_err)
+            else:
+                # Rejected — inject rejection tool result
+                messages.append({
+                    "role": "tool",
+                    "content": f"Permission denied: tool '{tool_name}' was rejected by the operator.",
+                    "tool_call_id": tc_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+        else:
+            # Non-tool_permission HITL: inject formatted decision message
+            dtxt = _format_decision_message(req, decision_val, resp.get("comment"))
+            messages.append({
+                "role": "tool",
+                "content": dtxt,
+                "tool_call_id": tc_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    # Write back to session.json
+    session_raw["messages"] = messages
+    if extra_perms:
+        existing = session_raw.get("extra_permissions", [])
+        session_raw["extra_permissions"] = list(dict.fromkeys(existing + extra_perms))
+    session_path.write_text(json.dumps(session_raw, ensure_ascii=False, indent=2))
 
 
 async def _run_in_sandbox(

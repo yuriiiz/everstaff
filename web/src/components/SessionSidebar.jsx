@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { MessageSquare, Trash2, Search, X, Filter, UserCheck, User, Check, ChevronRight, ChevronDown } from 'lucide-react';
+import { MessageSquare, Trash2, Search, X, Filter, UserCheck, User, Check, ChevronRight, ChevronDown, RefreshCw } from 'lucide-react';
 
 export function SessionSidebar({
     sessions,
@@ -9,7 +9,9 @@ export function SessionSidebar({
     onDeleteSession,
     pendingSessionIds,
     hitlRequests,
-    onOpenHitlModal
+    onOpenHitlModal,
+    onRefresh,
+    isRefreshing
 }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [hoveredSessionId, setHoveredSessionId] = useState(null);
@@ -189,20 +191,46 @@ export function SessionSidebar({
             </div>
 
             <div className="sidebar-search-area">
-                <div className="sidebar-search-input-wrapper">
-                    <Search size={14} className="sidebar-search-icon" />
-                    <input
-                        className="input-field sidebar-search-input"
-                        placeholder="Search sessions..."
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                    />
-                    {searchTerm && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                    <div className="sidebar-search-input-wrapper" style={{ flex: 1, margin: 0 }}>
+                        <Search size={14} className="sidebar-search-icon" />
+                        <input
+                            className="input-field sidebar-search-input"
+                            placeholder="Search sessions..."
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                        />
+                        {searchTerm && (
+                            <button
+                                onClick={() => setSearchTerm('')}
+                                className="sidebar-search-clear"
+                            >
+                                <X size={12} />
+                            </button>
+                        )}
+                    </div>
+                    {onRefresh && (
                         <button
-                            onClick={() => setSearchTerm('')}
-                            className="sidebar-search-clear"
+                            onClick={onRefresh}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '30px',
+                                height: '30px',
+                                background: 'white',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '6px',
+                                color: '#64748b',
+                                cursor: 'pointer',
+                                flexShrink: 0,
+                                transition: 'all 0.2s'
+                            }}
+                            title="Refresh sessions"
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.color = '#0f172a'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = '#64748b'; }}
                         >
-                            <X size={12} />
+                            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
                         </button>
                     )}
                 </div>

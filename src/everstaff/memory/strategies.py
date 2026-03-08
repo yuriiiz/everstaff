@@ -86,7 +86,7 @@ class Mem0ExtractionStrategy:
             chat_messages = [
                 {"role": m.role, "content": m.content}
                 for m in old
-                if m.content
+                if m.content and m.role in ("user", "assistant")
             ]
             if chat_messages:
                 try:

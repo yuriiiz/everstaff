@@ -211,8 +211,25 @@ class AgentLoop:
                 result = await runtime.run(decision.task_prompt)
                 logger.info("act completed agent=%s result_len=%d", self._agent_name, len(str(result)))
             except Exception as exc:
-                logger.error("act failed agent=%s error=%s", self._agent_name, exc)
-                result = f"ERROR: {exc}"
+                from everstaff.protocols import HumanApprovalRequired
+                if isinstance(exc, HumanApprovalRequired):
+                    # HITL pause — session already saved as waiting_for_human.
+                    # Broadcast HITL requests to channels (Lark, etc.) so humans
+                    # can resolve them. The _on_resolve → _resume_session_task
+                    # flow handles resolution and auto-resume.
+                    logger.info("act paused for HITL agent=%s session=%s requests=%d",
+                                self._agent_name, loop_session_id[:8], len(exc.requests))
+                    if scoped_cm is not None:
+                        for req in exc.requests:
+                            try:
+                                await scoped_cm.broadcast(loop_session_id, req)
+                            except Exception as bc_err:
+                                logger.warning("HITL broadcast failed hitl_id=%s err=%s",
+                                               req.hitl_id, bc_err)
+                    result = f"Paused: waiting for human approval ({len(exc.requests)} request(s))"
+                else:
+                    logger.error("act failed agent=%s error=%s", self._agent_name, exc)
+                    result = f"ERROR: {exc}"
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -354,13 +371,20 @@ class AgentLoop:
             return
         try:
             data = json.loads(meta_path.read_text())
+
+            # Don't overwrite status if runtime already set it (e.g. waiting_for_human)
+            current_status = data.get("status", "")
+            if current_status == "waiting_for_human":
+                return
+
             if decision.action == "execute":
-                thinking = f"Decision: execute\nTask: {decision.task_prompt}"
-                content = result
+                # Runtime already saved the assistant message with real LLM thinking.
+                # Only update status — do NOT append a duplicate assistant message.
+                pass
             else:
                 thinking = f"Decision: {decision.action}\nReason: {decision.reasoning}"
                 content = f"Decide to {decision.action} the loop"
-            data["messages"].append({"role": "assistant", "content": content, "thinking": thinking, "created_at": datetime.now(timezone.utc).isoformat()})
+                data["messages"].append({"role": "assistant", "content": content, "thinking": thinking, "created_at": datetime.now(timezone.utc).isoformat()})
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))

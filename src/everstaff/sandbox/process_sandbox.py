@@ -73,6 +73,8 @@ class ProcessSandbox(IpcSandboxMixin, SandboxExecutor):
             "--params-file", self._params_file,
         ]
 
+        logger.info("sandbox spawn session=%s ipc_args=%s token_len=%s cmd_len=%d",
+                    session_id, ipc_args, len(self._ephemeral_token) if self._ephemeral_token else 0, len(cmd))
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             env=self._subprocess_env,

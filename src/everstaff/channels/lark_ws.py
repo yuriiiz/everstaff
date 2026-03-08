@@ -381,7 +381,8 @@ class LarkWsChannel:
         def sync_card_handler(data: P2CardActionTrigger):
             """Parse card action and dispatch resolution to the app event loop.
 
-            Card update is handled uniformly by on_resolved() via broadcast.
+            Returns a toast response for immediate user feedback.
+            Card update to "Resolved" state is handled by on_resolved() via broadcast.
             """
             logger.info("sync_card_handler entered")
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
@@ -399,7 +400,10 @@ class LarkWsChannel:
             else:
                 logger.error("sync_card_handler app loop unavailable, action dropped")
 
-            return P2CardActionTriggerResponse({})
+            # Return a toast for immediate feedback in Lark
+            return {
+                "toast": {"type": "success", "content": f"Decision: {decision}"},
+            }
 
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
@@ -466,8 +470,12 @@ class LarkWsChannel:
                 else:
                     logger.info("handler returned None type=%s rt=%dms", msg_type.value, elapsed)
             except Exception as exc:
-                logger.error("handler error type=%s msg_id=%s err=%s", msg_type.value, msg_id, exc, exc_info=True)
-                resp = WsResp(code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
+                from lark_oapi.core.exception import EventException
+                if isinstance(exc, EventException) and "processor not found" in str(exc):
+                    logger.debug("no handler for event type=%s msg_id=%s (ignored)", msg_type.value, msg_id)
+                else:
+                    logger.error("handler error type=%s msg_id=%s err=%s", msg_type.value, msg_id, exc, exc_info=True)
+                    resp = WsResp(code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
 
             frame.payload = lark.JSON.marshal(resp).encode(UTF_8)
             await client._write_message(frame.SerializeToString())

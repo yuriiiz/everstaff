@@ -112,6 +112,9 @@ async def _save_session_json(store, session_id: str, session_data: dict, index=N
 
 async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None, broadcast_fn=None) -> None:
     """Resolve a HITL request — shared by REST endpoint and WS handler."""
+    logger = logging.getLogger(__name__)
+    logger.info("_resolve_hitl_internal hitl_id=%s decision=%r grant_scope=%s", hitl_id, decision, grant_scope)
+
     store = app.state.file_store
     config = app.state.config
     channel_manager = getattr(app.state, "channel_manager", None)
@@ -119,10 +122,14 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
 
     session_id, hitl_item, session_data = await _find_hitl_in_sessions(store, hitl_id, index=index)
     if session_id is None or hitl_item is None:
+        logger.warning("_resolve_hitl_internal hitl_id=%s not found in any session", hitl_id)
         return
+    logger.info("_resolve_hitl_internal found hitl_id=%s in session=%s status=%s", hitl_id, session_id, hitl_item.get("status"))
     if hitl_item.get("status") != "pending":
+        logger.warning("_resolve_hitl_internal hitl_id=%s status=%s (not pending), skipping", hitl_id, hitl_item.get("status"))
         return
     if _is_expired(hitl_item):
+        logger.warning("_resolve_hitl_internal hitl_id=%s is expired, skipping", hitl_id)
         return
 
     _entry = index.get(session_id) if index else None
@@ -140,8 +147,11 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
             root_session_id=_root_for_path,
             session_index=index,
         )
-    except Exception:
+    except Exception as exc:
+        logger.error("_resolve_hitl_internal canonical_resolve failed hitl_id=%s err=%s", hitl_id, exc, exc_info=True)
         return
+
+    logger.info("_resolve_hitl_internal canonical_resolve succeeded hitl_id=%s", hitl_id)
 
     # Push HITL resolution to sandbox executor if active
     executor_mgr = getattr(app.state, "executor_manager", None)
@@ -150,20 +160,24 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
         if executor:
             try:
                 await executor.push_hitl_resolution(hitl_id, decision, comment or "")
+                logger.info("_resolve_hitl_internal pushed to sandbox hitl_id=%s", hitl_id)
             except Exception as e:
-                logging.getLogger(__name__).debug("Sandbox HITL push failed: %s", e)
+                logger.debug("Sandbox HITL push failed: %s", e)
 
     # Re-read session data to check settlement
     session_path = SessionIndex.session_relpath(session_id, _root_for_path)
     try:
         raw = await store.read(session_path)
         session_data = json.loads(raw.decode())
-    except Exception:
+    except Exception as exc:
+        logger.error("_resolve_hitl_internal re-read session failed hitl_id=%s err=%s", hitl_id, exc, exc_info=True)
         return
 
     if not all_hitls_settled(session_data):
+        logger.info("_resolve_hitl_internal hitl_id=%s not all settled yet, waiting", hitl_id)
         return
 
+    logger.info("_resolve_hitl_internal all HITLs settled, resuming session=%s", session_id)
     agent_name = session_data.get("agent_name", "")
     agent_uuid = session_data.get("agent_uuid", "")
     from everstaff.api.sessions import _resume_session_task

@@ -1,13 +1,14 @@
 """ExecutorManager — manages sandbox executor lifecycle per session."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from everstaff.core.secret_store import SecretStore
-    from everstaff.protocols import FileStore, MemoryStore
+    from everstaff.protocols import FileStore, MemoryStore, TracingBackend
     from everstaff.sandbox.executor import SandboxExecutor
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class ExecutorManager:
         config_data: dict[str, Any] | None = None,
         idle_timeout: float | None = None,
         mem0_client: Any | None = None,
+        tracer: "TracingBackend | None" = None,
     ) -> None:
         self._factory = factory
         self._secret_store = secret_store
@@ -32,9 +34,17 @@ class ExecutorManager:
         self._file_store = file_store
         self._config_data = config_data or {}
         self._mem0_client = mem0_client
+        self._tracer = tracer
         self._executors: dict[str, "SandboxExecutor"] = {}
         self._idle_timeout = idle_timeout
         self._last_activity: dict[str, float] = {}
+        self._session_locks: dict[str, asyncio.Lock] = {}
+
+    def session_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create a per-session lock for serializing spawn/destroy."""
+        if session_id not in self._session_locks:
+            self._session_locks[session_id] = asyncio.Lock()
+        return self._session_locks[session_id]
 
     async def get_or_create(self, session_id: str) -> "SandboxExecutor":
         self._last_activity[session_id] = time.monotonic()
@@ -54,6 +64,7 @@ class ExecutorManager:
                 file_store=self._file_store,
                 config_data=self._config_data,
                 mem0_client=self._mem0_client,
+                tracer=self._tracer,
             )
         await executor.start(session_id)
         self._executors[session_id] = executor

@@ -160,6 +160,8 @@ def make_router(config) -> APIRouter:
             path.unlink()
 
         target_path.write_text(_yaml.dump(body.model_dump(exclude_none=True), allow_unicode=True), encoding="utf-8")
+        # Daemon auto-reloads via agents_dir file watcher — no sync reload needed.
+
         return {"uuid": uuid, "updated": True}
 
     @router.delete("/agents/{uuid}", status_code=204)

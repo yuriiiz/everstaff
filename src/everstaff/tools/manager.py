@@ -31,7 +31,7 @@ class ToolManager:
             for py_file, t in self._loader.scan_dir(d):
                 name = t.definition.name
                 if name in self._index:
-                    logger.warning(
+                    logger.debug(
                         "duplicate tool name=%s ignored=%s keeping=%s",
                         name, py_file, self._index[name][0],
                     )

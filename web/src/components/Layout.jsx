@@ -24,6 +24,7 @@ export default function Layout({ children }) {
         { icon: Box, label: 'MCP', path: '/mcp' },
         { icon: Settings, label: 'Tools', path: '/tools' },
         { icon: BookOpen, label: 'Knowledge', path: '/knowledge' },
+        { icon: Database, label: 'Memory', path: '/memory' },
         { icon: Activity, label: 'Tracing', path: '/tracing' },
         { icon: Settings, label: 'Settings', path: '/settings' },
     ];

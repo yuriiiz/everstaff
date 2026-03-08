@@ -125,6 +125,8 @@ class AgentRuntime:
         self._current_span_id: str | None = None
         self.stats: "SessionStats | None" = None  # populated after run() completes
         self._pending_child_hitls: list = []  # HitlRequest objects from child sub-agents
+        self._cached_system_prompt: str | None = None
+        self._system_prompt_dirty: bool = True
 
     def _hook_ctx(self) -> "HookContext":
         from everstaff.protocols import HookContext
@@ -184,6 +186,15 @@ class AgentRuntime:
         self._ctx.tracer.on_event(event)
 
     def _build_system_prompt(self) -> str | None:
+        """Build system prompt from all providers, with caching.
+
+        The prompt is rebuilt only when ``_system_prompt_dirty`` is set (e.g.
+        after mem0 provider refresh injects new memories).  Call
+        ``_invalidate_system_prompt()`` to force a rebuild on next access.
+        """
+        if not self._system_prompt_dirty and self._cached_system_prompt is not None:
+            return self._cached_system_prompt
+
         ctx = self._ctx
         parts = []
         if ctx.system_prompt:
@@ -204,7 +215,13 @@ class AgentRuntime:
             if isinstance(hitl_tool, RequestHumanInputTool):
                 parts.append(hitl_tool.get_prompt_injection())
         result = "\n\n".join(parts).strip()
-        return result if result else None
+        self._cached_system_prompt = result if result else None
+        self._system_prompt_dirty = False
+        return self._cached_system_prompt
+
+    def _invalidate_system_prompt(self) -> None:
+        """Mark system prompt cache as stale (e.g. after mem0 refresh)."""
+        self._system_prompt_dirty = True
 
 
     async def _generate_title(self, user_input: str, first_reply: str) -> None:
@@ -355,6 +372,8 @@ class AgentRuntime:
                     "messages": [m.to_dict() for m in messages],
                 })
                 messages_to_send = await self._hook("on_llm_start", list(messages))
+                # Mem0 hook may have refreshed memories — invalidate prompt cache
+                self._invalidate_system_prompt()
                 # Strip thinking tokens — stored in history but not sent to LLM
                 messages_to_send = [
                     Message(
@@ -591,9 +610,17 @@ class AgentRuntime:
                         stats.record_tool_call()
                         yield ToolCallStart(name=tool_call.name, args=tool_call.args)
 
-                        # Snapshot workspace before tool execution
+                        # Snapshot workspace before tool execution (only for file-mutating tools)
+                        _READ_ONLY_TOOLS = frozenset({
+                            "Read", "Glob", "Grep", "search_memory",
+                            "request_human_input", "delegate_task_to_subagent",
+                        })
                         _workdir = self._ctx.workdir
-                        _ws_before = snapshot_workspace(_workdir) if _workdir else {}
+                        _ws_before = (
+                            snapshot_workspace(_workdir)
+                            if _workdir and tool_call.name not in _READ_ONLY_TOOLS
+                            else {}
+                        )
 
                         # Execute remaining pipeline (PermissionStage already passed)
                         try:
@@ -619,7 +646,7 @@ class AgentRuntime:
                     if hasattr(result, '_child_hitl_requests') and result._child_hitl_requests:
                         self._pending_child_hitls.extend(result._child_hitl_requests)
 
-                    # Detect new/modified files and emit/persist events
+                    # Detect new/modified files and emit events
                     if self._ctx.workdir and not result.is_error and _ws_before is not None:
                         _ws_after = snapshot_workspace(self._ctx.workdir)
                         _created, _modified = diff_snapshots(_ws_before, _ws_after)
@@ -632,8 +659,7 @@ class AgentRuntime:
                                 else:
                                     mime = guess_mime(fp)
                                     sz = full.stat().st_size
-                                
-                                # 1. Yield for live WS (吸附能力 in frontend)
+
                                 yield FileCreatedEvent(
                                     file_path=str(fp),
                                     file_name=full.name,
@@ -642,15 +668,18 @@ class AgentRuntime:
                                 )
                             except OSError:
                                 pass
-                        
-                        # Persist updated messages (with artifacts) after tool turn
-                        await self._ctx.memory.save(
-                            self._ctx.session_id,
-                            messages,
-                            agent_name=self._ctx.agent_name,
-                            agent_uuid=self._ctx.agent_uuid,
-                            status="running",
-                        )
+
+                # Batch save after ALL tool calls in this turn complete
+                await self._save_session(
+                    self._ctx.session_id,
+                    messages,
+                    agent_name=self._ctx.agent_name,
+                    agent_uuid=self._ctx.agent_uuid,
+                    parent_session_id=self._ctx.parent_session_id,
+                    stats=stats,
+                    status="running",
+                    max_tokens=self._ctx.max_tokens,
+                )
 
 
         except HumanApprovalRequired as hitl_exc:

@@ -32,6 +32,7 @@ export default function SessionStore() {
     const [loadingAgents, setLoadingAgents] = useState(true);
     const [hitlRequests, setHitlRequests] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [config, setConfig] = useState(null);
     const [loadingConfig, setLoadingConfig] = useState(true);
     const [newFilesCount, setNewFilesCount] = useState(0);
@@ -574,13 +575,18 @@ export default function SessionStore() {
     };
 
     const fetchSessions = () => {
+        setIsRefreshing(true);
         fetch('/api/sessions')
             .then(res => res.json())
             .then(data => {
                 console.log(`[debug] Loaded ${data.length} sessions.`);
                 setSessions(data);
+                setIsRefreshing(false);
             })
-            .catch(err => console.error('Failed to fetch sessions:', err));
+            .catch(err => {
+                console.error('Failed to fetch sessions:', err);
+                setIsRefreshing(false);
+            });
     };
     const fetchAgents = () => {
         setLoadingAgents(true);
@@ -906,6 +912,8 @@ export default function SessionStore() {
                 pendingSessionIds={pendingSessionIds}
                 hitlRequests={hitlRequests}
                 onOpenHitlModal={() => setIsHitlModalOpen(true)}
+                onRefresh={fetchSessions}
+                isRefreshing={isRefreshing}
             />
 
             {/* 2. Main Chat Area */}

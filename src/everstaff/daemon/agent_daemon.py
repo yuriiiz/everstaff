@@ -12,9 +12,14 @@ All sensors and loops are managed through SensorManager and LoopManager
 respectively.  The daemon supports **hot reload**: calling ``reload()``
 re-scans the agents directory and starts/stops loops to match the current
 set of enabled autonomous agents.
+
+The daemon also watches ``agents_dir`` for file changes using ``watchfiles``
+and automatically triggers a debounced reload when ``.yaml`` files are
+created, modified, or deleted.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
@@ -73,6 +78,8 @@ class AgentDaemon:
         self._session_index = session_index
         self._app = app
         self._running = False
+        self._watcher_task: asyncio.Task | None = None
+        self._reload_debounce: float = 1.0  # seconds
 
         from everstaff.daemon.event_bus import EventBus
         from everstaff.daemon.sensor_manager import SensorManager
@@ -265,15 +272,57 @@ class AgentDaemon:
                 logger.info("agent started agent=%s", name)
             except Exception as exc:
                 logger.error("failed to start agent=%s error=%s", name, exc)
+        # Start watching agents_dir for file changes
+        self._watcher_task = asyncio.create_task(
+            self._watch_agents_dir(), name="daemon-agents-watcher",
+        )
         logger.info("daemon ready agents=%d", len(agents))
 
     async def stop(self) -> None:
         """Stop all running agents and sensors."""
         logger.info("daemon shutting down")
+        if self._watcher_task and not self._watcher_task.done():
+            self._watcher_task.cancel()
+            try:
+                await self._watcher_task
+            except asyncio.CancelledError:
+                pass
+            self._watcher_task = None
         await self._loop_manager.stop_all()
         await self._sensor_manager.stop_all()
         self._running = False
         logger.info("daemon stopped")
+
+    async def _watch_agents_dir(self) -> None:
+        """Watch agents_dir for .yaml changes and trigger debounced reload."""
+        try:
+            from watchfiles import awatch, Change
+        except ImportError:
+            logger.warning("watchfiles not installed, agents_dir auto-reload disabled")
+            return
+
+        logger.info("watching agents_dir=%s for changes", self._agents_dir)
+        try:
+            async for changes in awatch(self._agents_dir):
+                # Only react to .yaml file changes
+                yaml_changes = [
+                    (ct, p) for ct, p in changes if p.endswith(".yaml")
+                ]
+                if not yaml_changes:
+                    continue
+                for ct, p in yaml_changes:
+                    label = {Change.added: "added", Change.modified: "modified", Change.deleted: "deleted"}.get(ct, "unknown")
+                    logger.info("agents_dir change: %s %s", label, Path(p).name)
+                # Debounce: wait a bit in case multiple files change at once
+                await asyncio.sleep(self._reload_debounce)
+                try:
+                    await self.reload()
+                except Exception as exc:
+                    logger.error("auto-reload after file change failed: %s", exc, exc_info=True)
+        except asyncio.CancelledError:
+            logger.info("agents_dir watcher stopped")
+        except Exception as exc:
+            logger.error("agents_dir watcher crashed: %s", exc, exc_info=True)
 
     async def reload(self) -> None:
         """Hot reload: re-scan agents directory and reconcile running loops.

@@ -56,8 +56,10 @@ class ChannelManager:
         Notifies all channels via on_resolved(), then persists via _on_resolve.
         """
         if hitl_id in self._resolved:
+            logger.info("ChannelManager.resolve hitl_id=%s already resolved, skipping", hitl_id)
             return False
         self._resolved.add(hitl_id)
+        logger.info("ChannelManager.resolve hitl_id=%s decision=%r", hitl_id, resolution.decision)
 
         # Broadcast to all channels
         if self._channels:

@@ -1,4 +1,4 @@
-import { Construction, Brain, Zap } from 'lucide-react';
+import MemoryList from '../components/MemoryList';
 
 export default function Memory() {
     return (
@@ -9,36 +9,8 @@ export default function Memory() {
                 </div>
             </div>
 
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
-                <div style={{ textAlign: 'center', maxWidth: '500px' }}>
-                    <div style={{
-                        width: '80px',
-                        height: '80px',
-                        borderRadius: '24px',
-                        background: '#f3f4f6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        margin: '0 auto 24px',
-                        color: '#111827'
-                    }}>
-                        <Construction size={40} />
-                    </div>
-                    <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#111827', marginBottom: '12px', letterSpacing: '-0.025em' }}>Coming Soon</h2>
-                    <p style={{ fontSize: '16px', color: '#6b7280', lineHeight: '1.6', margin: 0 }}>
-                        Memory management features are coming soon. You will be able to manage short-term context, working memory, and episodic recall for your agents to ensure consistency across interactions.
-                    </p>
-                    <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'center', gap: '16px' }}>
-                        <div style={{ padding: '12px 20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <Brain size={18} color="#9ca3af" />
-                            <span style={{ fontSize: '14px', fontWeight: 600, color: '#4b5563' }}>Context Window</span>
-                        </div>
-                        <div style={{ padding: '12px 20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <Zap size={18} color="#9ca3af" />
-                            <span style={{ fontSize: '14px', fontWeight: 600, color: '#4b5563' }}>Working Memory</span>
-                        </div>
-                    </div>
-                </div>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+                <MemoryList />
             </div>
         </div>
     );

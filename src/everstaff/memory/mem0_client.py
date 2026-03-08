@@ -10,6 +10,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_EXTRACTION_PROMPT = """\
+You are extracting memories from an AI agent conversation.
+
+EXTRACT:
+- User preferences, habits, and personal information
+- Business facts, decisions, and conclusions reached
+- Task outcomes and important results
+- Domain knowledge learned during the conversation
+
+DO NOT EXTRACT:
+- System instructions, tool descriptions, or permission rules
+- Agent internal commands, configuration, or operational details
+- Conversational filler ("hello", "thanks", "sure")
+- Information about the AI system itself (model names, capabilities, available tools)
+- Formatting instructions or output requirements
+
+Only extract facts that would be useful in FUTURE conversations.
+"""
+
 try:
     import litellm
     from mem0 import Memory
@@ -58,6 +77,7 @@ class Mem0Client:
                 "provider": config.vector_store,
                 "config": {"path": config.vector_store_path},
             },
+            "custom_fact_extraction_prompt": DEFAULT_EXTRACTION_PROMPT,
         })
         self._top_k = config.search_top_k
         self._threshold = config.search_threshold
@@ -76,7 +96,9 @@ class Mem0Client:
     async def add(self, messages: list[dict], **scope: Any) -> list[dict]:
         """Extract memories from conversation messages."""
         kwargs = {k: v for k, v in scope.items() if v is not None}
-        return await asyncio.to_thread(self._memory.add, messages, **kwargs)
+        return await asyncio.to_thread(
+            self._memory.add, messages, prompt=DEFAULT_EXTRACTION_PROMPT, **kwargs
+        )
 
     async def search(self, query: str, *, top_k: int | None = None, **scope: Any) -> list[dict]:
         """Retrieve relevant memories with threshold filtering."""

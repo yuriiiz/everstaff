@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from everstaff.core.secret_store import SecretStore
-from everstaff.protocols import CancellationEvent
+from everstaff.protocols import CancellationEvent, HumanApprovalRequired
 from everstaff.sandbox.environment import SandboxEnvironment
 from everstaff.sandbox.ipc.unix_socket import UnixSocketChannel
 
@@ -135,6 +135,9 @@ async def _run_agent(
                     )
                 except Exception:
                     pass  # fire-and-forget
+    except HumanApprovalRequired:
+        # HITL pause — runtime already saved session as waiting_for_human.
+        logger.info("paused for HITL session=%s", session_id)
     finally:
         # Clean up MCP connections to avoid async generator warnings
         if hasattr(ctx.mcp_provider, "aclose"):

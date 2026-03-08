@@ -187,6 +187,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     channel_registry=channel_registry,
                     sessions_dir=config.sessions_dir,
                     session_index=getattr(app.state, 'session_index', None),
+                    mem0_client=app.state.mem0_client,
                 )
                 await daemon.start()
                 app.state.daemon = daemon

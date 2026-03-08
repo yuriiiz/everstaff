@@ -58,7 +58,7 @@ class SkillManager:
         for d in self._dirs:
             for meta in self._loader.scan_dir(d):
                 if meta.name in self._index:
-                    logger.warning(
+                    logger.debug(
                         "duplicate skill name=%s ignored=%s keeping=%s",
                         meta.name, meta.path, self._index[meta.name].path,
                     )

@@ -404,8 +404,9 @@ async def test_loop_writes_unified_session(tmp_path):
 
     data = json.loads(session_file.read_text())
     assert data["status"] == "completed"
-    # Should contain: initial trigger msg + 3 think msgs + completion msg = 5
-    assert len(data["messages"]) >= 4
+    # Should contain: initial trigger msg + 3 think msgs = 4
+    # (runtime saves its own assistant message; _finish_loop_session only sets status)
+    assert len(data["messages"]) >= 3
     # No sub_sessions directory should exist
     assert not (session_dirs[0] / "sub_sessions").exists()
 

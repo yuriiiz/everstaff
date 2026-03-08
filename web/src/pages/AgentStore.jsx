@@ -8,6 +8,7 @@ import CreatableSelect from 'react-select/creatable';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import LoadingView from '../components/LoadingView';
 import EmptyState from '../components/EmptyState';
+import MemoryList from '../components/MemoryList';
 
 const Toggle = ({ checked, onChange, label }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={() => onChange(!checked)}>
@@ -476,6 +477,7 @@ export default function AgentStore() {
     const [addSubAgentModal, setAddSubAgentModal] = useState({ isOpen: false });
     const [addMcpModal, setAddMcpModal] = useState({ isOpen: false });
     const [editMcpModal, setEditMcpModal] = useState({ isOpen: false, server: null });
+    const [deleteMcpModal, setDeleteMcpModal] = useState({ isOpen: false, server: null });
     const [showToolsModal, setShowToolsModal] = useState({ isOpen: false, tools: [], serverName: '' });
 
     const [activeSubTab, setActiveSubTab] = useState('basic');
@@ -1368,19 +1370,7 @@ export default function AgentStore() {
                                                                     }}
                                                                     onEdit={(s) => setEditMcpModal({ isOpen: true, server: s })}
                                                                     onShowTools={(tools, serverName) => setShowToolsModal({ isOpen: true, tools, serverName })}
-                                                                    onDelete={async (s) => {
-                                                                        if (confirm(`Remove MCP server ${s.name}?`)) {
-                                                                            try {
-                                                                                const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers/${s.name}`, { method: 'DELETE' });
-                                                                                if (res.ok) {
-                                                                                    setAgentMcpServers(prev => prev.filter(p => p.name !== s.name));
-                                                                                } else {
-                                                                                    const err = await res.json();
-                                                                                    alert(err.error || "Failed to delete");
-                                                                                }
-                                                                            } catch (e) { alert(e.message); }
-                                                                        }
-                                                                    }}
+                                                                    onDelete={(s) => setDeleteMcpModal({ isOpen: true, server: s })}
                                                                 />
                                                             ))}
                                                             {agentMcpServers.length === 0 && (
@@ -1418,32 +1408,7 @@ export default function AgentStore() {
                                                             />
                                                         </div>
 
-                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                                <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>CONTROL LEVEL</label>
-                                                                <div style={{ display: 'flex', gap: '8px' }}>
-                                                                    {[
-                                                                        { value: 'autonomous', label: 'Autonomous', desc: 'No notification' },
-                                                                        { value: 'supervised', label: 'Supervised', desc: 'Notify after' },
-                                                                        { value: 'collaborative', label: 'Collaborate', desc: 'Pre-approval' }
-                                                                    ].map(opt => (
-                                                                        <button
-                                                                            key={opt.value}
-                                                                            onClick={() => updateField('autonomy', { ...selectedAgent.autonomy, level: opt.value })}
-                                                                            style={{
-                                                                                flex: 1, padding: '8px 4px', borderRadius: '8px', border: '1px solid',
-                                                                                borderColor: (selectedAgent.autonomy?.level || 'supervised') === opt.value ? '#3b82f6' : '#e5e7eb',
-                                                                                background: (selectedAgent.autonomy?.level || 'supervised') === opt.value ? '#eff6ff' : 'white',
-                                                                                color: (selectedAgent.autonomy?.level || 'supervised') === opt.value ? '#1d4ed8' : '#64748b',
-                                                                                cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.2s'
-                                                                            }}
-                                                                        >
-                                                                            <span style={{ fontSize: '12px', fontWeight: 700 }}>{opt.label}</span>
-                                                                            <span style={{ fontSize: '9px', opacity: 0.8 }}>{opt.desc}</span>
-                                                                        </button>
-                                                                    ))}
-                                                                </div>
-                                                            </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
                                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                                 <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>TICK INTERVAL (S)</label>
                                                                 <input type="number" className="input-field" value={selectedAgent.autonomy?.tick_interval ?? 3600} onChange={e => updateField('autonomy', { ...selectedAgent.autonomy, tick_interval: parseInt(e.target.value) })} />
@@ -1701,8 +1666,7 @@ export default function AgentStore() {
                                                                         <div>
                                                                             <div style={{ fontWeight: 600, fontSize: '14px' }}>{loop.name}</div>
                                                                             <div style={{ fontSize: '12px', color: '#64748b' }}>
-                                                                                Status: {loop.running ? 'Running' : 'Stopped'} |
-                                                                                Level: {loop.level || 'N/A'}
+                                                                                Status: {loop.running ? 'Running' : 'Stopped'}
                                                                             </div>
                                                                         </div>
                                                                     </div>
@@ -1717,10 +1681,10 @@ export default function AgentStore() {
                                             )}
 
                                             {activeSubTab === 'memory' && (
-                                                <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
+                                                <div className="card" style={{ flex: 1, padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
                                                     <h4 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 700, color: '#111827' }}>MEMORY</h4>
-                                                    <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                                                        No episodic or long-term memory recorded yet for this agent.
+                                                    <div style={{ flex: 1, minHeight: 0 }}>
+                                                        <MemoryList agentUuid={selectedAgent?.uuid} />
                                                     </div>
                                                 </div>
                                             )}
@@ -1814,6 +1778,24 @@ export default function AgentStore() {
                     } catch (e) { alert(e.message); }
                 }}
             />
+            <DeleteMcpModal
+                isOpen={deleteMcpModal.isOpen}
+                server={deleteMcpModal.server}
+                onClose={() => setDeleteMcpModal({ isOpen: false, server: null })}
+                onConfirm={async () => {
+                    if (!deleteMcpModal.server) return;
+                    try {
+                        const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers/${deleteMcpModal.server.name}`, { method: 'DELETE' });
+                        if (res.ok) {
+                            setAgentMcpServers(prev => prev.filter(p => p.name !== deleteMcpModal.server.name));
+                            setDeleteMcpModal({ isOpen: false, server: null });
+                        } else {
+                            const err = await res.json();
+                            alert(err.error || "Failed to delete");
+                        }
+                    } catch (e) { alert(e.message); }
+                }}
+            />
             <ToolsModal
                 isOpen={showToolsModal.isOpen}
                 tools={showToolsModal.tools}
@@ -1823,6 +1805,27 @@ export default function AgentStore() {
         </div>
     );
 }
+
+const DeleteMcpModal = ({ isOpen, server, onConfirm, onClose }) => {
+    if (!isOpen) return null;
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
+            <div style={{ background: 'white', padding: '32px', borderRadius: '16px', maxWidth: '400px', width: '90%', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', border: '1px solid #e5e7eb' }}>
+                <div style={{ padding: '12px', borderRadius: '50%', background: '#fef2f2', width: 'fit-content', margin: '0 auto 16px' }}>
+                    <Trash2 size={32} color="#ef4444" />
+                </div>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '20px', fontWeight: 800, color: '#111827', textAlign: 'center' }}>Remove MCP Server?</h3>
+                <p style={{ margin: '0 0 24px 0', fontSize: '14px', color: '#6b7280', textAlign: 'center' }}>
+                    Are you sure you want to remove <strong>{server?.name}</strong>?
+                </p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                    <button className="btn" style={{ flex: 1, justifyContent: 'center', fontWeight: 600 }} onClick={onClose}>Cancel</button>
+                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', background: '#ef4444', border: 'none', fontWeight: 600 }} onClick={onConfirm}>Remove</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 function AddMcpServerModal({ isOpen, onClose, onAdd }) {
     const [jsonInput, setJsonInput] = useState(`{

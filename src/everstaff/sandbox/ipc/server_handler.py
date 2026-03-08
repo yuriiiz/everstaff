@@ -145,6 +145,8 @@ class IpcServerHandler:
         return {"workflows": workflows}
 
     def _handle_tracer_event(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._tracer is None:
+            return {}
         event = TraceEvent(
             kind=params.get("kind", ""),
             session_id=params.get("session_id", ""),
