@@ -154,11 +154,16 @@ class RequestHumanInputTool:
         if self._mode == "notify":
             req_type = "notify"
 
+        options = args.get("options", [])
+        # If agent used 'choose' type but forgot to populate options, fall back to free-text input
+        if req_type == "choose" and not options:
+            req_type = "provide_input"
+
         hitl_request = HitlRequest(
             hitl_id=str(uuid4()),
             type=req_type,
             prompt=args["prompt"],
-            options=args.get("options", []),
+            options=options,
             context=args.get("context", ""),
             timeout_seconds=args.get("timeout", 86400),
         )

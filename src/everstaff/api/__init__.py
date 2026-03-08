@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -59,13 +60,33 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     AgentLoop calls ``runtime.run(task_prompt)`` expecting a simple
                     async run method.  This proxy lazily builds the full AgentRuntime
                     on first call so the loop doesn't need to know about builders.
+
+                    The task_prompt is injected into the system prompt as an
+                    instruction rather than constructed as a user message.  This
+                    prevents the LLM from "answering" its own question — instead
+                    it sees the task as a directive and starts executing directly
+                    (e.g. calling request_human_input to ask the human).
                     """
                     def __init__(self, builder):
                         self._builder = builder
 
                     async def run(self, prompt: str, **kw) -> str:
-                        runtime, _ctx = await self._builder.build()
-                        return await runtime.run(prompt)
+                        runtime, ctx = await self._builder.build()
+                        # Inject task_prompt into system prompt so the LLM treats
+                        # it as an instruction, not a user message to answer.
+                        if prompt:
+                            task_block = (
+                                "\n\n## Current Task\n\n"
+                                "You have received the following task. "
+                                "Execute it immediately — do NOT repeat or answer it as if it were a question.\n"
+                                "If the task requires asking the user a question, collecting their input, "
+                                "or getting a decision from them, you MUST use the `request_human_input` tool. "
+                                "Do NOT answer the question yourself or fabricate the user's response.\n\n"
+                                f"{prompt}"
+                            )
+                            ctx.system_prompt = (ctx.system_prompt or "") + task_block
+                            runtime._system_prompt_dirty = True
+                        return await runtime.run(None)
 
                 class _DaemonSandboxProxy:
                     """Runs agent in sandbox, reusing the API's _run_in_sandbox."""
@@ -79,6 +100,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     async def run(self, prompt: str, **kw) -> str:
                         from everstaff.api.sessions import _run_in_sandbox
                         from everstaff.session.index import SessionIndex
+                        import copy as _copy
 
                         executor_mgr = getattr(app.state, "executor_manager", None)
                         if executor_mgr is None:
@@ -87,11 +109,27 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                         sessions_dir = Path(config.sessions_dir).expanduser().resolve()
                         session_index = getattr(app.state, 'session_index', None)
 
+                        # Inject task_prompt into agent spec instructions so the
+                        # LLM treats it as a directive, not a user message.
+                        spec = self._spec
+                        if prompt:
+                            spec = _copy.deepcopy(spec)
+                            task_block = (
+                                "\n\n## Current Task\n\n"
+                                "You have received the following task. "
+                                "Execute it immediately — do NOT repeat or answer it as if it were a question.\n"
+                                "If the task requires asking the user a question, collecting their input, "
+                                "or getting a decision from them, you MUST use the `request_human_input` tool. "
+                                "Do NOT answer the question yourself or fabricate the user's response.\n\n"
+                                + prompt
+                            )
+                            spec.instructions = (spec.instructions or "") + task_block
+
                         await _run_in_sandbox(
                             executor_manager=executor_mgr,
                             session_id=self._session_id,
-                            agent_spec_json=self._spec.model_dump_json(),
-                            user_input=prompt,
+                            agent_spec_json=spec.model_dump_json(),
+                            user_input=None,
                             broadcast_fn=None,
                             sessions_dir=sessions_dir,
                             root_session_id=self._session_id,
@@ -125,6 +163,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                                             tool_permission_options=req_data.get("tool_permission_options"),
                                             origin_session_id=h.get("origin_session_id"),
                                             origin_agent_name=h.get("origin_agent_name"),
+                                            created_at=datetime.fromisoformat(req_data["created_at"]) if req_data.get("created_at") else datetime.now(timezone.utc),
                                         ))
                                 if requests:
                                     raise HumanApprovalRequired(requests)

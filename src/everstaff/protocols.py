@@ -206,6 +206,7 @@ class HitlRequest:
     origin_session_id: str = ""     # deepest child session that originated this HITL
     origin_agent_name: str = ""     # agent name of the originator
     timeout_seconds: int = 86400    # default 1 day; 0 = no timeout
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # tool_permission fields
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)

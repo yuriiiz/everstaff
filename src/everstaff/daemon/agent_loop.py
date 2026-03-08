@@ -297,6 +297,7 @@ class AgentLoop:
             while self._running:
                 try:
                     cycle_count += 1
+                    logger.info("loop cycle agent=%s cycle=%d", self._agent_name, cycle_count)
                     await self.run_once()
                 except asyncio.CancelledError:
                     logger.info("loop cancelled agent=%s cycles=%d", self._agent_name, cycle_count)

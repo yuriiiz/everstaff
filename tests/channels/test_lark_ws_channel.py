@@ -3,7 +3,7 @@
 import json as _json
 import asyncio
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from everstaff.protocols import HitlRequest, HitlResolution
@@ -33,7 +33,16 @@ def lark_ws_channel(channel_manager_mock):
     return ch
 
 
-# --- send_request tests (same behaviour as LarkChannel) ---
+# --- HitlRequest created_at ---
+
+def test_hitl_request_has_created_at():
+    """HitlRequest should auto-populate created_at."""
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="test")
+    assert req.created_at is not None
+    assert isinstance(req.created_at, datetime)
+
+
+# --- send_request tests ---
 
 @pytest.mark.asyncio
 async def test_send_request_calls_send_card(lark_ws_channel):
@@ -55,9 +64,20 @@ async def test_send_request_stores_message_id(lark_ws_channel):
 
 
 @pytest.mark.asyncio
+async def test_send_request_stores_session_id(lark_ws_channel):
+    """send_request must store session_id mapping."""
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Allow?")
+    await lark_ws_channel.send_request("session-42", req)
+    assert lark_ws_channel._hitl_session_ids.get("h1") == "session-42"
+
+
+# --- on_resolved tests ---
+
+@pytest.mark.asyncio
 async def test_on_resolved_updates_card(lark_ws_channel):
     """on_resolved must call _update_card when message_id is known."""
     lark_ws_channel._hitl_message_ids["h1"] = "msg_abc"
+    lark_ws_channel._username_cache["lark_user"] = "Zhang San"
     resolution = HitlResolution(
         decision="approved",
         resolved_at=datetime.now(timezone.utc),
@@ -70,8 +90,11 @@ async def test_on_resolved_updates_card(lark_ws_channel):
 
 @pytest.mark.asyncio
 async def test_on_resolved_cleans_up(lark_ws_channel):
-    """on_resolved must remove hitl_id from _hitl_message_ids after update."""
+    """on_resolved must remove hitl_id from all tracking dicts."""
     lark_ws_channel._hitl_message_ids["h1"] = "msg_abc"
+    lark_ws_channel._hitl_requests["h1"] = HitlRequest(hitl_id="h1", type="approve_reject", prompt="test")
+    lark_ws_channel._hitl_session_ids["h1"] = "sess-1"
+    lark_ws_channel._username_cache["lark_user"] = "User"
     resolution = HitlResolution(
         decision="rejected",
         resolved_at=datetime.now(timezone.utc),
@@ -80,6 +103,8 @@ async def test_on_resolved_cleans_up(lark_ws_channel):
     await lark_ws_channel.on_resolved("h1", resolution)
 
     assert "h1" not in lark_ws_channel._hitl_message_ids
+    assert "h1" not in lark_ws_channel._hitl_requests
+    assert "h1" not in lark_ws_channel._hitl_session_ids
 
 
 @pytest.mark.asyncio
@@ -94,7 +119,121 @@ async def test_on_resolved_no_message_id_is_noop(lark_ws_channel):
     lark_ws_channel._update_card.assert_not_called()
 
 
-# --- card action handler (the core WS-mode behaviour) ---
+# --- card builders ---
+
+def test_build_card_uses_markdown(lark_ws_channel):
+    """_build_card should use lark_md for prompt."""
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Deploy?")
+    card = lark_ws_channel._build_card(req, "h1", "sess-1")
+    elements = card["elements"]
+    assert elements[0]["text"]["tag"] == "lark_md"
+    assert "**Deploy?**" in elements[0]["text"]["content"]
+
+
+def test_build_card_has_session_link(lark_ws_channel):
+    """_build_card should include session link in note when web_url is set."""
+    lark_ws_channel._web_url = "http://localhost:3000"
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Deploy?")
+    card = lark_ws_channel._build_card(req, "h1", "session-abc-123")
+    card_json = _json.dumps(card)
+    assert "http://localhost:3000/sessions/session-abc-123" in card_json
+
+
+def test_build_card_tool_args_collapsed(lark_ws_channel):
+    """_build_card should use collapsible_panel for tool arguments."""
+    req = HitlRequest(
+        hitl_id="h1", type="tool_permission", prompt="Allow Bash?",
+        tool_name="Bash", tool_args={"command": "ls -la"},
+    )
+    card = lark_ws_channel._build_card(req, "h1", "sess-1")
+    card_json = _json.dumps(card)
+    assert "collapsible_panel" in card_json
+    assert '"expanded": false' in card_json
+
+
+def test_build_card_header_orange(lark_ws_channel):
+    """Pending card must have orange header."""
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Deploy?")
+    card = lark_ws_channel._build_card(req, "h1")
+    assert card["header"]["template"] == "orange"
+    assert "Needs Approval" in card["header"]["title"]["content"]
+
+
+def test_resolved_card_preserves_prompt(lark_ws_channel):
+    """Resolved card must keep the original prompt."""
+    req = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Deploy to prod?")
+    card = lark_ws_channel._build_resolved_card("approved", "Zhang San", req, "sess-1")
+    card_json = _json.dumps(card)
+    assert "Deploy to prod?" in card_json
+    assert "Zhang San" in card_json
+    assert "Approved" in card_json
+
+
+def test_resolved_card_has_green_header(lark_ws_channel):
+    """Resolved card must have green header."""
+    card = lark_ws_channel._build_resolved_card("approved", "user", None, "")
+    assert card["header"]["template"] == "green"
+
+
+def test_resolved_card_shows_decision_label(lark_ws_channel):
+    """Resolved card should show human-readable decision label."""
+    req = HitlRequest(hitl_id="h1", type="tool_permission", prompt="Allow?")
+    card = lark_ws_channel._build_resolved_card("approve_permanent", "User", req)
+    card_json = _json.dumps(card)
+    assert "Approved (always)" in card_json
+
+
+def test_build_expired_card_structure(lark_ws_channel):
+    """Expired card should have grey header and expiration warning."""
+    req = HitlRequest(hitl_id="h1", type="tool_permission", prompt="Allow Bash?",
+                      tool_name="Bash", tool_args={"command": "ls"})
+    card = lark_ws_channel._build_expired_card(req, "sess-1")
+    assert card["header"]["template"] == "grey"
+    card_json = _json.dumps(card)
+    assert "expired" in card_json.lower()
+    assert "Allow Bash?" in card_json
+    assert "collapsible_panel" in card_json
+
+
+def test_build_notify_card_uses_markdown(lark_ws_channel):
+    """Notify card should use lark_md for prompt."""
+    req = HitlRequest(hitl_id="h1", type="notify", prompt="Task completed")
+    card = lark_ws_channel._build_notify_card(req)
+    assert card["header"]["template"] == "blue"
+    assert card["elements"][0]["text"]["tag"] == "lark_md"
+
+
+# --- username resolution ---
+
+@pytest.mark.asyncio
+async def test_resolve_username_caches(lark_ws_channel):
+    """_resolve_username caches results."""
+    lark_ws_channel._username_cache["ou_123"] = "Zhang San"
+    name = await lark_ws_channel._resolve_username("ou_123")
+    assert name == "Zhang San"
+    lark_ws_channel._get_access_token.assert_not_called()
+
+
+# --- expiration detection ---
+
+def test_expiration_detection(lark_ws_channel):
+    """Expired requests should be detectable by age > timeout_seconds."""
+    req = HitlRequest(
+        hitl_id="h-exp", type="approve_reject", prompt="Expired?",
+        timeout_seconds=1,
+        created_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+    )
+    lark_ws_channel._hitl_requests["h-exp"] = req
+
+    now = datetime.now(timezone.utc)
+    expired_ids = []
+    for hid, r in list(lark_ws_channel._hitl_requests.items()):
+        if r.timeout_seconds > 0 and (now - r.created_at).total_seconds() > r.timeout_seconds:
+            expired_ids.append(hid)
+    assert "h-exp" in expired_ids
+
+
+# --- card action handler ---
 
 def _make_card_action_data(value: dict, form_value=None, open_id="user_001"):
     """Build a mock P2CardActionTrigger with data nested under .event."""
@@ -169,6 +308,9 @@ async def test_start_launches_daemon_thread(lark_ws_channel):
     mock_thread_cls.assert_called_once()
     assert mock_thread_cls.call_args[1]["daemon"] is True
     mock_thread.start.assert_called_once()
+    # Clean up expiration task
+    if lark_ws_channel._expiration_task:
+        lark_ws_channel._expiration_task.cancel()
 
 
 @pytest.mark.asyncio
@@ -180,6 +322,21 @@ async def test_start_is_idempotent(lark_ws_channel):
         await lark_ws_channel.start()
         await lark_ws_channel.start()
     mock_thread_cls.assert_called_once()
+    # Clean up expiration task
+    if lark_ws_channel._expiration_task:
+        lark_ws_channel._expiration_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_expiration_task(lark_ws_channel):
+    """stop() must cancel the expiration polling task."""
+    mock_task = MagicMock()
+    lark_ws_channel._expiration_task = mock_task
+    lark_ws_channel._started = True
+    await lark_ws_channel.stop()
+    mock_task.cancel.assert_called_once()
+    assert lark_ws_channel._expiration_task is None
+    assert lark_ws_channel._started is False
 
 
 @pytest.mark.asyncio

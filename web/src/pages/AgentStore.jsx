@@ -255,24 +255,30 @@ const TagList = ({ items, onRemove }) => {
     );
 };
 
-const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools }) => {
+const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools, testTrigger }) => {
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState(null);
 
     const handleTest = async () => {
         setTesting(true);
+        const startTime = performance.now();
         try {
             const result = await onTest(server);
-            setTestResult(result);
-            if (result.success && onShowTools) {
-                onShowTools(result.tools, server.name);
-            }
+            const latency = Math.round(performance.now() - startTime);
+            setTestResult({ ...result, latency });
+
         } catch (e) {
             setTestResult({ success: false, error: e.message });
         } finally {
             setTesting(false);
         }
     };
+
+    useEffect(() => {
+        if (testTrigger > 0) {
+            handleTest();
+        }
+    }, [testTrigger]);
 
     return (
         <div style={{ padding: '16px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -311,12 +317,19 @@ const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools }) => {
                         background: testResult.success ? '#f0fdf4' : '#fef2f2',
                         color: testResult.success ? '#15803d' : '#b91c1c',
                         border: `1px solid ${testResult.success ? '#bbf7d0' : '#fecaca'}`,
-                        display: 'flex', gap: '8px', alignItems: 'center',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         cursor: testResult.success ? 'pointer' : 'default'
                     }}
                 >
-                    {testResult.success ? <Check size={14} /> : <AlertCircle size={14} />}
-                    <span>{testResult.success ? `Connected: ${testResult.tool_count} tools (Click to view)` : testResult.error}</span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {testResult.success ? <Check size={14} /> : <AlertCircle size={14} />}
+                        <span>{testResult.success ? `Connected: ${testResult.tool_count} tools (Click to view)` : testResult.error}</span>
+                    </div>
+                    {testResult.latency !== undefined && (
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '11px', opacity: 0.8 }}>
+                            <Activity size={12} /> {testResult.latency}ms
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -479,6 +492,7 @@ export default function AgentStore() {
     const [editMcpModal, setEditMcpModal] = useState({ isOpen: false, server: null });
     const [deleteMcpModal, setDeleteMcpModal] = useState({ isOpen: false, server: null });
     const [showToolsModal, setShowToolsModal] = useState({ isOpen: false, tools: [], serverName: '' });
+    const [testAllTrigger, setTestAllTrigger] = useState(0);
 
     const [activeSubTab, setActiveSubTab] = useState('basic');
     const [agentSessions, setAgentSessions] = useState([]);
@@ -1080,23 +1094,6 @@ export default function AgentStore() {
                                                         </div>
                                                     </div>
 
-
-                                                    <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#111827' }}>ON-DEMAND PROVISIONING</h4>
-                                                            <Toggle
-                                                                checked={!!selectedAgent.enable_bootstrap}
-                                                                onChange={val => updateField('enable_bootstrap', val)}
-                                                                label="ENABLE PROVISIONING"
-                                                            />
-                                                        </div>
-                                                        <div style={{ marginTop: '16px', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                                                            <div style={{ fontSize: '12px', color: '#64748b', lineHeight: '1.5' }}>
-                                                                <strong>On-demand Agent/Skills Provisioning:</strong> When enabled, this agent can automatically create and equip necessary skills or sub-agents dynamically based on task requirements.
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
                                                     <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
                                                         <h4 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: 700, color: '#111827' }}>PERMISSIONS</h4>
                                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -1304,6 +1301,22 @@ export default function AgentStore() {
                                                             </div>
                                                         </div>
                                                     </div>
+
+                                                    <div className="card" style={{ padding: '20px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#111827' }}>ON-DEMAND PROVISIONING</h4>
+                                                            <Toggle
+                                                                checked={!!selectedAgent.enable_bootstrap}
+                                                                onChange={val => updateField('enable_bootstrap', val)}
+                                                                label="ENABLE PROVISIONING"
+                                                            />
+                                                        </div>
+                                                        <div style={{ marginTop: '16px', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                                            <div style={{ fontSize: '12px', color: '#64748b', lineHeight: '1.5' }}>
+                                                                <strong>On-demand Agent/Skills Provisioning:</strong> When enabled, this agent can automatically create and equip necessary skills or sub-agents dynamically based on task requirements.
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             )}
 
@@ -1344,6 +1357,13 @@ export default function AgentStore() {
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                                             <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#111827' }}>MCP SERVERS</h4>
                                                             <div style={{ display: 'flex', gap: '8px' }}>
+                                                                <button
+                                                                    className="btn"
+                                                                    style={{ height: '28px', fontSize: '12px', padding: '0 12px' }}
+                                                                    onClick={() => setTestAllTrigger(prev => prev + 1)}
+                                                                >
+                                                                    <Zap size={14} /> Test All
+                                                                </button>
                                                                 <button className="btn" style={{ height: '28px', fontSize: '12px', padding: '0 12px' }} onClick={() => navigate('/mcp')}>
                                                                     <Globe size={14} /> Marketplace
                                                                 </button>
@@ -1360,6 +1380,7 @@ export default function AgentStore() {
                                                                 <McpServerCard
                                                                     key={server.name}
                                                                     server={server}
+                                                                    testTrigger={testAllTrigger}
                                                                     onTest={async (s) => {
                                                                         const res = await fetch('/api/mcp/test', {
                                                                             method: 'POST',

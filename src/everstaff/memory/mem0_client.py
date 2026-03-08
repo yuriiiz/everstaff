@@ -10,23 +10,38 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EXTRACTION_PROMPT = """\
-You are extracting memories from an AI agent conversation.
+FACT_EXTRACTION_PROMPT = """\
+You are a Memory Organizer for an AI agent system.
+Extract relevant facts from the conversation between the user and the assistant.
 
-EXTRACT:
+Focus on:
 - User preferences, habits, and personal information
 - Business facts, decisions, and conclusions reached
 - Task outcomes and important results
 - Domain knowledge learned during the conversation
 
-DO NOT EXTRACT:
+Do NOT extract:
 - System instructions, tool descriptions, or permission rules
-- Agent internal commands, configuration, or operational details
+- Agent internal state or configuration details
 - Conversational filler ("hello", "thanks", "sure")
-- Information about the AI system itself (model names, capabilities, available tools)
-- Formatting instructions or output requirements
 
-Only extract facts that would be useful in FUTURE conversations.
+Here are some examples:
+
+User: 我叫小明，我喜欢吃披萨
+Assistant: 好的小明，记住了！
+Output: {"facts": ["用户叫小明", "用户喜欢吃披萨"]}
+
+User: Hi
+Assistant: Hello! How can I help?
+Output: {"facts": []}
+
+User: Can you check my calendar for tomorrow?
+Assistant: You have a meeting with John at 3pm about the Q2 report.
+Output: {"facts": ["Has a meeting with John at 3pm about the Q2 report"]}
+
+Return the extracted facts as a json object with a "facts" key containing a list of strings.
+If no relevant facts are found, return {"facts": []}.
+Detect the language of the conversation and record facts in the same language.
 """
 
 try:
@@ -77,7 +92,7 @@ class Mem0Client:
                 "provider": config.vector_store,
                 "config": {"path": config.vector_store_path},
             },
-            "custom_fact_extraction_prompt": DEFAULT_EXTRACTION_PROMPT,
+            "custom_fact_extraction_prompt": FACT_EXTRACTION_PROMPT,
         })
         self._top_k = config.search_top_k
         self._threshold = config.search_threshold
@@ -97,7 +112,7 @@ class Mem0Client:
         """Extract memories from conversation messages."""
         kwargs = {k: v for k, v in scope.items() if v is not None}
         return await asyncio.to_thread(
-            self._memory.add, messages, prompt=DEFAULT_EXTRACTION_PROMPT, **kwargs
+            self._memory.add, messages, **kwargs
         )
 
     async def search(self, query: str, *, top_k: int | None = None, **scope: Any) -> list[dict]:

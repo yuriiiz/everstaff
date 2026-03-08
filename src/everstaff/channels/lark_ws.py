@@ -51,6 +51,7 @@ class LarkWsChannel:
         file_store=None,
         channel_manager: "ChannelManager | None" = None,
         domain: str = "feishu",
+        web_url: str = "",
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
@@ -61,11 +62,15 @@ class LarkWsChannel:
         self._domain = domain
         self._api_base = _DOMAIN_TO_API_BASE.get(domain, _DOMAIN_TO_API_BASE["feishu"])
         self._config = None          # set externally by factories.py
+        self._web_url = web_url.rstrip("/") if web_url else ""
         self._hitl_message_ids: dict[str, str] = {}
         self._hitl_requests: dict[str, "HitlRequest"] = {}
+        self._hitl_session_ids: dict[str, str] = {}   # hitl_id -> session_id
+        self._username_cache: dict[str, str] = {}     # open_id -> display name
         self._started: bool = False
         self._ws_thread: threading.Thread | None = None
         self._app_loop: asyncio.AbstractEventLoop | None = None
+        self._expiration_task: asyncio.Task | None = None
 
     # ── HTTP helpers ─────────────────────────────────────────────
 
@@ -105,18 +110,75 @@ class LarkWsChannel:
                 resp_data = await r.json()
                 logger.info("PATCH response status=%s resp=%s", r.status, json.dumps(resp_data, ensure_ascii=False))
 
+    async def _resolve_username(self, open_id: str) -> str:
+        """Resolve Lark open_id to display name via API. Cached in memory."""
+        if open_id in self._username_cache:
+            return self._username_cache[open_id]
+        try:
+            import aiohttp
+            token = await self._get_access_token()
+            url = f"{self._api_base}/contact/v3/users/{open_id}?user_id_type=open_id"
+            headers = {"Authorization": f"Bearer {token}"}
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, headers=headers) as r:
+                    data = await r.json()
+                    code = data.get("code", 0)
+                    if code != 0:
+                        logger.warning("resolve_username API error open_id=%s code=%s msg=%s", open_id, code, data.get("msg"))
+                        self._username_cache[open_id] = open_id
+                        return open_id
+                    name = data.get("data", {}).get("user", {}).get("name", open_id)
+                    logger.info("resolve_username open_id=%s -> name=%s", open_id, name)
+                    self._username_cache[open_id] = name
+                    return name
+        except Exception as exc:
+            logger.warning("resolve_username failed open_id=%s err=%s", open_id, exc)
+            self._username_cache[open_id] = open_id
+            return open_id
+
     # ── Card builders ────────────────────────────────────────────
 
-    def _build_card(self, request: "HitlRequest", hitl_id: str) -> dict:
-        elements: list[dict] = [
-            {"tag": "div", "text": {"tag": "plain_text", "content": request.prompt}},
-        ]
-        if request.context:
-            elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Context: {request.context}"}})
-        if request.timeout_seconds > 0:
-            h, m = divmod(request.timeout_seconds, 3600)
-            elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Expires in: {h}h {m // 60}m"}})
+    def _build_card(self, request: "HitlRequest", hitl_id: str, session_id: str = "") -> dict:
+        elements: list[dict] = []
 
+        # ── Prompt (bold, markdown) ──
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{request.prompt}**"}})
+
+        # ── Tool details (tool_permission type) ──
+        if request.type == "tool_permission" and request.tool_name:
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"Tool: `{request.tool_name}`"}})
+            if request.tool_args:
+                args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
+                if len(args_text) > 1000:
+                    args_text = args_text[:1000] + "\n..."
+                elements.append({
+                    "tag": "collapsible_panel",
+                    "expanded": False,
+                    "header": {"title": {"tag": "plain_text", "content": "Parameters"}},
+                    "border": {"color": "grey"},
+                    "vertical_spacing": "8px",
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "plain_text", "content": args_text}},
+                    ],
+                })
+
+        # ── Context (collapsible if long, inline if short) ──
+        if request.context:
+            if len(request.context) > 100:
+                elements.append({
+                    "tag": "collapsible_panel",
+                    "expanded": False,
+                    "header": {"title": {"tag": "plain_text", "content": "Context"}},
+                    "border": {"color": "grey"},
+                    "vertical_spacing": "8px",
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": request.context}},
+                    ],
+                })
+            else:
+                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": request.context}})
+
+        # ── Action buttons ──
         actions: list[dict] = []
         if request.type == "approve_reject":
             actions = [
@@ -124,15 +186,6 @@ class LarkWsChannel:
                 {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected"}},
             ]
         elif request.type == "tool_permission":
-            # Show tool details
-            if request.tool_name:
-                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Tool: {request.tool_name}"}})
-            if request.tool_args:
-                args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
-                if len(args_text) > 500:
-                    args_text = args_text[:500] + "..."
-                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Arguments:\n{args_text}"}})
-            # Use structured tool_permission_options when available
             if request.tool_permission_options:
                 _TYPE_MAP = {"reject": "danger", "approve_once": "default"}
                 for opt in request.tool_permission_options:
@@ -144,7 +197,6 @@ class LarkWsChannel:
                         value["permission_pattern"] = opt["pattern"]
                     actions.append({"tag": "button", "text": {"tag": "plain_text", "content": opt["label"]}, "type": btn_type, "value": value})
             else:
-                # Fallback: hardcoded buttons for legacy requests without structured options
                 actions = [
                     {"tag": "button", "text": {"tag": "plain_text", "content": "Reject"}, "type": "danger", "value": {"hitl_id": hitl_id, "decision": "rejected", "grant_scope": "once"}},
                     {"tag": "button", "text": {"tag": "plain_text", "content": "Approve Once"}, "type": "default", "value": {"hitl_id": hitl_id, "decision": "approved", "grant_scope": "once"}},
@@ -168,9 +220,28 @@ class LarkWsChannel:
         if actions:
             elements.append({"tag": "action", "actions": actions})
 
+        # ── Footer note: session link + expiration ──
+        note_parts: list[str] = []
+        if session_id:
+            short_id = session_id[:8].upper()
+            if self._web_url:
+                note_parts.append(f"[Session {short_id}]({self._web_url}/sessions/{session_id})")
+            else:
+                note_parts.append(f"Session: {short_id}")
+        if request.timeout_seconds > 0:
+            h, remainder = divmod(request.timeout_seconds, 3600)
+            m = remainder // 60
+            if h > 0:
+                note_parts.append(f"Expires in {h}h {m}m")
+            else:
+                note_parts.append(f"Expires in {m}m")
+        if note_parts:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": " | ".join(note_parts)}})
+
         return {
             "config": {"wide_screen_mode": True, "update_multi": True},
-            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Human Input Required"}, "template": "orange"},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Needs Approval"}, "template": "orange"},
             "elements": elements,
         }
 
@@ -179,33 +250,148 @@ class LarkWsChannel:
         decision: str,
         resolved_by: str,
         request: "HitlRequest | None" = None,
+        session_id: str = "",
     ) -> dict:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         elements: list[dict] = []
+
+        # ── Original content preserved ──
         if request:
-            elements.append({"tag": "div", "text": {"tag": "plain_text", "content": request.prompt}})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{request.prompt}**"}})
+            if request.type == "tool_permission" and request.tool_name:
+                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"Tool: `{request.tool_name}`"}})
+                if request.tool_args:
+                    args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
+                    if len(args_text) > 1000:
+                        args_text = args_text[:1000] + "\n..."
+                    elements.append({
+                        "tag": "collapsible_panel",
+                        "expanded": False,
+                        "header": {"title": {"tag": "plain_text", "content": "Parameters"}},
+                        "border": {"color": "grey"},
+                        "vertical_spacing": "8px",
+                        "elements": [
+                            {"tag": "div", "text": {"tag": "plain_text", "content": args_text}},
+                        ],
+                    })
             if request.context:
-                elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Context: {request.context}"}})
+                if len(request.context) > 100:
+                    elements.append({
+                        "tag": "collapsible_panel",
+                        "expanded": False,
+                        "header": {"title": {"tag": "plain_text", "content": "Context"}},
+                        "border": {"color": "grey"},
+                        "vertical_spacing": "8px",
+                        "elements": [
+                            {"tag": "div", "text": {"tag": "lark_md", "content": request.context}},
+                        ],
+                    })
+                else:
+                    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": request.context}})
+
+        # ── Resolution details ──
         elements.append({"tag": "hr"})
-        elements.append({"tag": "div", "text": {"tag": "plain_text", "content": (
-            f"Decision: {decision}\n"
-            f"Resolved by: {resolved_by}\n"
-            f"Resolved At: {now}"
+        _DECISION_LABELS = {
+            "approved": "Approved", "rejected": "Rejected",
+            "approve_once": "Approved (once)", "approve_session": "Approved (session)",
+            "approve_session_narrow": "Approved (session, narrow)",
+            "approve_permanent": "Approved (always)",
+            "approve_permanent_narrow": "Approved (always, narrow)",
+        }
+        decision_label = _DECISION_LABELS.get(decision, decision)
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": (
+            f"**Decision:** {decision_label}\n"
+            f"**Operator:** {resolved_by}\n"
+            f"**Time:** {now}"
         )}})
+
+        # ── Footer note ──
+        note_parts: list[str] = []
+        if session_id:
+            short_id = session_id[:8].upper()
+            if self._web_url:
+                note_parts.append(f"[Session {short_id}]({self._web_url}/sessions/{session_id})")
+            else:
+                note_parts.append(f"Session: {short_id}")
+        if note_parts:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": " | ".join(note_parts)}})
+
+        is_rejected = decision in ("rejected", "reject")
+        header_template = "red" if is_rejected else "green"
+        header_label = "Rejected" if is_rejected else "Resolved"
         return {
-            "config": {"wide_screen_mode": True},
-            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Resolved"}, "template": "green"},
+            "config": {"wide_screen_mode": True, "update_multi": True},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] {header_label}"}, "template": header_template},
+            "elements": elements,
+        }
+
+    def _build_expired_card(
+        self,
+        request: "HitlRequest | None" = None,
+        session_id: str = "",
+    ) -> dict:
+        elements: list[dict] = []
+
+        if request:
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{request.prompt}**"}})
+            if request.type == "tool_permission" and request.tool_name:
+                elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"Tool: `{request.tool_name}`"}})
+                if request.tool_args:
+                    args_text = json.dumps(request.tool_args, ensure_ascii=False, indent=2)
+                    if len(args_text) > 1000:
+                        args_text = args_text[:1000] + "\n..."
+                    elements.append({
+                        "tag": "collapsible_panel",
+                        "expanded": False,
+                        "header": {"title": {"tag": "plain_text", "content": "Parameters"}},
+                        "border": {"color": "grey"},
+                        "vertical_spacing": "8px",
+                        "elements": [
+                            {"tag": "div", "text": {"tag": "plain_text", "content": args_text}},
+                        ],
+                    })
+            if request.context:
+                elements.append({
+                    "tag": "collapsible_panel",
+                    "expanded": False,
+                    "header": {"title": {"tag": "plain_text", "content": "Context"}},
+                    "border": {"color": "grey"},
+                    "vertical_spacing": "8px",
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": request.context}},
+                    ],
+                })
+
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**This request has expired and can no longer be acted upon.**"}})
+
+        # Footer
+        note_parts: list[str] = []
+        if session_id:
+            short_id = session_id[:8].upper()
+            if self._web_url:
+                note_parts.append(f"[Session {short_id}]({self._web_url}/sessions/{session_id})")
+            else:
+                note_parts.append(f"Session: {short_id}")
+        if note_parts:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": " | ".join(note_parts)}})
+
+        return {
+            "config": {"wide_screen_mode": True, "update_multi": True},
+            "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Expired"}, "template": "grey"},
             "elements": elements,
         }
 
     def _build_notify_card(self, request: "HitlRequest") -> dict:
         elements: list[dict] = [
-            {"tag": "div", "text": {"tag": "plain_text", "content": request.prompt}},
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{request.prompt}**"}},
         ]
         if request.context:
-            elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"Context: {request.context}"}})
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": request.context}})
         return {
-            "config": {"wide_screen_mode": True},
+            "config": {"wide_screen_mode": True, "update_multi": True},
             "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Notice"}, "template": "blue"},
             "elements": elements,
         }
@@ -223,9 +409,10 @@ class LarkWsChannel:
             return
 
         self._hitl_requests[request.hitl_id] = request
+        self._hitl_session_ids[request.hitl_id] = session_id
         try:
             token = await self._get_access_token()
-            mid = await self._send_card(token, self._build_card(request, request.hitl_id))
+            mid = await self._send_card(token, self._build_card(request, request.hitl_id, session_id))
             if mid:
                 if self._file_store is not None:
                     await self._file_store.write(
@@ -262,10 +449,15 @@ class LarkWsChannel:
 
         try:
             token = await self._get_access_token()
-            card = self._build_resolved_card(resolution.decision, resolution.resolved_by, self._hitl_requests.get(hitl_id))
+            display_name = await self._resolve_username(resolution.resolved_by)
+            session_id = self._hitl_session_ids.get(hitl_id, "")
+            card = self._build_resolved_card(
+                resolution.decision, display_name,
+                self._hitl_requests.get(hitl_id), session_id,
+            )
             await self._update_card(token, message_id, card)
         except Exception as exc:
-            logger.error("on_resolved update card failed hitl_id=%s err=%s", hitl_id, exc)
+            logger.error("on_resolved update card failed hitl_id=%s err=%s", hitl_id, exc, exc_info=True)
         finally:
             if self._file_store is not None:
                 try:
@@ -274,6 +466,7 @@ class LarkWsChannel:
                     pass
             self._hitl_message_ids.pop(hitl_id, None)
             self._hitl_requests.pop(hitl_id, None)
+            self._hitl_session_ids.pop(hitl_id, None)
 
     # ── Card action handler ──────────────────────────────────────
 
@@ -390,6 +583,14 @@ class LarkWsChannel:
                 logger.warning("sync_card_handler parse failed, returning empty response")
                 return P2CardActionTriggerResponse({})
 
+            # Build resolved card synchronously for immediate callback response
+            request = self._hitl_requests.get(hitl_id)
+            session_id = self._hitl_session_ids.get(hitl_id, "")
+            resolved_card = self._build_resolved_card(
+                decision, resolved_by, request, session_id,
+            )
+            logger.info("sync_card_handler built resolved card for hitl_id=%s", hitl_id)
+
             # Dispatch backend processing (persist + resume) to app event loop
             if self._app_loop is not None and self._app_loop.is_running():
                 asyncio.run_coroutine_threadsafe(
@@ -400,10 +601,8 @@ class LarkWsChannel:
             else:
                 logger.error("sync_card_handler app loop unavailable, action dropped")
 
-            # Return a toast for immediate feedback in Lark
-            return {
-                "toast": {"type": "success", "content": f"Decision: {decision}"},
-            }
+            # Return resolved card directly — Lark replaces the current card
+            return resolved_card
 
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
@@ -484,6 +683,57 @@ class LarkWsChannel:
         logger.info("patched _handle_data_frame for EVENT+CARD")
         return client
 
+    # ── Expiration polling ──────────────────────────────────────
+
+    async def _expiration_poll_loop(self) -> None:
+        """Background task: check for expired HITL requests every 60s and update cards."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                now = datetime.now(timezone.utc)
+                expired_ids: list[str] = []
+                for hitl_id, request in list(self._hitl_requests.items()):
+                    if request.timeout_seconds <= 0:
+                        continue
+                    age = (now - request.created_at).total_seconds()
+                    if age > request.timeout_seconds:
+                        expired_ids.append(hitl_id)
+
+                for hitl_id in expired_ids:
+                    request = self._hitl_requests.get(hitl_id)
+                    session_id = self._hitl_session_ids.get(hitl_id, "")
+                    message_id = None
+                    if self._file_store is not None:
+                        try:
+                            raw = await self._file_store.read(f"hitl-lark-ws/{hitl_id}.json")
+                            message_id = json.loads(raw.decode()).get("message_id")
+                        except Exception:
+                            pass
+                    else:
+                        message_id = self._hitl_message_ids.get(hitl_id)
+
+                    if message_id:
+                        try:
+                            token = await self._get_access_token()
+                            card = self._build_expired_card(request, session_id)
+                            await self._update_card(token, message_id, card)
+                            logger.info("expired card updated hitl_id=%s", hitl_id)
+                        except Exception as exc:
+                            logger.warning("expired card update failed hitl_id=%s err=%s", hitl_id, exc)
+
+                    # Cleanup
+                    if self._file_store is not None:
+                        try:
+                            await self._file_store.delete(f"hitl-lark-ws/{hitl_id}.json")
+                        except Exception:
+                            pass
+                    self._hitl_message_ids.pop(hitl_id, None)
+                    self._hitl_requests.pop(hitl_id, None)
+                    self._hitl_session_ids.pop(hitl_id, None)
+
+            except Exception as exc:
+                logger.error("expiration poll error err=%s", exc, exc_info=True)
+
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -492,6 +742,7 @@ class LarkWsChannel:
         self._started = True
         loop = asyncio.get_running_loop()
         self._app_loop = loop
+        self._expiration_task = asyncio.ensure_future(self._expiration_poll_loop())
 
         def _run_ws():
             # Create a dedicated event loop for the WS thread.
@@ -519,5 +770,8 @@ class LarkWsChannel:
         logger.info("started WS long connection")
 
     async def stop(self) -> None:
+        if self._expiration_task is not None:
+            self._expiration_task.cancel()
+            self._expiration_task = None
         self._started = False
         logger.info("stopped")

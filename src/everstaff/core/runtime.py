@@ -336,6 +336,11 @@ class AgentRuntime:
                 messages.append(Message(role="user", content="Continue.", created_at=datetime.now(timezone.utc).isoformat()))
             # If the last message is already from the user, the LLM will
             # simply re-process it — no injection needed.
+        else:
+            # No user_input and no existing messages (e.g. daemon task with
+            # instructions injected into system prompt).  Most LLM providers
+            # require at least one user message, so inject a minimal kickoff.
+            messages.append(Message(role="user", content="Go.", created_at=datetime.now(timezone.utc).isoformat()))
 
         turns = 0
         try:

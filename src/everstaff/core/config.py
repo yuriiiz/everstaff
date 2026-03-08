@@ -48,6 +48,7 @@ class LarkWsChannelConfig(BaseModel):
     chat_id: str = ""
     bot_name: str = "Agent"
     domain: str = "feishu"
+    web_url: str = ""
 
 
 class WebhookChannelConfig(BaseModel):

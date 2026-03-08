@@ -165,6 +165,15 @@ class AgentBuilder:
             for t in provider.get_tools():
                 system_tool_names.add(_tool_name(t))
 
+        # Internal daemon tools — always bypass permission checks
+        system_tool_names.update({
+            "search_memory",
+            "make_decision",
+            "break_down_goal",
+            "update_goal_progress",
+            "record_learning_insight",
+        })
+
         # Framework tools
         hitl_mode = getattr(self._spec, "hitl_mode", "on_request")
         if hitl_mode != "never":

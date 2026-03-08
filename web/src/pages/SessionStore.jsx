@@ -330,6 +330,18 @@ export default function SessionStore() {
                             }
                         } : prev);
                     }
+                    setMessages(prev => {
+                        for (let i = prev.length - 1; i >= 0; i--) {
+                            if (prev[i].streaming) {
+                                return [
+                                    ...prev.slice(0, i),
+                                    { ...prev[i], streaming: false },
+                                    ...prev.slice(i + 1),
+                                ];
+                            }
+                        }
+                        return prev;
+                    });
                 } else if (data.type === 'tool_call_start') {
                     setStatusContent(`Running: ${data.name}`);
                     // Add a pending tool call entry to the current streaming assistant message.
@@ -359,29 +371,38 @@ export default function SessionStore() {
                     setStatusContent('');
                     // Mark the matching streaming tool call as completed with result
                     setMessages(prev => {
-                        for (let i = prev.length - 1; i >= 0; i--) {
-                            const msg = prev[i];
+                        let newMessages = [...prev];
+                        let foundTcId = null;
+                        
+                        for (let i = newMessages.length - 1; i >= 0; i--) {
+                            const msg = newMessages[i];
                             if (msg.role === 'assistant' && msg.tool_calls) {
-                                // Find last streaming TC with matching name
                                 let tcIdx = -1;
                                 for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
                                     if (msg.tool_calls[j]._streaming && msg.tool_calls[j].name === data.name) {
                                         tcIdx = j;
+                                        foundTcId = msg.tool_calls[j].id;
                                         break;
                                     }
                                 }
                                 if (tcIdx !== -1) {
                                     const updated = [...msg.tool_calls];
                                     updated[tcIdx] = { ...updated[tcIdx], _streaming: false };
-                                    return [
-                                        ...prev.slice(0, i),
-                                        { ...msg, tool_calls: updated },
-                                        ...prev.slice(i + 1),
-                                    ];
+                                    newMessages[i] = { ...msg, tool_calls: updated };
+                                    break;
                                 }
                             }
                         }
-                        return prev;
+                        
+                        newMessages.push({
+                            role: 'tool',
+                            tool_call_id: foundTcId || data.name,
+                            content: data.result,
+                            name: data.name,
+                            is_error: data.is_error
+                        });
+                        
+                        return newMessages;
                     });
                 } else if (data.type === 'file_created') {
                     // Treat as standalone entry (merged via simplified timeline)

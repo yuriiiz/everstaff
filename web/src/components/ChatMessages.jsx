@@ -249,7 +249,7 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                             </div>
                         )}
 
-                        {(type === 'provide_input' || (!['approve_reject', 'tool_permission', 'choose', 'options', 'notify'].includes(type))) && (
+                        {(type === 'provide_input' || ((type === 'choose' || type === 'options') && optionsArray.length === 0) || (!['approve_reject', 'tool_permission', 'choose', 'options', 'notify'].includes(type))) && (
                             <div className="hitl-input-container" style={{ width: '100%', display: 'flex', gap: '8px' }}>
                                 <input
                                     className="hitl-input"

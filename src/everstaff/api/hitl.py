@@ -1,6 +1,7 @@
 """HITL API — list pending human approval requests and submit decisions."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -152,6 +153,11 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
         return
 
     logger.info("_resolve_hitl_internal canonical_resolve succeeded hitl_id=%s", hitl_id)
+
+    # NOTE: Do NOT notify channels here. This function is called from
+    # channel_manager._on_resolve (Lark-click path), which means channels
+    # were already notified by channel_manager.resolve() → on_resolved().
+    # The REST endpoint (resolve_hitl) handles channel notification itself.
 
     # Push HITL resolution to sandbox executor if active
     executor_mgr = getattr(app.state, "executor_manager", None)
@@ -323,6 +329,26 @@ def make_router(config) -> APIRouter:
             raise HTTPException(status_code=409, detail="HITL request already resolved")
         except HitlExpiredError:
             raise HTTPException(status_code=410, detail="HITL request has expired")
+
+        # Notify all channels (e.g. update Lark card to resolved state)
+        cm = getattr(request.app.state, "channel_manager", None)
+        if cm and cm._channels:
+            try:
+                from everstaff.protocols import HitlResolution as _Res
+                
+                _res = _Res(
+                    decision=decision.decision,
+                    resolved_at=datetime.now(timezone.utc),
+                    resolved_by=decision.resolved_by or "human",
+                    grant_scope=decision.grant_scope,
+                    permission_pattern=decision.permission_pattern,
+                )
+                await asyncio.gather(
+                    *[ch.on_resolved(hitl_id, _res) for ch in cm._channels],
+                    return_exceptions=True,
+                )
+            except Exception as exc:
+                logger.warning("resolve_hitl channel notification failed hitl_id=%s err=%s", hitl_id, exc)
 
         # Re-read session data for updated hitl_item and settlement check
         session_path = SessionIndex.session_relpath(session_id, _root_for_path)
