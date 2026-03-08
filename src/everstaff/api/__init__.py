@@ -393,6 +393,13 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.state.channel_manager = channel_manager
     app.state.ws_connections = set()  # Tracks active WebSocket connections for broadcast
 
+    # Inject session_index and mcp_pool into LarkWsChannel instances
+    from everstaff.channels.lark_ws import LarkWsChannel as _LarkWsChannel
+    for _ch in channel_manager._channels:
+        if isinstance(_ch, _LarkWsChannel):
+            _ch._session_index = _session_index
+            _ch._mcp_pool = mcp_pool
+
     # Set resolve callback on ChannelManager so any channel resolution
     # automatically persists to session.json and resumes the session.
     async def _on_resolve(hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None):

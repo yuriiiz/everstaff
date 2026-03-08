@@ -69,6 +69,9 @@ class LarkWsChannel:
         self._hitl_session_ids: dict[str, str] = {}   # hitl_id -> session_id
         self._username_cache: dict[str, str] = {}     # open_id -> display name
         self._allowed_emails: set[str] = set(allowed_emails) if allowed_emails else set()
+        self._pending_agent_selection: dict[str, dict] = {}
+        self._session_index = None
+        self._mcp_pool = None
         self._started: bool = False
         self._ws_thread: threading.Thread | None = None
         self._app_loop: asyncio.AbstractEventLoop | None = None
@@ -252,6 +255,34 @@ class LarkWsChannel:
             except Exception as exc:
                 logger.warning("whitelist reaction failed err=%s", exc)
         return False
+
+    async def _load_conv_state(self, key: str) -> dict | None:
+        """Read conversation state from file_store at lark-conv/{app_id}/{key}.json."""
+        if self._file_store is None:
+            return None
+        try:
+            raw = await self._file_store.read(f"lark-conv/{self._app_id}/{key}.json")
+            return json.loads(raw.decode())
+        except Exception:
+            return None
+
+    async def _save_conv_state(self, key: str, state: dict) -> None:
+        """Write conversation state to file_store at lark-conv/{app_id}/{key}.json."""
+        if self._file_store is None:
+            return
+        await self._file_store.write(
+            f"lark-conv/{self._app_id}/{key}.json",
+            json.dumps(state, ensure_ascii=False).encode(),
+        )
+
+    async def _delete_conv_state(self, key: str) -> None:
+        """Delete conversation state from file_store."""
+        if self._file_store is None:
+            return
+        try:
+            await self._file_store.delete(f"lark-conv/{self._app_id}/{key}.json")
+        except Exception:
+            pass
 
     async def _create_chat_group(self, token: str, name: str, owner_open_id: str) -> str:
         """Create a new Lark group chat. Returns the chat_id."""
