@@ -27,42 +27,61 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
             auth_handler=auth_handler,
         )
 
-    @tool(name="feishu_send_message", description="在飞书群或私聊中发送消息。支持普通消息和消息卡片，支持回复和话题回复。")
+    async def _get_tenant_token() -> str:
+        """Get tenant_access_token (bot identity) for sending messages."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{api_base}/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": app_id, "app_secret": app_secret},
+            )
+            return resp.json()["tenant_access_token"]
+
+    @tool(name="feishu_send_message", description="以机器人身份在飞书群或私聊中发送消息。支持回复和话题回复。")
     async def feishu_send_message(
         receive_id: str, content: str,
-        receive_id_type: str = "chat",
-        msg_type: str = "normal",
+        receive_id_type: str = "chat_id",
+        msg_type: str = "text",
         reply_to_message_id: str = "",
         reply_in_thread: bool = False,
     ) -> str:
-        """Send a message in Feishu via MCP gateway.
+        """Send a message as the bot in Feishu.
 
         Args:
-            receive_id: Target ID (chat_id for group, openId for DM).
-            content: Message content. For normal: Markdown subset. For interactive: card JSON.
-            receive_id_type: Type of receive_id: "chat" (group) or "user" (DM).
-            msg_type: Message type: "normal" (markdown) or "interactive" (card).
+            receive_id: Target ID (chat_id for group, open_id for DM).
+            content: Message content. For text: JSON string like {"text":"hello"}.
+                     For interactive: card JSON.
+            receive_id_type: Type of receive_id: "chat_id", "open_id", or "user_id".
+            msg_type: Message type: "text", "interactive", "image", etc.
             reply_to_message_id: Message ID to reply to (optional). Triggers reply mode.
             reply_in_thread: Whether to reply as a thread (only effective with reply_to_message_id).
         """
-        async def _call(uat: str) -> str:
-            args: dict = {
+        token = await _get_tenant_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+
+        if reply_to_message_id:
+            # Reply to a specific message
+            body: dict = {"msg_type": msg_type, "content": content}
+            if reply_in_thread:
+                body["reply_in_thread"] = True
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{api_base}/open-apis/im/v1/messages/{reply_to_message_id}/reply",
+                    json=body, headers=headers,
+                )
+            return resp.text
+        else:
+            # Send a new message
+            body = {
                 "receive_id": receive_id,
-                "receive_id_type": receive_id_type,
                 "msg_type": msg_type,
                 "content": content,
             }
-            if reply_to_message_id:
-                args["reply_to_message_id"] = reply_to_message_id
-            if reply_in_thread:
-                args["reply_in_thread"] = True
-            result = await call_feishu_mcp(tool_name="send-message", args=args, uat=uat)
-            result_content = result.get("content", [])
-            if result_content and result_content[0].get("text"):
-                return result_content[0]["text"]
-            return str(result)
-
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:message"]))
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{api_base}/open-apis/im/v1/messages?receive_id_type={receive_id_type}",
+                    json=body, headers=headers,
+                )
+            return resp.text
 
     @tool(name="feishu_list_messages", description="获取飞书群聊或私聊的历史消息。")
     async def feishu_list_messages(
