@@ -10,7 +10,7 @@ from typing import Any
 _TOOL_CATALOG: dict[str, list[dict[str, str]]] = {
     "docs": [
         {"name": "feishu_fetch_doc", "description": "获取飞书云文档内容，返回 Markdown 格式。"},
-        {"name": "feishu_create_doc", "description": "创建飞书云文档。"},
+        {"name": "feishu_create_doc", "description": "创建飞书云文档并写入 Markdown 内容。"},
         {"name": "feishu_update_doc", "description": "更新飞书云文档内容。"},
     ],
     "calendar": [
