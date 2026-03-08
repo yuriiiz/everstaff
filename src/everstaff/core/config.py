@@ -49,6 +49,7 @@ class LarkWsChannelConfig(BaseModel):
     bot_name: str = "Agent"
     domain: str = "feishu"
     web_url: str = ""
+    allowed_emails: list[str] = Field(default_factory=list)
 
 
 class WebhookChannelConfig(BaseModel):
