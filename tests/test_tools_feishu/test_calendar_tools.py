@@ -1,5 +1,5 @@
 """Tests for calendar tool definitions."""
-from everstaff.feishu.tools.calendar_tools import make_feishu_calendar_tools
+from everstaff.tools.feishu.tools.calendar_tools import make_feishu_calendar_tools
 
 
 def test_calendar_tools_created():

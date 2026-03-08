@@ -13,9 +13,9 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
 
     ``user_open_id`` is captured in closures so the LLM never needs to supply it.
     """
-    from everstaff.feishu.mcp_proxy import call_feishu_mcp
-    from everstaff.feishu.uat_client import call_with_uat
-    from everstaff.feishu.errors import UserAuthRequiredError
+    from everstaff.tools.feishu.mcp_proxy import call_feishu_mcp
+    from everstaff.tools.feishu.uat_client import call_with_uat
+    from everstaff.tools.feishu.errors import UserAuthRequiredError
 
     store = token_store
 
@@ -28,16 +28,17 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
             if content and content[0].get("text"):
                 return content[0]["text"]
             return str(result)
+        _scopes = ["docx:document:readonly"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["docx:document:readonly"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,
@@ -55,16 +56,17 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
                 args["folder_token"] = folder_token
             result = await call_feishu_mcp(tool_name="create-doc", args=args, uat=uat)
             return str(result)
+        _scopes = ["docx:document"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["docx:document"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,
@@ -80,16 +82,17 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
             result = await call_feishu_mcp(
                 tool_name="update-doc", args={"doc_id": doc_id, "content": content}, uat=uat)
             return str(result)
+        _scopes = ["docx:document"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["docx:document"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,

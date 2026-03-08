@@ -1,7 +1,7 @@
 """Tests for Feishu auth card builders."""
 import json
 
-from everstaff.feishu.auth_cards import build_auth_card, build_auth_success_card
+from everstaff.tools.feishu.auth_cards import build_auth_card, build_auth_success_card
 
 
 def test_build_auth_card():

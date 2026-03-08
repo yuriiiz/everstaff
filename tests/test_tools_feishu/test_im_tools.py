@@ -1,5 +1,5 @@
 """Tests for IM tool definitions."""
-from everstaff.feishu.tools.im_tools import make_feishu_im_tools
+from everstaff.tools.feishu.tools.im_tools import make_feishu_im_tools
 
 
 def test_im_tools_created():

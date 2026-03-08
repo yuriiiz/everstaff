@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from everstaff.feishu.mcp_proxy import call_feishu_mcp
+from everstaff.tools.feishu.mcp_proxy import call_feishu_mcp
 
 
 @pytest.mark.asyncio

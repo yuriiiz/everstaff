@@ -27,19 +27,19 @@ def create_feishu_tools(
     tools: list[Any] = []
 
     if "docs" in all_categories:
-        from everstaff.feishu.tools.doc_tools import make_feishu_doc_tools
+        from everstaff.tools.feishu.tools.doc_tools import make_feishu_doc_tools
         tools.extend(make_feishu_doc_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store))
 
     if "calendar" in all_categories:
-        from everstaff.feishu.tools.calendar_tools import make_feishu_calendar_tools
+        from everstaff.tools.feishu.tools.calendar_tools import make_feishu_calendar_tools
         tools.extend(make_feishu_calendar_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store))
 
     if "tasks" in all_categories:
-        from everstaff.feishu.tools.task_tools import make_feishu_task_tools
+        from everstaff.tools.feishu.tools.task_tools import make_feishu_task_tools
         tools.extend(make_feishu_task_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store))
 
     if "im" in all_categories:
-        from everstaff.feishu.tools.im_tools import make_feishu_im_tools
+        from everstaff.tools.feishu.tools.im_tools import make_feishu_im_tools
         tools.extend(make_feishu_im_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store))
 
     return tools

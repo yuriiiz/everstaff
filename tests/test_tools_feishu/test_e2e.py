@@ -3,10 +3,10 @@ import pytest
 import time
 from unittest.mock import AsyncMock, patch
 
-from everstaff.feishu.auto_auth import handle_auth_error
-from everstaff.feishu.errors import UserAuthRequiredError
-from everstaff.feishu.token_store import FileTokenStore, StoredToken
-from everstaff.feishu.uat_client import call_with_uat
+from everstaff.tools.feishu.auto_auth import handle_auth_error
+from everstaff.tools.feishu.errors import UserAuthRequiredError
+from everstaff.tools.feishu.token_store import FileTokenStore, StoredToken
+from everstaff.tools.feishu.uat_client import call_with_uat
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_full_flow_needs_auth(tmp_path):
 
     mock_send = AsyncMock(return_value="msg_001")
 
-    with patch("everstaff.feishu.auto_auth.request_device_authorization") as mock_dev:
+    with patch("everstaff.tools.feishu.auto_auth.request_device_authorization") as mock_dev:
         mock_dev.return_value = {
             "device_code": "dev_abc",
             "verification_uri_complete": "https://feishu.cn/auth?code=XYZ",

@@ -4,9 +4,9 @@ import json
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from everstaff.feishu.auto_auth import handle_auth_error
-from everstaff.feishu.errors import UserAuthRequiredError
-from everstaff.feishu.token_store import FileTokenStore
+from everstaff.tools.feishu.auto_auth import handle_auth_error
+from everstaff.tools.feishu.errors import UserAuthRequiredError
+from everstaff.tools.feishu.token_store import FileTokenStore
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_handle_auth_error_sends_card(tmp_path):
     mock_send_card = AsyncMock(return_value="msg_id_123")
     token_store = FileTokenStore(base_dir=tmp_path)
 
-    with patch("everstaff.feishu.auto_auth.request_device_authorization") as mock_device:
+    with patch("everstaff.tools.feishu.auto_auth.request_device_authorization") as mock_device:
         mock_device.return_value = {
             "device_code": "dev123",
             "verification_uri_complete": "https://feishu.cn/auth?code=ABC",

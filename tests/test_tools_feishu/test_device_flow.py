@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from everstaff.feishu.device_flow import (
+from everstaff.tools.feishu.device_flow import (
     DeviceFlowError,
     resolve_oauth_endpoints,
     request_device_authorization,

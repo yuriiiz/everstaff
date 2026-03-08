@@ -13,8 +13,8 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
 
     ``user_open_id`` is captured in closures so the LLM never needs to supply it.
     """
-    from everstaff.feishu.uat_client import call_with_uat
-    from everstaff.feishu.errors import UserAuthRequiredError
+    from everstaff.tools.feishu.uat_client import call_with_uat
+    from everstaff.tools.feishu.errors import UserAuthRequiredError
     import httpx
 
     store = token_store
@@ -47,16 +47,17 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
+        _scopes = ["im:message"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["im:message"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,
@@ -96,16 +97,17 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
+        _scopes = ["im:message:readonly"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["im:message:readonly"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,
@@ -130,16 +132,17 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
+        _scopes = ["im:chat:readonly"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["im:chat:readonly"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,
@@ -165,16 +168,17 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
+        _scopes = ["im:chat:readonly"]
         try:
             return await call_with_uat(
                 user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store,
+                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
             )
         except UserAuthRequiredError as e:
             if auth_handler is None:
                 raise
-            from everstaff.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or ["im:chat:readonly"]
+            from everstaff.tools.feishu.auto_auth import handle_auth_error
+            e.required_scopes = e.required_scopes or _scopes
             result = await handle_auth_error(
                 err=e, app_id=app_id, app_secret=app_secret, domain=domain,
                 send_card_fn=auth_handler.send_card,

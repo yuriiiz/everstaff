@@ -13,10 +13,11 @@ import logging
 import time
 from typing import Any, Awaitable, Callable
 
-from everstaff.feishu.auth_cards import build_auth_card, build_auth_success_card, build_auth_failed_card
-from everstaff.feishu.device_flow import request_device_authorization, poll_device_token
-from everstaff.feishu.errors import UserAuthRequiredError
-from everstaff.feishu.token_store import FileTokenStore, StoredToken
+from everstaff.tools.feishu.auth_cards import build_auth_card, build_auth_success_card, build_auth_failed_card
+from everstaff.tools.feishu.device_flow import request_device_authorization, poll_device_token
+from everstaff.tools.feishu.errors import UserAuthRequiredError
+from everstaff.tools.feishu.token_store import FileTokenStore, StoredToken
+from everstaff.tools.feishu.uat_client import BASE_READONLY_SCOPES
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,10 @@ async def handle_auth_error(
     if token_store is None:
         raise ValueError("token_store is required")
 
-    scope = " ".join(err.required_scopes)
+    # Merge base read-only scopes with the tool's required scopes so the
+    # user only needs to authorize once for common read operations.
+    all_scopes = list(dict.fromkeys(BASE_READONLY_SCOPES + err.required_scopes))
+    scope = " ".join(all_scopes)
 
     # 1. Request device authorization
     device_auth = await request_device_authorization(app_id, app_secret, scope=scope, domain=domain)

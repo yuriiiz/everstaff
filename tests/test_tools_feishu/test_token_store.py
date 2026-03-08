@@ -3,7 +3,7 @@ import pytest
 import time
 from pathlib import Path
 
-from everstaff.feishu.token_store import (
+from everstaff.tools.feishu.token_store import (
     StoredToken,
     token_status,
     FileTokenStore,

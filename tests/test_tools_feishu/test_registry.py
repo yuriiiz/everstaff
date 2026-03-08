@@ -1,5 +1,5 @@
 """Tests for Feishu tool registry."""
-from everstaff.feishu.tools.registry import create_feishu_tools
+from everstaff.tools.feishu.tools.registry import create_feishu_tools
 
 
 def test_create_feishu_tools_all():

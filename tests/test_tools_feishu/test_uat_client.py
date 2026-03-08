@@ -3,8 +3,8 @@ import pytest
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from everstaff.feishu.token_store import StoredToken, FileTokenStore
-from everstaff.feishu.uat_client import call_with_uat, refresh_uat, NeedAuthorizationError
+from everstaff.tools.feishu.token_store import StoredToken, FileTokenStore
+from everstaff.tools.feishu.uat_client import call_with_uat, refresh_uat, NeedAuthorizationError
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_call_with_uat_refreshes_expired(tmp_path):
 
     fn = AsyncMock(return_value="ok")
 
-    with patch("everstaff.feishu.uat_client.refresh_uat") as mock_refresh:
+    with patch("everstaff.tools.feishu.uat_client.refresh_uat") as mock_refresh:
         mock_refresh.return_value = {
             "access_token": "new_token", "refresh_token": "new_rt",
             "expires_in": 7200, "refresh_token_expires_in": 604800,

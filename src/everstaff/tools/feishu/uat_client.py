@@ -7,14 +7,29 @@ from typing import Any, Callable, Awaitable
 
 import httpx
 
-from everstaff.feishu.device_flow import resolve_oauth_endpoints
-from everstaff.feishu.errors import UserAuthRequiredError
-from everstaff.feishu.token_store import FileTokenStore, StoredToken, token_status
+from everstaff.tools.feishu.device_flow import resolve_oauth_endpoints
+from everstaff.tools.feishu.errors import UserAuthRequiredError
+from everstaff.tools.feishu.token_store import FileTokenStore, StoredToken, token_status
 
 logger = logging.getLogger(__name__)
 
 # Backward-compat alias
 NeedAuthorizationError = UserAuthRequiredError
+
+# Base read-only scopes requested on first authorization so the token
+# covers common read operations across all tool categories.
+BASE_READONLY_SCOPES: list[str] = [
+    # IM
+    "im:message",
+    "im:message:readonly",
+    "im:chat:readonly",
+    # Calendar
+    "calendar:calendar:readonly",
+    # Tasks
+    "task:task:readonly",
+    # Docs
+    "docx:document:readonly",
+]
 
 
 async def refresh_uat(
@@ -56,22 +71,33 @@ async def call_with_uat(
     domain: str,
     fn: Callable[[str], Awaitable[Any]],
     token_store: FileTokenStore | None = None,
+    required_scopes: list[str] | None = None,
 ) -> Any:
     """Execute fn(access_token) with automatic token refresh.
 
-    Raises NeedAuthorizationError if no stored token or refresh fails.
+    Raises NeedAuthorizationError if no stored token, refresh fails,
+    or the stored token does not cover *required_scopes*.
     """
     if token_store is None:
         token_store = FileTokenStore()
 
     stored = await token_store.get(app_id, user_open_id)
     if stored is None:
-        raise NeedAuthorizationError(user_open_id)
+        raise NeedAuthorizationError(user_open_id, required_scopes=required_scopes)
 
     status = token_status(stored)
 
     if status == "expired":
-        raise NeedAuthorizationError(user_open_id)
+        raise NeedAuthorizationError(user_open_id, required_scopes=required_scopes)
+
+    # Check scope coverage: if the caller declares required_scopes and the
+    # stored token's scope string doesn't contain them, re-authorize.
+    if required_scopes and stored.scope:
+        granted = set(stored.scope.split())
+        missing = [s for s in required_scopes if s not in granted]
+        if missing:
+            logger.info("uat-client: token for %s missing scopes %s, re-auth needed", user_open_id, missing)
+            raise NeedAuthorizationError(user_open_id, required_scopes=required_scopes)
 
     if status == "needs_refresh":
         try:
@@ -91,6 +117,6 @@ async def call_with_uat(
             logger.info("uat-client: refreshed token for %s", user_open_id)
         except Exception:
             logger.warning("uat-client: refresh failed for %s, re-auth required", user_open_id, exc_info=True)
-            raise NeedAuthorizationError(user_open_id)
+            raise NeedAuthorizationError(user_open_id, required_scopes=required_scopes)
 
     return await fn(stored.access_token)
