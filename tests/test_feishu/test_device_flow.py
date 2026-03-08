@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from everstaff.feishu.device_flow import (
+    DeviceFlowError,
     resolve_oauth_endpoints,
     request_device_authorization,
     poll_device_token,
@@ -49,7 +50,7 @@ async def test_request_device_authorization_failure():
     mock_response.json.return_value = {"error": "invalid_client", "error_description": "bad creds"}
 
     with patch("httpx.AsyncClient.post", return_value=mock_response):
-        with pytest.raises(RuntimeError, match="bad creds"):
+        with pytest.raises(DeviceFlowError, match="bad creds"):
             await request_device_authorization("bad", "bad", domain="feishu")
 
 

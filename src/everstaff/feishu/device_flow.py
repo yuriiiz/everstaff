@@ -15,6 +15,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class DeviceFlowError(RuntimeError):
+    """Raised when device authorization request fails."""
+
+
 def resolve_oauth_endpoints(domain: str) -> dict[str, str]:
     """Resolve OAuth endpoint URLs based on domain (feishu or lark)."""
     if domain == "lark":
@@ -62,7 +66,7 @@ async def request_device_authorization(
     data = resp.json()
     if resp.status_code != 200 or "error" in data:
         msg = data.get("error_description") or data.get("error") or "Unknown error"
-        raise RuntimeError(f"Device authorization failed: {msg}")
+        raise DeviceFlowError(f"Device authorization failed: {msg}")
 
     logger.info("device-flow: device_code obtained, expires_in=%ds", data.get("expires_in", 240))
 
@@ -93,14 +97,14 @@ async def poll_device_token(
     endpoints = resolve_oauth_endpoints(domain)
     deadline = time.monotonic() + expires_in
 
-    while time.monotonic() < deadline:
-        if cancel_event and cancel_event.is_set():
-            return {"ok": False, "error": "cancelled", "message": "Polling was cancelled"}
+    async with httpx.AsyncClient() as client:
+        while time.monotonic() < deadline:
+            if cancel_event and cancel_event.is_set():
+                return {"ok": False, "error": "cancelled", "message": "Polling was cancelled"}
 
-        await asyncio.sleep(interval)
+            await asyncio.sleep(interval)
 
-        try:
-            async with httpx.AsyncClient() as client:
+            try:
                 resp = await client.post(
                     endpoints["token"],
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -111,38 +115,38 @@ async def poll_device_token(
                         "client_secret": app_secret,
                     },
                 )
-            data = resp.json()
-        except Exception as e:
-            logger.warning("device-flow: poll network error: %s", e)
-            continue
+                data = resp.json()
+            except Exception as e:
+                logger.warning("device-flow: poll network error: %s", e, exc_info=True)
+                continue
 
-        error = data.get("error")
+            error = data.get("error")
 
-        if not error and data.get("access_token"):
-            logger.info("device-flow: token obtained successfully")
-            return {
-                "ok": True,
-                "token": {
-                    "access_token": data["access_token"],
-                    "refresh_token": data.get("refresh_token", ""),
-                    "expires_in": data.get("expires_in", 7200),
-                    "refresh_expires_in": data.get("refresh_token_expires_in", 604800),
-                    "scope": data.get("scope", ""),
-                },
-            }
+            if not error and data.get("access_token"):
+                logger.info("device-flow: token obtained successfully")
+                return {
+                    "ok": True,
+                    "token": {
+                        "access_token": data["access_token"],
+                        "refresh_token": data.get("refresh_token", ""),
+                        "expires_in": data.get("expires_in", 7200),
+                        "refresh_expires_in": data.get("refresh_token_expires_in", 604800),
+                        "scope": data.get("scope", ""),
+                    },
+                }
 
-        if error == "authorization_pending":
-            continue
-        if error == "slow_down":
-            interval += 5
-            logger.info("device-flow: slow_down, interval increased to %ss", interval)
-            continue
-        if error == "access_denied":
-            return {"ok": False, "error": "access_denied", "message": "用户拒绝了授权"}
-        if error in ("expired_token", "invalid_grant"):
-            return {"ok": False, "error": "expired_token", "message": "授权码已过期，请重新发起"}
+            if error == "authorization_pending":
+                continue
+            if error == "slow_down":
+                interval += 5
+                logger.info("device-flow: slow_down, interval increased to %ss", interval)
+                continue
+            if error == "access_denied":
+                return {"ok": False, "error": "access_denied", "message": "用户拒绝了授权"}
+            if error in ("expired_token", "invalid_grant"):
+                return {"ok": False, "error": "expired_token", "message": "授权码已过期，请重新发起"}
 
-        desc = data.get("error_description") or error or "Unknown error"
-        return {"ok": False, "error": "expired_token", "message": desc}
+            desc = data.get("error_description") or error or "Unknown error"
+            return {"ok": False, "error": error or "unknown_error", "message": desc}
 
-    return {"ok": False, "error": "expired_token", "message": "授权超时，请重新发起"}
+        return {"ok": False, "error": "expired_token", "message": "授权超时，请重新发起"}
