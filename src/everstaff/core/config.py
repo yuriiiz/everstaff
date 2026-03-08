@@ -53,6 +53,7 @@ class LarkWsChannelConfig(BaseModel):
     feishu_tools: list[str] = Field(default_factory=list)
     # Valid values: ["docs", "calendar", "tasks", "bitable"]
     # When non-empty, Feishu user-identity tools are registered for agents using this channel
+    auto_allow_tools: list[str] = Field(default_factory=list)
 
 
 class WebhookChannelConfig(BaseModel):

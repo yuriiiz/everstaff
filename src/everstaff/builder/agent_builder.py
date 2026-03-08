@@ -51,6 +51,7 @@ class AgentBuilder:
         self._root_session_id = root_session_id
         self._user_input = user_input
         self._user_id = user_id
+        self._feishu_auto_allow: list[str] = []
 
     def _resolve_model(self) -> str:
         """Resolve the concrete LiteLLM model string for this agent.
@@ -349,8 +350,9 @@ class AgentBuilder:
         # Agent checker — explicit allow/deny from spec ONLY
         # NO auto-injection of spec.tools
         agent_cfg = self._spec.permissions
+        agent_allow = list(agent_cfg.allow) + getattr(self, '_feishu_auto_allow', [])
         agent_checker = RuleBasedChecker(
-            allow=list(agent_cfg.allow),
+            allow=agent_allow,
             deny=list(agent_cfg.deny),
         )
 
@@ -456,6 +458,16 @@ class AgentBuilder:
                 )
                 for t in tools:
                     reg.register_native(t)
+
+                # Resolve auto-allow list
+                auto_allow = ch_cfg.auto_allow_tools
+                if auto_allow:
+                    if "*" in auto_allow:
+                        allow_names = [t.name for t in tools]
+                    else:
+                        allow_names = [n for n in auto_allow if any(t.name == n for t in tools)]
+                    self._feishu_auto_allow = allow_names
+                    logger.info("feishu auto_allow_tools: %s", allow_names)
 
                 logger.info("registered %d feishu tools from channel %s: %s", len(tools), name, ch_cfg.feishu_tools)
             except Exception as exc:
