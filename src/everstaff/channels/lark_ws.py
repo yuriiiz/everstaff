@@ -1531,25 +1531,47 @@ class LarkWsChannel:
         self._expiration_task = asyncio.ensure_future(self._expiration_poll_loop())
 
         def _run_ws():
-            # Create a dedicated event loop for the WS thread.
-            # The lark-oapi SDK stores a module-level `loop` that it grabs at
-            # import time via asyncio.get_event_loop().  When uvloop is the
-            # running policy this returns the *already-running* main loop,
-            # causing `loop.run_until_complete()` inside `client.start()` to
-            # fail with "this event loop is already running".
-            # Patching the module-level variable lets the SDK use our fresh loop.
+            # The lark-oapi SDK stores a module-level ``loop`` captured at
+            # import time via ``asyncio.get_event_loop()``.  The ``websockets``
+            # library also calls ``asyncio.get_event_loop()`` internally when
+            # creating Futures.  To avoid "Future attached to a different loop"
+            # on Python 3.12+/3.14 we must ensure a SINGLE event loop is:
+            #   1. set as the thread-local event loop (get_event_loop)
+            #   2. the running loop (get_running_loop)
+            #   3. the SDK module-level ``loop``
+            # Using ``asyncio.run()`` would create an *additional* loop,
+            # so we use ``new_event_loop`` + ``run_until_complete`` directly.
             import lark_oapi.ws.client as _ws_mod
+            from lark_oapi.ws.exception import ClientException
 
             ws_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(ws_loop)
             _ws_mod.loop = ws_loop
 
-            try:
+            async def _ws_main():
                 client = self._build_ws_client(loop)
-                logger.info("WS client built, calling start()")
-                client.start()
+                logger.info("WS client built, connecting")
+                try:
+                    await client._connect()
+                except ClientException:
+                    raise
+                except Exception:
+                    await client._disconnect()
+                    if client._auto_reconnect:
+                        await client._reconnect()
+                    else:
+                        raise
+                ws_loop.create_task(client._ping_loop())
+                # Keep the loop alive; _receive_message_loop is already
+                # running as a task created by _connect().
+                await asyncio.Event().wait()
+
+            try:
+                ws_loop.run_until_complete(_ws_main())
             except Exception as exc:
                 logger.error("WS thread failed err=%s", exc, exc_info=True)
+            finally:
+                ws_loop.close()
 
         self._ws_thread = threading.Thread(target=_run_ws, daemon=True)
         self._ws_thread.start()
