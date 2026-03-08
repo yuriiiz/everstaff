@@ -276,6 +276,9 @@ class AgentBuilder:
         # Wire channel_manager from environment (set by API/CLI layer)
         if self._env.channel_manager is not None:
             context.channel_manager = self._env.channel_manager
+        # Wire hitl_router from environment for source-aware HITL routing
+        if self._env.hitl_router is not None:
+            context.hitl_router = self._env.hitl_router
             # Wire channel_manager + session_id into HITL tool for notify-type broadcasts
             from everstaff.tools.hitl_tool import RequestHumanInputTool
             for tool in tool_registry._tools.values():

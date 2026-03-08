@@ -739,15 +739,22 @@ class AgentRuntime:
                 max_tokens=self._ctx.max_tokens,
                 hitl_requests=merged_hitls,
             )
-            # Broadcast HITL request to channels — only for daemon-sourced sessions.
-            # Web and CLI sessions handle HITL via session.json status polling.
-            _is_daemon = (self._ctx.trigger is not None and self._ctx.trigger.source == "daemon")
-            if self._ctx.channel_manager is not None and _is_daemon:
+            # Route HITL requests via HitlRouter (source-first, fallback to broadcast).
+            # Falls back to legacy channel_manager.broadcast if no hitl_router is set.
+            if self._ctx.hitl_router is not None:
                 for req in hitl_exc.requests:
                     try:
-                        await self._ctx.channel_manager.broadcast(self._ctx.session_id, req)
-                    except Exception as bc_err:
-                        logger.warning("HITL broadcast failed for %s: %s", req.hitl_id, bc_err)
+                        await self._ctx.hitl_router.route(self._ctx.session_id, req)
+                    except Exception as rt_err:
+                        logger.warning("HITL route failed for %s: %s", req.hitl_id, rt_err)
+            elif self._ctx.channel_manager is not None:
+                _is_daemon = (self._ctx.trigger is not None and self._ctx.trigger.source == "daemon")
+                if _is_daemon:
+                    for req in hitl_exc.requests:
+                        try:
+                            await self._ctx.channel_manager.broadcast(self._ctx.session_id, req)
+                        except Exception as bc_err:
+                            logger.warning("HITL broadcast failed for %s: %s", req.hitl_id, bc_err)
             for req in hitl_exc.requests:
                 self._emit("hitl_requested", {
                     "hitl_id": req.hitl_id,

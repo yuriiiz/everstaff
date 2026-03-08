@@ -15,10 +15,11 @@ if TYPE_CHECKING:
 class RuntimeEnvironment:
     """Base environment. Override methods to customize for CLI/Web/Test."""
 
-    def __init__(self, config: "FrameworkConfig | None" = None, channel_manager: Any = None) -> None:
+    def __init__(self, config: "FrameworkConfig | None" = None, channel_manager: Any = None, hitl_router: Any = None) -> None:
         from everstaff.core.config import FrameworkConfig as _FC
         self._config: _FC = config if config is not None else _FC()
         self._channel_manager = channel_manager
+        self._hitl_router = hitl_router
 
     @property
     def config(self) -> "FrameworkConfig":
@@ -27,6 +28,10 @@ class RuntimeEnvironment:
     @property
     def channel_manager(self) -> Any:
         return self._channel_manager
+
+    @property
+    def hitl_router(self) -> Any:
+        return self._hitl_router
 
     def build_memory_store(self, max_tokens: int | None = None, **mem0_scope) -> MemoryStore:
         raise NotImplementedError
@@ -77,10 +82,11 @@ class DefaultEnvironment(RuntimeEnvironment):
         session_id: str | None = None,  # DEPRECATED: ignored, use AgentBuilder(session_id=) instead
         config=None,              # FrameworkConfig | None
         channel_manager: Any = None,
+        hitl_router: Any = None,
         mcp_pool: Any = None,
         session_index: Any = None,  # shared SessionIndex instance
     ) -> None:
-        super().__init__(config=config, channel_manager=channel_manager)
+        super().__init__(config=config, channel_manager=channel_manager, hitl_router=hitl_router)
         self._sessions_dir = sessions_dir
         self._mcp_pool = mcp_pool
         self._session_index = session_index
