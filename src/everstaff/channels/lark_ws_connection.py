@@ -114,7 +114,12 @@ class LarkWsConnection:
         body = {"msg_type": "interactive", "content": json.dumps(card)}
         async with aiohttp.ClientSession() as s:
             async with s.patch(url, headers=headers, json=body) as r:
-                logger.info("update_card status=%s mid=%s", r.status, message_id)
+                resp_data = await r.json()
+                if resp_data.get("code", 0) != 0:
+                    logger.error("update_card failed code=%s msg=%s mid=%s",
+                                 resp_data.get("code"), resp_data.get("msg"), message_id)
+                else:
+                    logger.info("update_card status=%s mid=%s", r.status, message_id)
 
     # ── Card action handler ──────────────────────────────────────
 
@@ -155,6 +160,8 @@ class LarkWsConnection:
                     source=self._app_id,
                     payload={"action_type": action_type, "open_id": open_id, **parsed},
                 ))
+            else:
+                logger.warning("non-hitl card action dropped: event_bus not injected action_type=%s", action_type)
             return {"toast": {"type": "success", "content": "OK"}}
 
     async def _handle_hitl_action(self, value: dict, resolved_by: str) -> dict:
@@ -184,20 +191,26 @@ class LarkWsConnection:
 
         logger.info("hitl action hitl_id=%s decision=%r by=%s", hitl_id, decision, resolved_by)
 
-        if self._channel_manager is not None and self._app_loop is not None:
-            from everstaff.protocols import HitlResolution
-            from datetime import datetime, timezone
-            resolution = HitlResolution(
-                decision=decision,
-                resolved_at=datetime.now(timezone.utc),
-                resolved_by=resolved_by,
-                grant_scope=grant_scope,
-                permission_pattern=permission_pattern,
+        if self._channel_manager is None or self._app_loop is None:
+            logger.warning(
+                "hitl action dropped: channel_manager not injected hitl_id=%s decision=%r",
+                hitl_id, decision,
             )
-            asyncio.run_coroutine_threadsafe(
-                self._channel_manager.resolve(hitl_id, resolution),
-                self._app_loop,
-            )
+            return {"toast": {"type": "error", "content": "System not ready, please retry"}}
+
+        from everstaff.protocols import HitlResolution
+        from datetime import datetime, timezone
+        resolution = HitlResolution(
+            decision=decision,
+            resolved_at=datetime.now(timezone.utc),
+            resolved_by=resolved_by,
+            grant_scope=grant_scope,
+            permission_pattern=permission_pattern,
+        )
+        asyncio.run_coroutine_threadsafe(
+            self._channel_manager.resolve(hitl_id, resolution),
+            self._app_loop,
+        )
 
         return {"toast": {"type": "success", "content": f"Decision: {decision}"}}
 
@@ -252,7 +265,7 @@ class LarkWsConnection:
         from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
         from lark_oapi.ws.enum import MessageType
         from lark_oapi.ws.const import (
-            HEADER_TYPE, HEADER_MESSAGE_ID, HEADER_TRACE_ID,
+            HEADER_TYPE, HEADER_MESSAGE_ID,
             HEADER_SUM, HEADER_SEQ, HEADER_BIZ_RT,
         )
         from lark_oapi.ws.model import Response as WsResp
