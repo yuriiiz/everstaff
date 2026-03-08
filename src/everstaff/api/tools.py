@@ -113,6 +113,13 @@ def make_router(config) -> APIRouter:
     async def list_tools() -> list[dict]:
         return _mgr().list()
 
+    @router.get("/lark")
+    async def list_lark_tools(categories: str | None = None) -> dict:
+        """Return available Feishu/Lark tool metadata by category."""
+        from everstaff.tools.feishu.tools.registry import list_all_tools
+        cats = [c.strip() for c in categories.split(",")] if categories else None
+        return {"categories": list_all_tools(categories=cats)}
+
     @router.get("/{name}")
     async def get_tool(name: str) -> dict:
         try:
