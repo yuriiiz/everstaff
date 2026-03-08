@@ -50,6 +50,9 @@ class LarkWsChannelConfig(BaseModel):
     domain: str = "feishu"
     web_url: str = ""
     allowed_emails: list[str] = Field(default_factory=list)
+    feishu_tools: list[str] = Field(default_factory=list)
+    # Valid values: ["docs", "calendar", "tasks", "bitable"]
+    # When non-empty, Feishu user-identity tools are registered for agents using this channel
 
 
 class WebhookChannelConfig(BaseModel):
