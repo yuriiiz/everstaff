@@ -14,11 +14,9 @@ class FeishuAuthHandler:
         self._channel = channel
 
     async def send_card(self, card: dict) -> str:
-        """Send an interactive card via the channel, return message_id."""
-        token = await self._channel._get_access_token()
-        return await self._channel._send_card(token, card)
+        """Send an interactive card via the channel's connection, return message_id."""
+        return await self._channel._connection.send_card(self._channel._chat_id, card)
 
     async def update_card(self, message_id: str, card: dict) -> None:
-        """Update an existing card."""
-        token = await self._channel._get_access_token()
-        await self._channel._update_card(token, message_id, card)
+        """Update an existing card via the channel's connection."""
+        await self._channel._connection.update_card(message_id, card)
