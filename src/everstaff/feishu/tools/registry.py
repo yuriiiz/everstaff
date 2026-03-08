@@ -14,10 +14,10 @@ def create_feishu_tools(
 ) -> list[Any]:
     """Create Feishu NativeTools filtered by category.
 
-    Categories: docs, calendar, tasks, bitable (future)
+    Categories: docs, calendar, tasks, im, bitable (future)
     If categories is None, all tools are created.
     """
-    all_categories = categories or ["docs", "calendar", "tasks"]
+    all_categories = categories or ["docs", "calendar", "tasks", "im"]
     tools: list[Any] = []
 
     if "docs" in all_categories:
@@ -31,5 +31,9 @@ def create_feishu_tools(
     if "tasks" in all_categories:
         from everstaff.feishu.tools.task_tools import make_feishu_task_tools
         tools.extend(make_feishu_task_tools(app_id, app_secret, domain, auth_handler=auth_handler))
+
+    if "im" in all_categories:
+        from everstaff.feishu.tools.im_tools import make_feishu_im_tools
+        tools.extend(make_feishu_im_tools(app_id, app_secret, domain, auth_handler=auth_handler))
 
     return tools
