@@ -13,12 +13,18 @@ def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu",
 
     ``user_open_id`` is captured in closures so the LLM never needs to supply it.
     """
-    from everstaff.tools.feishu.uat_client import call_with_uat
-    from everstaff.tools.feishu.errors import UserAuthRequiredError
+    from everstaff.tools.feishu.tools._auth_retry import call_with_auth_retry
     import httpx
 
     store = token_store
     api_base = "https://open.feishu.cn" if domain != "lark" else "https://open.larksuite.com"
+
+    def _auth_kwargs(scopes: list[str]) -> dict:
+        return dict(
+            user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
+            domain=domain, token_store=store, required_scopes=scopes,
+            auth_handler=auth_handler,
+        )
 
     @tool(name="feishu_create_task", description="创建飞书任务。")
     async def feishu_create_task(
@@ -45,24 +51,7 @@ def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu",
                 )
             return resp.text
 
-        _scopes = ["task:task"]
-        try:
-            return await call_with_uat(
-                user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
-            )
-        except UserAuthRequiredError as e:
-            if auth_handler is None:
-                raise
-            from everstaff.tools.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or _scopes
-            result = await handle_auth_error(
-                err=e, app_id=app_id, app_secret=app_secret, domain=domain,
-                send_card_fn=auth_handler.send_card,
-                update_card_fn=auth_handler.update_card,
-                token_store=store,
-            )
-            return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["task:task:write"]))
 
     @tool(name="feishu_list_tasks", description="查询飞书任务列表。")
     async def feishu_list_tasks() -> str:
@@ -75,23 +64,6 @@ def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu",
                 )
             return resp.text
 
-        _scopes = ["task:task:readonly"]
-        try:
-            return await call_with_uat(
-                user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
-                domain=domain, fn=_call, token_store=store, required_scopes=_scopes,
-            )
-        except UserAuthRequiredError as e:
-            if auth_handler is None:
-                raise
-            from everstaff.tools.feishu.auto_auth import handle_auth_error
-            e.required_scopes = e.required_scopes or _scopes
-            result = await handle_auth_error(
-                err=e, app_id=app_id, app_secret=app_secret, domain=domain,
-                send_card_fn=auth_handler.send_card,
-                update_card_fn=auth_handler.update_card,
-                token_store=store,
-            )
-            return result.get("message", "已发送授权请求，请在飞书中完成授权后重试。")
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["task:task:readonly"]))
 
     return [feishu_create_task, feishu_list_tasks]

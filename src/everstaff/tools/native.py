@@ -82,6 +82,10 @@ class NativeTool:
         functools.update_wrapper(self, func)
 
     @property
+    def name(self) -> str:
+        return self._definition.name
+
+    @property
     def definition(self) -> ToolDefinition:
         return self._definition
 

@@ -9,4 +9,5 @@ def test_im_tools_created():
     assert "feishu_list_messages" in names
     assert "feishu_list_chats" in names
     assert "feishu_search_chats" in names
-    assert len(tools) == 4
+    assert "feishu_search_messages" in names
+    assert len(tools) == 5

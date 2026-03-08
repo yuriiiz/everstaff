@@ -41,10 +41,13 @@ def test_list_all_tools_known_tool_names():
     assert "feishu_list_chats" in im_names
     assert "feishu_search_chats" in im_names
 
+    assert "feishu_search_messages" in im_names
+
     doc_names = [t["name"] for t in result["docs"]]
     assert "feishu_fetch_doc" in doc_names
     assert "feishu_create_doc" in doc_names
     assert "feishu_update_doc" in doc_names
+    assert "feishu_list_docs" in doc_names
 
     cal_names = [t["name"] for t in result["calendar"]]
     assert "feishu_create_event" in cal_names

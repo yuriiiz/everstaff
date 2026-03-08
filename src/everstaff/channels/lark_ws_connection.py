@@ -105,6 +105,21 @@ class LarkWsConnection:
                     logger.error("send_card failed code=%s msg=%s", data.get("code"), data.get("msg"))
                 return mid
 
+    async def send_text(self, chat_id: str, text: str) -> str:
+        """Send a plain text message to a specific chat. Returns message_id."""
+        import aiohttp
+        token = await self.get_access_token()
+        url = f"{self._api_base}/im/v1/messages?receive_id_type=chat_id"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text})}
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                mid = data.get("data", {}).get("message_id", "")
+                if not mid:
+                    logger.error("send_text failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                return mid
+
     async def update_card(self, message_id: str, card: dict) -> None:
         """Update an existing interactive card."""
         import aiohttp

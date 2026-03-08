@@ -20,3 +20,7 @@ class FeishuAuthHandler:
     async def update_card(self, message_id: str, card: dict) -> None:
         """Update an existing card via the channel's connection."""
         await self._channel._connection.update_card(message_id, card)
+
+    async def send_text(self, text: str) -> str:
+        """Send a plain text message via the channel's connection, return message_id."""
+        return await self._channel._connection.send_text(self._channel._chat_id, text)
