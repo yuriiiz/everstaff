@@ -142,6 +142,13 @@ class AgentBuilder:
             if self._user_input:
                 mem0_provider.start_prefetch(self._user_input)
 
+        # Build memory tool provider (injects search/write/delete tools when memory is on)
+        from everstaff.memory.tool_provider import MemoryToolProvider
+        memory_tool_provider = MemoryToolProvider(
+            mem0_provider._client if mem0_provider is not None else None,
+            mem0_scope,
+        )
+
         # Build skill, knowledge, and MCP providers in parallel
         skill_provider, knowledge_provider, mcp_provider = await asyncio.gather(
             self._build_skill_provider(),
@@ -162,13 +169,12 @@ class AgentBuilder:
         system_tool_names: set[str] = set()
 
         # Provider tools (skills, knowledge, sub-agent, MCP)
-        for provider in (skill_provider, knowledge_provider, sub_agent_provider, mcp_provider):
+        for provider in (skill_provider, knowledge_provider, sub_agent_provider, mcp_provider, memory_tool_provider):
             for t in provider.get_tools():
                 system_tool_names.add(_tool_name(t))
 
         # Internal daemon tools — always bypass permission checks
         system_tool_names.update({
-            "search_memory",
             "make_decision",
             "break_down_goal",
             "update_goal_progress",
@@ -216,6 +222,8 @@ class AgentBuilder:
         for tool in knowledge_provider.get_tools():
             tool_registry.register(tool)
         for tool in mcp_provider.get_tools():
+            tool_registry.register(tool)
+        for tool in memory_tool_provider.get_tools():
             tool_registry.register(tool)
 
         # 1c. Register DAGTool if workflow is configured
@@ -426,19 +434,26 @@ class AgentBuilder:
 
             # Find the matching channel instance for card sending
             auth_handler = None
+            _auth_channel = None
             if self._env.channel_manager is not None:
                 from everstaff.channels.lark_ws import LarkWsChannel
                 for ch in self._env.channel_manager._channels:
                     if isinstance(ch, LarkWsChannel) and ch._app_id == ch_cfg.app_id:
-                        from everstaff.tools.feishu.auth_handler import FeishuAuthHandler
-                        auth_handler = FeishuAuthHandler(ch)
+                        _auth_channel = ch
                         break
 
-            # Resolve Feishu open_id from trigger payload (set by LarkWsChannel
-            # message handler when a Feishu user sends a message to the bot).
+            # Resolve Feishu open_id: prefer trigger payload (daemon loop),
+            # fall back to user_id (Lark private-chat sessions via _send_to_session).
             feishu_open_id = ""
             if self._trigger is not None:
                 feishu_open_id = self._trigger.payload.get("sender_open_id", "")
+            if not feishu_open_id and self._user_id:
+                feishu_open_id = self._user_id
+
+            # Build auth_handler now that feishu_open_id is known
+            if _auth_channel is not None:
+                from everstaff.tools.feishu.auth_handler import FeishuAuthHandler
+                auth_handler = FeishuAuthHandler(_auth_channel, user_open_id=feishu_open_id)
 
             from everstaff.tools.feishu.token_store import FileTokenStore
             # Resolve sessions_dir to absolute path (config may store a relative
