@@ -43,3 +43,17 @@ def test_parse_card_action_unknown_type():
     action_type, parsed = LarkWsConnection._parse_card_value(value)
     assert action_type == "feedback"
     assert parsed["rating"] == 5
+
+
+def test_register_card_handler():
+    conn = LarkWsConnection(app_id="cli_xxx", app_secret="secret")
+    handler = lambda data: {"toast": {"type": "success"}}
+    conn.register_card_handler(handler)
+    assert conn._external_card_handler is handler
+
+
+def test_register_message_handler():
+    conn = LarkWsConnection(app_id="cli_xxx", app_secret="secret")
+    handler = lambda data: None
+    conn.register_message_handler(handler)
+    assert conn._external_message_handler is handler

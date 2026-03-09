@@ -55,6 +55,10 @@ class LarkWsConnection:
         self._event_bus: EventBus | None = None
         self._message_handler: Any = None  # LarkMessageHandler, set by API startup
 
+        # External handlers registered by LarkWsChannel (take priority over built-in)
+        self._external_card_handler: Any = None
+        self._external_message_handler: Any = None
+
         # chat_id → agent_name routing for incoming messages
         self._chat_to_agent: dict[str, str] = {}
 
@@ -72,6 +76,16 @@ class LarkWsConnection:
     def _resolve_agent(self, chat_id: str) -> str | None:
         """Resolve which agent handles messages from this chat."""
         return self._chat_to_agent.get(chat_id)
+
+    # ── External handler registration ────────────────────────────
+
+    def register_card_handler(self, handler) -> None:
+        """Register an external card action handler. Replaces the built-in handler."""
+        self._external_card_handler = handler
+
+    def register_message_handler(self, handler) -> None:
+        """Register an external message handler. Replaces the built-in handler."""
+        self._external_message_handler = handler
 
     # ── Card value parsing ───────────────────────────────────────
 
@@ -295,6 +309,8 @@ class LarkWsConnection:
         from lark_oapi.core.const import UTF_8
 
         def sync_card_handler(data: P2CardActionTrigger):
+            if self._external_card_handler is not None:
+                return self._external_card_handler(data)
             if self._app_loop is not None and self._app_loop.is_running():
                 future = asyncio.run_coroutine_threadsafe(
                     self._handle_card_action(data), self._app_loop,
@@ -314,6 +330,8 @@ class LarkWsConnection:
             from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
             def sync_message_handler(data: P2ImMessageReceiveV1):
+                if self._external_message_handler is not None:
+                    return self._external_message_handler(data)
                 if self._app_loop is not None and self._app_loop.is_running():
                     asyncio.run_coroutine_threadsafe(
                         self._handle_message(data), self._app_loop,
