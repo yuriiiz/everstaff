@@ -29,6 +29,8 @@ BASE_READONLY_SCOPES: list[str] = [
     "task:task:readonly",
     # Docs
     "docx:document:readonly",
+    # Wiki (used by list-docs)
+    "wiki:wiki:readonly",
 ]
 
 
@@ -92,7 +94,12 @@ async def call_with_uat(
 
     # Check scope coverage: if the caller declares required_scopes and the
     # stored token's scope string doesn't contain them, re-authorize.
-    if required_scopes and stored.scope:
+    # When stored.scope is empty/None, the token was granted before scope
+    # tracking was added — treat it as having no scopes and force re-auth.
+    if required_scopes:
+        if not stored.scope:
+            logger.info("uat-client: token for %s has no scope info, re-auth needed for %s", user_open_id, required_scopes)
+            raise NeedAuthorizationError(user_open_id, required_scopes=required_scopes)
         granted = set(stored.scope.split())
         missing = [s for s in required_scopes if s not in granted]
         if missing:

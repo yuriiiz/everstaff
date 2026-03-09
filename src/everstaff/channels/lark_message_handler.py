@@ -30,12 +30,14 @@ class LarkMessageHandler:
         agents_dir: str,
         session_create_fn: Callable[..., Awaitable[str]] | None = None,
         hitl_router: Any = None,
+        bot_name: str = "Agent",
     ) -> None:
         self._adapter = adapter
         self._bus = event_bus
         self._agents_dir = Path(agents_dir).expanduser().resolve()
         self._session_create_fn = session_create_fn
         self._hitl_router = hitl_router
+        self._bot_name = bot_name
         self._task: asyncio.Task | None = None
         self._pending_selections: dict[str, dict[str, str]] = {}
 
@@ -73,6 +75,11 @@ class LarkMessageHandler:
         if not chat_id or not text.strip():
             return
 
+        # Handle /help command
+        if text.strip() == "/help":
+            await self._send_help(chat_id)
+            return
+
         agents = self._list_agents()
         if not agents:
             await self._adapter.send_text(chat_id, "No agents available.")
@@ -87,25 +94,67 @@ class LarkMessageHandler:
                 "user_input": text,
             }
 
+    async def _send_help(self, chat_id: str) -> None:
+        agents = self._list_agents()
+        agent_lines = "\n".join(
+            f"  - **{a['name']}**: {a.get('description', '')}" for a in agents
+        )
+        help_text = (
+            "**Supported Commands**\n\n"
+            "/help - Show this help message\n\n"
+            "**How to use**\n"
+            "Send any message to start a session. "
+            "You will be prompted to select an agent, "
+            "then a new group chat will be created for the conversation.\n\n"
+            f"**Available Agents**\n{agent_lines}"
+        )
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "Help"},
+                "template": "turquoise",
+            },
+            "elements": [{"tag": "markdown", "content": help_text}],
+        }
+        await self._adapter.send_card(chat_id, card)
+
     def _list_agents(self) -> list[dict[str, str]]:
         from everstaff.utils.yaml_loader import load_yaml
+        from everstaff.core.config import _builtin_agents_path
 
-        agents = []
-        if not self._agents_dir.exists():
-            return agents
-        for f in sorted(self._agents_dir.glob("*.yaml")):
-            try:
-                spec = load_yaml(str(f))
-                agents.append(
-                    {
+        agents_by_uuid: dict[str, dict[str, str]] = {}
+
+        # Collect builtin agents first
+        builtin_path = _builtin_agents_path()
+        if builtin_path:
+            bp = Path(builtin_path)
+            for f in sorted(bp.glob("*.yaml")):
+                try:
+                    spec = load_yaml(str(f))
+                    uid = spec.get("uuid", f.stem)
+                    agents_by_uuid[uid] = {
                         "name": spec.get("agent_name", f.stem),
-                        "uuid": spec.get("uuid", ""),
+                        "uuid": uid,
                         "description": spec.get("description", ""),
                     }
-                )
-            except Exception:
-                continue
-        return agents
+                except Exception:
+                    continue
+
+        # Collect user agents (override builtins by uuid)
+        if self._agents_dir.exists():
+            for f in sorted(self._agents_dir.glob("*.yaml")):
+                try:
+                    spec = load_yaml(str(f))
+                    uid = spec.get("uuid", f.stem)
+                    agents_by_uuid[uid] = {
+                        "name": spec.get("agent_name", f.stem),
+                        "uuid": uid,
+                        "description": spec.get("description", ""),
+                    }
+                except Exception:
+                    continue
+
+        return list(agents_by_uuid.values())
 
     def _build_agent_selection_card(
         self,
@@ -116,28 +165,35 @@ class LarkMessageHandler:
         elements = [
             {
                 "tag": "markdown",
-                "content": f"**Message:** {user_input[:200]}\n\nSelect an agent:",
+                "content": f"**Message:** {user_input[:200]}\n\nSelect an agent to start a session:",
             }
         ]
-        actions = []
-        for i, agent in enumerate(agents):
-            actions.append(
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": agent["name"]},
-                    "type": "primary" if i == 0 else "default",
-                    "value": json.dumps(
-                        {
-                            "type": "agent_select",
-                            "agent_name": agent["name"],
-                            "agent_uuid": agent.get("uuid", ""),
-                            "sender_open_id": sender_open_id,
-                            "user_input": user_input,
-                        }
-                    ),
-                }
-            )
-        elements.append({"tag": "action", "actions": actions})
+        for agent in agents:
+            desc = agent.get("description", "")
+            agent_info = f"**{agent['name']}**"
+            if desc:
+                agent_info += f"\n{desc[:100]}"
+            elements.append({
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "Start Session"},
+                        "type": "primary",
+                        "value": json.dumps(
+                            {
+                                "type": "agent_select",
+                                "agent_name": agent["name"],
+                                "agent_uuid": agent.get("uuid", ""),
+                                "sender_open_id": sender_open_id,
+                                "user_input": user_input,
+                            }
+                        ),
+                    }
+                ],
+                "layout": "bisected",
+            })
+            elements.insert(-1, {"tag": "markdown", "content": agent_info})
 
         return {
             "config": {"wide_screen_mode": True},
@@ -154,7 +210,10 @@ class LarkMessageHandler:
         value: dict,
         operator_open_id: str,
     ) -> dict:
-        """Called when user clicks an agent button on the selection card."""
+        """Called when user clicks an agent button on the selection card.
+
+        Creates a new group chat for the session conversation.
+        """
         expected_sender = value.get("sender_open_id", "")
         if expected_sender and operator_open_id != expected_sender:
             return {
@@ -165,7 +224,6 @@ class LarkMessageHandler:
             }
 
         pending = self._pending_selections.pop(message_id, None)
-        chat_id = pending["chat_id"] if pending else ""
         agent_name = value.get("agent_name", "")
         user_input = value.get("user_input", "")
 
@@ -177,55 +235,59 @@ class LarkMessageHandler:
                 "failed to retract selection card mid=%s err=%s", message_id, exc
             )
 
-        if self._session_create_fn and agent_name:
-            source_info = {
-                "source_type": "lark",
-                "chat_id": chat_id,
-                "sender_open_id": operator_open_id,
+        if not (self._session_create_fn and agent_name):
+            return {"toast": {"type": "error", "content": "Failed to create session"}}
+
+        # Create a new group chat for this session
+        try:
+            username = await self._adapter.resolve_username(operator_open_id)
+            group_name = f"{self._bot_name} - {username} - {agent_name}"
+            new_chat_id = await self._adapter.create_chat_group(group_name, operator_open_id)
+            if not new_chat_id:
+                return {"toast": {"type": "error", "content": "Failed to create group"}}
+            await self._adapter.add_chat_members(new_chat_id, [operator_open_id])
+        except Exception as exc:
+            logger.error("on_agent_selected create group failed err=%s", exc, exc_info=True)
+            return {"toast": {"type": "error", "content": f"Failed to create group: {exc}"}}
+
+        source_info = {
+            "source_type": "lark",
+            "chat_id": new_chat_id,
+            "sender_open_id": operator_open_id,
+        }
+        session_id = await self._session_create_fn(
+            agent_name, user_input, source_info
+        )
+
+        return {
+            "toast": {
+                "type": "success",
+                "content": f"Session started with {agent_name}",
             }
-            session_id = await self._session_create_fn(
-                agent_name, user_input, source_info
-            )
-
-            if self._hitl_router:
-                self._hitl_router.set_session_source(
-                    session_id, "lark", {"chat_id": chat_id}
-                )
-
-            return {
-                "toast": {
-                    "type": "success",
-                    "content": f"Session started with {agent_name}",
-                }
-            }
-
-        return {"toast": {"type": "error", "content": "Failed to create session"}}
+        }
 
     async def deliver_result(
         self, session_id: str, chat_id: str, result: str
     ) -> None:
-        """Send session result back to Lark chat. Short -> text, long -> card."""
+        """Send session result back to Lark chat as markdown card."""
         if not result or not chat_id:
             return
-        THRESHOLD = 500
-        if len(result) <= THRESHOLD:
-            await self._adapter.send_text(chat_id, result)
-        else:
-            card = {
-                "config": {"wide_screen_mode": True},
-                "header": {
-                    "title": {"tag": "plain_text", "content": "Agent Result"},
-                    "template": "green",
-                },
-                "elements": [
-                    {"tag": "markdown", "content": result[:2000]},
-                ],
-            }
-            if len(result) > 2000:
-                card["elements"].append(
-                    {
-                        "tag": "markdown",
-                        "content": f"*... ({len(result)} chars total, truncated)*",
-                    }
-                )
-            await self._adapter.send_card(chat_id, card)
+        result = result.strip()
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "Agent Result"},
+                "template": "green",
+            },
+            "elements": [
+                {"tag": "markdown", "content": result[:2000]},
+            ],
+        }
+        if len(result) > 2000:
+            card["elements"].append(
+                {
+                    "tag": "markdown",
+                    "content": f"*... ({len(result)} chars total, truncated)*",
+                }
+            )
+        await self._adapter.send_card(chat_id, card)

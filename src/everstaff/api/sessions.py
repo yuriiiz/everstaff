@@ -169,11 +169,14 @@ async def _resume_session_task(
             _existing["updated_at"] = _now
             _existing.pop("error", None)
             _meta.write_text(json.dumps(_existing, indent=2))
+            # Recover persisted user_id for the builder (e.g. Feishu open_id)
+            if not user_id:
+                user_id = _existing.get("user_id")
         except Exception:
             pass
     else:
         # New session: write initial session.json.
-        _meta.write_text(json.dumps({
+        _init: dict = {
             "session_id": session_id,
             "agent_name": agent_name,
             "agent_uuid": agent_uuid,
@@ -184,7 +187,10 @@ async def _resume_session_task(
             "metadata": {"title": agent_name},
             "messages": [],
             "hitl_requests": [],
-        }, indent=2))
+        }
+        if user_id:
+            _init["user_id"] = user_id
+        _meta.write_text(json.dumps(_init, indent=2))
 
     # Keep the shared index in sync with the direct file write above
     if session_index:

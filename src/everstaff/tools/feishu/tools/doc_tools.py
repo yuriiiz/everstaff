@@ -142,6 +142,6 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
                 return content[0]["text"]
             return str(result)
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document:readonly"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document:readonly", "wiki:wiki:readonly"]))
 
     return [feishu_fetch_doc, feishu_create_doc, feishu_update_doc, feishu_list_docs]

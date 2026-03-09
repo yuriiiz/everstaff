@@ -44,6 +44,7 @@ class WebSocketChannel:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "tool_name": request.tool_name,
             "tool_args": request.tool_args,
+            "tool_call_id": request.tool_call_id,
             "tool_permission_options": request.tool_permission_options,
         }
         await self._broadcast(event)

@@ -54,8 +54,29 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
         }
     }
 
+    // Find the resolved HITL record (from session data) to get the decision
+    const resolvedRecord = hitlRequests?.find(r => {
+        if (r.status !== 'resolved') return false;
+        if (toolCallId && r.tool_call_id === toolCallId) return true;
+        if (parsedArgs?.hitl_id && r.hitl_id === parsedArgs.hitl_id) return true;
+        return false;
+    });
+
     let resolution = null;
-    if (output) {
+    if (type === 'tool_permission') {
+        // For tool_permission type, output is the tool execution result (not the decision).
+        // Get the decision from localResolution or the HITL record's response.
+        if (localResolution) {
+            resolution = localResolution;
+        } else if (resolvedRecord?.response?.decision) {
+            const dec = resolvedRecord.response.decision;
+            const match = tool_permission_options?.find(o => o.id === dec);
+            resolution = { decision: match?.label || dec };
+        } else if (output) {
+            // Output exists but no decision info — tool was approved and executed
+            resolution = { decision: 'Approved' };
+        }
+    } else if (output) {
         try {
             resolution = typeof output.content === 'string' ? JSON.parse(output.content) : output.content;
         } catch (e) {
@@ -152,7 +173,7 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
 
                 {resolution ? (
                     <div className="hitl-resolution">
-                        <div className="hitl-resolution-title">Decision Details:</div>
+                        <div className="hitl-resolution-title">Decision:</div>
                         <div className="hitl-resolution-content" style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', color: '#047857' }}>
                             {(() => {
                                 const dec = resolution.decision;
@@ -163,6 +184,17 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                                 return dec || JSON.stringify(resolution);
                             })()}
                         </div>
+                        {/* For tool_permission, show tool execution result separately */}
+                        {type === 'tool_permission' && output?.content && (
+                            <details style={{ marginTop: '8px' }}>
+                                <summary style={{ cursor: 'pointer', fontSize: '12px', color: '#64748b', userSelect: 'none' }}>
+                                    Tool Output
+                                </summary>
+                                <pre className="hitl-context-content" style={{ marginTop: '4px', maxHeight: '200px', overflow: 'auto' }}>
+                                    {output.content}
+                                </pre>
+                            </details>
+                        )}
                     </div>
                 ) : (isPending || submittingAction !== null) ? (
                     <div className="hitl-actions">

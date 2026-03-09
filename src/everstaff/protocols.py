@@ -233,6 +233,7 @@ class HumanApprovalRequired(Exception):
             requests = [requests]
         super().__init__(f"HITL required: {len(requests)} request(s)")
         self.requests: list[HitlRequest] = requests
+        self.already_routed: bool = False  # set True when runtime already broadcast via hitl_router
 
 
 @dataclass

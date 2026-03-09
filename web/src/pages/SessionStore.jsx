@@ -205,6 +205,7 @@ export default function SessionStore() {
                             context: data.context || '',
                             tool_name: data.tool_name,
                             tool_args: data.tool_args,
+                            tool_permission_options: data.tool_permission_options || [],
                             request: {
                                 type: data.hitl_type,
                                 prompt: data.prompt,
@@ -212,6 +213,7 @@ export default function SessionStore() {
                                 context: data.context || '',
                                 tool_name: data.tool_name,
                                 tool_args: data.tool_args,
+                                tool_permission_options: data.tool_permission_options || [],
                             },
                         }];
                     });

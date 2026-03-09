@@ -11,14 +11,14 @@ version = "0.1.0"
 description = ""
 requires-python = ">=3.11"
 dependencies = [
-    "everstaff>=0.1.5",
+    "everstaff>=0.1.6",
     "python-dotenv>=1.0.0",
 ]
 """,
     ".agent/config.yaml": """\
 # =============================================================================
 # Everstaff Framework Configuration
-# All available keys listed. Commented-out sections are disabled features.
+# All available keys listed. Commented-out sections are optional/advanced.
 # Supports ${{ENV_VAR}} substitution in string values.
 # =============================================================================
 
@@ -34,21 +34,13 @@ skills_dirs:
 tools_dirs:
   - "./tools"
 
+mcp_templates_dirs:
+  - ".agent/mcp_templates"
+
 sessions_dir: ".agent/sessions"
 
 # ---------------------------------------------------------------------------
-# Memory — long-term memory powered by mem0
-# ---------------------------------------------------------------------------
-# memory:
-#   enabled: true
-#   llm_model_kind: fast          # model_mappings key for memory extraction LLM
-#   embedding_model_kind: embedding  # model_mappings key for embedding model
-#   vector_store: faiss           # faiss | chroma | qdrant
-#   vector_store_path: ".agent/memory/vectors"
-#   search_top_k: 10
-
-# ---------------------------------------------------------------------------
-# Project Context
+# Project Context — files injected into agent system prompts
 # ---------------------------------------------------------------------------
 context:
   project_context_dirs:
@@ -57,7 +49,9 @@ context:
 # ---------------------------------------------------------------------------
 # Model Mappings
 # Maps logical model kinds (smart / fast / reasoning) to LiteLLM model strings.
-# Can also be overridden per-key via env vars: AGENT_MODEL_SMART=xxx
+# Env override: AGENT_MODEL_SMART=xxx, AGENT_MODEL_FAST=xxx, etc.
+# LLM providers (via litellm): openai, anthropic, minimax, groq, together,
+#   deepseek, ollama, aws_bedrock, azure_openai, gemini, xai, etc.
 # ---------------------------------------------------------------------------
 model_mappings:
   smart:
@@ -76,9 +70,7 @@ model_mappings:
     temperature: 1.0
     supports_tools: true
 
-  # Embedding model for mem0 memory.
-  # LLM providers (via litellm): openai, anthropic, minimax, groq, together,
-  #   deepseek, ollama, aws_bedrock, azure_openai, gemini, xai, etc.
+  # Embedding model (used by mem0 memory).
   # Embedding providers (via mem0): openai (default), ollama, huggingface,
   #   azure_openai, gemini, vertexai, together, aws_bedrock, fastembed
   # Examples: text-embedding-3-small, huggingface/all-MiniLM-L6-v2,
@@ -88,23 +80,21 @@ model_mappings:
 
 # ---------------------------------------------------------------------------
 # Storage — session persistence backend
-# type: "local" | "s3"
 # ---------------------------------------------------------------------------
 storage:
-  type: "local"
+  type: "local"                    # "local" | "s3"
   # s3_bucket: ""
   # s3_prefix: "sessions"
   # s3_region: "us-east-1"
-  # s3_endpoint_url: null        # custom S3-compatible endpoint
-  # s3_access_key: null          # falls back to boto3 credential chain
+  # s3_endpoint_url: null          # custom S3-compatible endpoint
+  # s3_access_key: null            # falls back to boto3 credential chain
   # s3_secret_key: null
 
 # ---------------------------------------------------------------------------
 # Tracers — trace event recording backends
-# type: "file" | "console" | "otlp"
 # ---------------------------------------------------------------------------
 tracers:
-  - type: console
+  - type: console                  # "file" | "console" | "otlp"
   - type: file
   # - type: otlp
 
@@ -119,9 +109,9 @@ web:
 # ---------------------------------------------------------------------------
 daemon:
   enabled: true
-  watch_interval: 10             # seconds between polling for scheduled tasks
-  graceful_stop_timeout: 300     # seconds to wait for graceful shutdown
-  max_concurrent_loops: 10       # max parallel daemon loop executions
+  watch_interval: 10               # seconds between polling for scheduled tasks
+  graceful_stop_timeout: 300       # seconds to wait for graceful shutdown
+  max_concurrent_loops: 10         # max parallel daemon loop executions
 
 # ---------------------------------------------------------------------------
 # Permissions — tool call allow/deny rules
@@ -129,25 +119,31 @@ daemon:
 # Tools not in the allow list automatically trigger HITL approval.
 # ---------------------------------------------------------------------------
 # permissions:
-#   allow: []
-#   deny: []
+#   allow: []                      # empty = all tools need HITL
+#   deny: []                       # deny takes precedence over allow
 
 # ---------------------------------------------------------------------------
 # Channels — HITL (Human-in-the-Loop) communication channels
 # Keyed by channel name. Each entry uses "type" to discriminate.
-# Supported types: "lark", "lark_ws", "webhook"
+# Supported types: "lark_ws", "lark", "webhook"
 # ---------------------------------------------------------------------------
 # channels:
 #   lark-ws-main:
 #     type: "lark_ws"
 #     app_id: "${{LARK_APP_ID}}"
 #     app_secret: "${{LARK_APP_SECRET}}"
-#     chat_id: "oc_xxxxx"
+#     chat_id: "oc_xxxxx"           # default chat_id (can be overridden per agent)
 #     bot_name: "Agent"
-#     domain: "feishu"
+#     domain: "feishu"              # "feishu" | "lark"
 #     web_url: "http://localhost:5173"
-#     feishu_tools: ["im", "docs", "calendar", "tasks"]  # Feishu user-identity tool categories
-#     auto_allow_tools: ["*"]    # ["*"] = allow all, or list specific tool names
+#     allowed_emails: []            # email allowlist (empty = allow all)
+#     feishu_tools:                 # Feishu user-identity tool categories
+#       - "im"
+#       - "docs"
+#       - "calendar"
+#       - "tasks"
+#       - "bitable"
+#     auto_allow_tools: ["*"]      # ["*"] = allow all, or list specific tool names
 #
 #   lark-main:
 #     type: "lark"
@@ -165,19 +161,48 @@ daemon:
 #       Authorization: "Bearer ${{WEBHOOK_TOKEN}}"
 
 # ---------------------------------------------------------------------------
+# Memory — long-term memory powered by mem0
+# ---------------------------------------------------------------------------
+# memory:
+#   enabled: true
+#   llm_model_kind: fast             # model_mappings key for extraction LLM
+#   embedding_model_kind: embedding  # model_mappings key for embedding model
+#   vector_store: faiss              # faiss | chroma | qdrant
+#   vector_store_path: ".agent/memory/vectors"
+#   search_top_k: 10
+#   search_threshold: 0.3
+
+# ---------------------------------------------------------------------------
+# Sandbox — isolated tool execution environment
+# ---------------------------------------------------------------------------
+# sandbox:
+#   enabled: true
+#   type: "auto"                     # "auto" | "process" | "docker"
+#   idle_timeout: 300                # seconds before idle executor is stopped
+#   token_ttl: 30                    # seconds for one-time auth tokens
+#   docker:
+#     image: "everstaff/executor:latest"
+#     memory_limit: "512m"
+#     cpu_limit: 1.0
+#   extra_mounts:
+#     - source: "/host/path"
+#       target: "/container/path"
+#       readonly: true
+
+# ---------------------------------------------------------------------------
 # Auth — authentication middleware
-# Disabled by default.
 # Provider types: "oidc_code", "oidc", "jwt", "proxy"
 # ---------------------------------------------------------------------------
 # auth:
-#   enabled: false
+#   enabled: true
 #   public_routes:
 #     - "/api/ping"
 #     - "/docs"
 #     - "/openapi.json"
 #     - "/redoc"
-#   allowed_emails: []
+#   allowed_emails: []               # empty = allow all authenticated users
 #   providers:
+#     # --- OIDC Authorization Code Flow (browser login) ---
 #     - type: "oidc_code"
 #       issuer: "https://accounts.google.com"
 #       client_id: "${{OIDC_CLIENT_ID}}"
@@ -187,6 +212,35 @@ daemon:
 #       cookie_secret: "${{COOKIE_SECRET}}"
 #       cookie_name: "agent_session"
 #       cookie_max_age: 86400
+#
+#     # --- OIDC (Bearer token validation) ---
+#     # - type: "oidc"
+#     #   issuer: "https://accounts.google.com"
+#     #   audience: null
+#     #   claims_mapping:
+#     #     user_id: "sub"
+#     #     name: "name"
+#     #     email: "email"
+#
+#     # --- JWT (custom token) ---
+#     # - type: "jwt"
+#     #   header: "X-Auth-Token"
+#     #   secret: "${{JWT_SECRET}}"   # HS256
+#     #   algorithm: "HS256"
+#     #   # jwks_url: null            # for RS256
+#     #   claims_mapping:
+#     #     user_id: "sub"
+#     #     name: "name"
+#     #     email: "email"
+#
+#     # --- Proxy (trusted reverse proxy) ---
+#     # - type: "proxy"
+#     #   headers:
+#     #     user_id: "X-Forwarded-User"
+#     #     email: "X-Forwarded-Email"
+#     #     name: "X-Forwarded-Name"
+#     #   trusted_cidrs:
+#     #     - "10.0.0.0/8"
 """,
     "main.py": """\
 \"\"\"Entry point for {project_name}.
@@ -242,6 +296,7 @@ def main():
         host=args.host,
         port=args.port,
         reload=args.reload,
+        reload_excludes=["*.agent*", "*sessions*", "*memory*", "*.venv*"] if args.reload else None,
         log_config=None,
     )
 
@@ -383,7 +438,22 @@ ANTHROPIC_API_KEY=
 # OPENAI_API_KEY=
 # GOOGLE_API_KEY=
 
-# Optional
+# Model overrides (optional, overrides model_mappings in config.yaml)
+# AGENT_MODEL_SMART=anthropic/claude-sonnet-4-20250514
+# AGENT_MODEL_FAST=anthropic/claude-haiku-4-5-20251001
+
+# Lark / Feishu (for HITL channels)
+# LARK_APP_ID=
+# LARK_APP_SECRET=
+# LARK_VERIFICATION_TOKEN=
+
+# Auth (for OIDC / JWT providers)
+# OIDC_CLIENT_ID=
+# OIDC_CLIENT_SECRET=
+# COOKIE_SECRET=
+# JWT_SECRET=
+
+# Logging
 # LOG_LEVEL=INFO
 # LOG_FILE=
 """,

@@ -71,6 +71,7 @@ class LarkWsChannel:
         self._username_cache: dict[str, str] = {}     # open_id -> display name
         self._allowed_emails: set[str] = set(allowed_emails) if allowed_emails else set()
         self._pending_agent_selection: dict[str, dict] = {}
+        self._session_hitl_events: dict[str, asyncio.Event] = {}  # session_id -> Event (set on HITL resolution)
         self._session_index = None
         self._mcp_pool = None
         self._started: bool = False
@@ -184,6 +185,21 @@ class LarkWsChannel:
             async with s.delete(url, headers=headers) as r:
                 data = await r.json()
                 logger.info("DELETE response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+
+    async def _forward_message(self, token: str, message_id: str, chat_id: str) -> str:
+        """Forward a message to a chat. Returns new message_id."""
+        import aiohttp
+
+        url = f"{self._api_base}/im/v1/messages/{message_id}/forward?receive_id_type=chat_id"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"receive_id": chat_id}
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                mid = data.get("data", {}).get("message_id", "")
+                if not mid:
+                    logger.warning("forward_message failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                return mid
 
     async def _add_reaction(self, token: str, message_id: str, emoji_type: str = "OK") -> None:
         """Add an emoji reaction to a message."""
@@ -471,14 +487,21 @@ class LarkWsChannel:
 
         # ── Resolution details ──
         elements.append({"tag": "hr"})
-        _DECISION_LABELS = {
-            "approved": "Approved", "rejected": "Rejected",
-            "approve_once": "Approved (once)", "approve_session": "Approved (session)",
-            "approve_session_narrow": "Approved (session, narrow)",
-            "approve_permanent": "Approved (always)",
-            "approve_permanent_narrow": "Approved (always, narrow)",
-        }
-        decision_label = _DECISION_LABELS.get(decision, decision)
+        # Prefer the label from tool_permission_options when available
+        decision_label = None
+        if request and request.tool_permission_options:
+            match = next((o for o in request.tool_permission_options if o.get("id") == decision), None)
+            if match:
+                decision_label = match.get("label")
+        if not decision_label:
+            _DECISION_LABELS = {
+                "approved": "Approved", "rejected": "Rejected",
+                "approve_once": "Approved (once)", "approve_session": "Approved (session)",
+                "approve_session_narrow": "Approved (session, narrow)",
+                "approve_permanent": "Approved (always)",
+                "approve_permanent_narrow": "Approved (always, narrow)",
+            }
+            decision_label = _DECISION_LABELS.get(decision, decision)
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": (
             f"**Decision:** {decision_label}\n"
             f"**Operator:** {resolved_by}\n"
@@ -652,36 +675,22 @@ class LarkWsChannel:
         }
 
     def _build_reply_card(self, reply_text: str, session_id: str, agent_name: str, source_chat_id: str) -> dict:
-        """Build a reply card with agent response and 'New Conversation' button."""
-        elements: list[dict] = [
-            {"tag": "div", "text": {"tag": "lark_md", "content": reply_text}},
-            {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "New Conversation"},
-                        "type": "primary",
-                        "value": {
-                            "action": "new_conversation",
-                            "session_id": session_id,
-                            "agent_name": agent_name,
-                            "source_chat_id": source_chat_id,
-                        },
-                    },
-                ],
-            },
-        ]
-
+        """Build a reply card with agent response and session footer."""
         short_id = session_id[:8].upper()
         if self._web_url:
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"[Session {short_id}]({self._web_url}/sessions/{session_id})"}})
+            footer = f"\n\n---\n<font color='grey'>Session {short_id} · {self._web_url}/sessions/{session_id}</font>"
+        else:
+            footer = f"\n\n---\n<font color='grey'>Session {short_id}</font>"
 
         return {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True, "update_multi": True},
             "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"}, "template": "green"},
-            "elements": elements,
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": reply_text + footer},
+                ],
+            },
         }
 
     # ── HitlChannel protocol ────────────────────────────────────
@@ -752,6 +761,11 @@ class LarkWsChannel:
                     await self._file_store.delete(f"hitl-lark-ws/{hitl_id}.json")
                 except Exception as exc:
                     logger.warning("on_resolved file_store cleanup failed hitl_id=%s err=%s", hitl_id, exc)
+            # Notify _send_to_session waiters that HITL was resolved
+            session_id = self._hitl_session_ids.get(hitl_id, "")
+            evt = self._session_hitl_events.get(session_id)
+            if evt is not None:
+                evt.set()
             self._hitl_message_ids.pop(hitl_id, None)
             self._hitl_requests.pop(hitl_id, None)
             self._hitl_session_ids.pop(hitl_id, None)
@@ -876,6 +890,7 @@ class LarkWsChannel:
                     message_id=message_id,
                     chat_id=chat_id,
                     reply_to=None,
+                    sender_open_id=open_id,
                 )
                 return
 
@@ -940,6 +955,7 @@ class LarkWsChannel:
                 message_id=message_id,
                 chat_id=chat_id,
                 reply_to=None,  # in spawned group, reply as new message
+                sender_open_id=open_id,
             )
             return
 
@@ -961,6 +977,7 @@ class LarkWsChannel:
             "chat_id": chat_id,
             "chat_type": "group",
             "reply_to": message_id,
+            "parent_id": parent_id,
         }
 
         # Send agent selection card
@@ -979,8 +996,15 @@ class LarkWsChannel:
         message_id: str,
         chat_id: str,
         reply_to: str | None = None,
+        sender_open_id: str = "",
     ) -> None:
-        """Send user text to an existing session and relay the agent reply."""
+        """Send user text to an existing session and relay the agent reply.
+
+        Handles HITL: if the session pauses for human approval, the HITL card
+        is sent to *this* conversation chat. After resolution (triggered by
+        on_resolved → _resolve_hitl_internal) the method waits for the session
+        to finish and then delivers the final reply.
+        """
         try:
             token = await self._get_access_token()
             await self._add_reaction(token, message_id, emoji_type="OK")
@@ -990,6 +1014,9 @@ class LarkWsChannel:
         try:
             from everstaff.api.sessions import _resume_session_task
 
+            # Initial run — do NOT pass hitl_router so the runtime won't
+            # broadcast to the default channel chat_id.  We send the HITL
+            # card ourselves to the correct conversation chat below.
             await _resume_session_task(
                 session_id=session_id,
                 agent_name=agent_name,
@@ -999,27 +1026,60 @@ class LarkWsChannel:
                 agent_uuid=agent_uuid,
                 mcp_pool=self._mcp_pool,
                 session_index=self._session_index,
+                user_id=sender_open_id or None,
             )
 
-            reply_text = await self._read_session_reply(session_id)
+            # HITL loop — keep sending HITL cards and waiting until session
+            # reaches a terminal state.
+            while True:
+                status = self._read_session_status(session_id)
+                if status != "waiting_for_human":
+                    break
+
+                # Read pending HITL requests and send cards to this chat
+                await self._send_pending_hitls_to_chat(session_id, chat_id)
+
+                # Wait for on_resolved to fire
+                evt = asyncio.Event()
+                self._session_hitl_events[session_id] = evt
+                try:
+                    await asyncio.wait_for(evt.wait(), timeout=3600)
+                except asyncio.TimeoutError:
+                    logger.warning("send_to_session HITL wait timed out session=%s", session_id[:8])
+                    break
+                finally:
+                    self._session_hitl_events.pop(session_id, None)
+
+                # _resolve_hitl_internal resumes the session; give it time
+                # to run to completion (or the next HITL pause).
+                for _ in range(60):
+                    await asyncio.sleep(1)
+                    s = self._read_session_status(session_id)
+                    if s != "running":
+                        break
+
+            reply_text = (await self._read_session_reply(session_id)).strip()
             token = await self._get_access_token()
 
-            if reply_to:
-                # Group: reply as card
-                reply_card = {
-                    "config": {"wide_screen_mode": True},
-                    "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}]"}, "template": "blue"},
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": reply_text}}],
-                }
-                await self._send_message(
-                    token, chat_id, "interactive", json.dumps(reply_card),
-                    reply_to=reply_to,
-                )
+            short_id = session_id[:8].upper()
+            if self._web_url:
+                footer = f"\n\n---\n<font color='grey'>Session {short_id} · {self._web_url}/sessions/{session_id}</font>"
             else:
-                # Private: send text message
-                await self._send_message(
-                    token, chat_id, "text", json.dumps({"text": reply_text}),
-                )
+                footer = f"\n\n---\n<font color='grey'>Session {short_id}</font>"
+            reply_card = {
+                "schema": "2.0",
+                "config": {"wide_screen_mode": True},
+                "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"}, "template": "blue"},
+                "body": {
+                    "elements": [
+                        {"tag": "markdown", "content": reply_text + footer},
+                    ],
+                },
+            }
+            await self._send_message(
+                token, chat_id, "interactive", json.dumps(reply_card),
+                reply_to=reply_to,
+            )
         except Exception as exc:
             logger.error("send_to_session failed session=%s err=%s", session_id, exc, exc_info=True)
             try:
@@ -1030,6 +1090,72 @@ class LarkWsChannel:
                 )
             except Exception as inner_exc:
                 logger.error("send_to_session error message failed err=%s", inner_exc)
+
+    def _read_session_status(self, session_id: str) -> str:
+        """Read session status from session.json."""
+        from pathlib import Path
+        if not self._config:
+            return "unknown"
+        session_path = Path(self._config.sessions_dir).expanduser().resolve() / session_id / "session.json"
+        try:
+            with open(session_path) as f:
+                return json.load(f).get("status", "unknown")
+        except Exception:
+            return "unknown"
+
+    async def _send_pending_hitls_to_chat(self, session_id: str, chat_id: str) -> None:
+        """Read pending HITL requests from session.json and send cards to a specific chat."""
+        from pathlib import Path
+        if not self._config:
+            return
+        session_path = Path(self._config.sessions_dir).expanduser().resolve() / session_id / "session.json"
+        try:
+            with open(session_path) as f:
+                session_data = json.load(f)
+        except Exception:
+            return
+
+        for h in session_data.get("hitl_requests", []):
+            if h.get("status") != "pending":
+                continue
+            hitl_id = h.get("hitl_id", "")
+            if not hitl_id or hitl_id in self._hitl_requests:
+                continue  # already sent
+
+            # Build HitlRequest from session data
+            from everstaff.protocols import HitlRequest
+            from datetime import datetime, timezone
+            req_data = h.get("request", {})
+            req = HitlRequest(
+                hitl_id=hitl_id,
+                type=req_data.get("type", "tool_permission"),
+                prompt=req_data.get("prompt", ""),
+                tool_name=req_data.get("tool_name"),
+                tool_args=req_data.get("tool_args"),
+                options=req_data.get("options"),
+                context=req_data.get("context"),
+                tool_permission_options=req_data.get("tool_permission_options"),
+                created_at=datetime.fromisoformat(req_data["created_at"]) if req_data.get("created_at") else datetime.now(timezone.utc),
+            )
+
+            self._hitl_requests[hitl_id] = req
+            self._hitl_session_ids[hitl_id] = session_id
+
+            try:
+                token = await self._get_access_token()
+                card = self._build_card(req, hitl_id, session_id)
+                mid = await self._send_card_to(token, chat_id, card)
+                if mid:
+                    if self._file_store is not None:
+                        await self._file_store.write(
+                            f"hitl-lark-ws/{hitl_id}.json",
+                            json.dumps({"hitl_id": hitl_id, "message_id": mid}).encode(),
+                        )
+                    else:
+                        self._hitl_message_ids[hitl_id] = mid
+                    logger.info("sent HITL card to conversation chat hitl_id=%s chat=%s mid=%s", hitl_id, chat_id, mid)
+            except Exception as exc:
+                logger.error("send HITL to chat failed hitl_id=%s err=%s", hitl_id, exc, exc_info=True)
 
     async def _read_session_reply(self, session_id: str) -> str:
         """Read the last assistant message from a session's session.json."""
@@ -1084,8 +1210,13 @@ class LarkWsChannel:
 
         if chat_type == "p2p":
             await self._handle_private_message(open_id, text, message_id, chat_id)
-        elif chat_type == "group" and is_mentioned:
-            await self._handle_group_message(open_id, text, message_id, chat_id, parent_id)
+        elif chat_type == "group":
+            # In bot-created conversation groups, respond without @mention
+            state = await self._load_conv_state(f"group/{chat_id}")
+            if is_mentioned or (state and state.get("is_conversation_group")):
+                await self._handle_group_message(open_id, text, message_id, chat_id, parent_id)
+            else:
+                logger.debug("ignoring group message chat_type=%s mentioned=%s", chat_type, is_mentioned)
         else:
             logger.debug("ignoring message chat_type=%s mentioned=%s", chat_type, is_mentioned)
 
@@ -1099,7 +1230,7 @@ class LarkWsChannel:
             return
 
         # Delete the selection card
-        selection_mid = pending.get("selection_message_id")
+        selection_mid = pending.get("selection_message_id") or pending.get("selection_card_id")
         if selection_mid:
             try:
                 token = await self._get_access_token()
@@ -1111,18 +1242,68 @@ class LarkWsChannel:
         chat_type = pending.get("chat_type", "p2p")
         text = pending.get("text", "")
         message_id = pending.get("message_id", "")
-        parent_id = pending.get("parent_id", "")
 
         # Create new session
         session_id = str(_uuid.uuid4())
 
-        # Save conversation state
-        if chat_type == "p2p":
-            conv_key = f"private/{open_id}"
-        else:
-            conv_key = f"group/{chat_id}"
+        if chat_type == "group":
+            # For group messages, create a dedicated conversation group
+            try:
+                token = await self._get_access_token()
+                username = await self._resolve_username(open_id)
+                group_name = f"{self._bot_name} - {username} - {agent_name}"
 
-        await self._save_conv_state(conv_key, {
+                new_chat_id = await self._create_chat_group(token, group_name, open_id)
+                if not new_chat_id:
+                    logger.error("handle_agent_selected failed to create group")
+                    await self._send_message(
+                        token, chat_id, "text",
+                        json.dumps({"text": "Failed to create conversation group."}),
+                    )
+                    return
+
+                await self._add_chat_members(token, new_chat_id, [open_id])
+
+                # Forward quoted message and user message into the new group
+                parent_id = pending.get("parent_id", "")
+                if parent_id:
+                    try:
+                        await self._forward_message(token, parent_id, new_chat_id)
+                    except Exception as exc:
+                        logger.warning("forward quoted message failed err=%s", exc)
+                if message_id:
+                    try:
+                        await self._forward_message(token, message_id, new_chat_id)
+                    except Exception as exc:
+                        logger.warning("forward user message failed err=%s", exc)
+
+                # Save conversation state for the new group
+                await self._save_conv_state(f"group/{new_chat_id}", {
+                    "session_id": session_id,
+                    "agent_name": agent_name,
+                    "agent_uuid": agent_uuid,
+                    "open_id": open_id,
+                    "chat_id": new_chat_id,
+                    "chat_type": "group",
+                    "is_conversation_group": True,
+                })
+
+                # Run session and reply in the new group
+                await self._send_to_session(
+                    session_id=session_id,
+                    agent_name=agent_name,
+                    agent_uuid=agent_uuid,
+                    text=text,
+                    message_id=message_id,
+                    chat_id=new_chat_id,
+                    sender_open_id=open_id,
+                )
+            except Exception as exc:
+                logger.error("handle_agent_selected group creation failed err=%s", exc, exc_info=True)
+            return
+
+        # p2p: reply directly in the private chat
+        await self._save_conv_state(f"private/{open_id}", {
             "session_id": session_id,
             "agent_name": agent_name,
             "agent_uuid": agent_uuid,
@@ -1131,8 +1312,6 @@ class LarkWsChannel:
             "chat_type": chat_type,
         })
 
-        # Send the pending message to the new session
-        reply_to = (parent_id or message_id) if chat_type == "group" else None
         await self._send_to_session(
             session_id=session_id,
             agent_name=agent_name,
@@ -1140,7 +1319,7 @@ class LarkWsChannel:
             text=text,
             message_id=message_id,
             chat_id=chat_id,
-            reply_to=reply_to,
+            sender_open_id=open_id,
         )
 
     async def _handle_new_conversation(

@@ -188,7 +188,8 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
     agent_uuid = session_data.get("agent_uuid", "")
     from everstaff.api.sessions import _resume_session_task
     mcp_pool = getattr(app.state, "mcp_pool", None)
-    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid, mcp_pool=mcp_pool, root_session_id=_root_for_path, session_index=index, executor_manager=executor_mgr)
+    hitl_router = getattr(app.state, "hitl_router", None)
+    await _resume_session_task(session_id, agent_name, "", config, broadcast_fn=broadcast_fn, channel_manager=channel_manager, agent_uuid=agent_uuid, mcp_pool=mcp_pool, root_session_id=_root_for_path, session_index=index, executor_manager=executor_mgr, hitl_router=hitl_router)
 
 
 def make_router(config) -> APIRouter:

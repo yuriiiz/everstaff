@@ -201,11 +201,18 @@ class LarkChannel:
 
         try:
             token = await self._get_access_token()
+            # Prefer the label from tool_permission_options when available
+            decision_label = resolution.decision
+            orig_request = self._hitl_requests.get(hitl_id)
+            if orig_request and orig_request.tool_permission_options:
+                match = next((o for o in orig_request.tool_permission_options if o.get("id") == resolution.decision), None)
+                if match and match.get("label"):
+                    decision_label = match["label"]
             card = {
                 "config": {"wide_screen_mode": True},
                 "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Resolved"}, "template": "green"},
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": (
-                    f"Decision: {resolution.decision}\n"
+                    f"Decision: {decision_label}\n"
                     f"Resolved by: {resolution.resolved_by}\n"
                     f"Resolved At: {resolution.resolved_at.strftime('%Y-%m-%d %H:%M UTC')}"
                 )}}],

@@ -339,8 +339,10 @@ class AgentRuntime:
         else:
             # No user_input and no existing messages (e.g. daemon task with
             # instructions injected into system prompt).  Most LLM providers
-            # require at least one user message, so inject a minimal kickoff.
-            messages.append(Message(role="user", content="Go.", created_at=datetime.now(timezone.utc).isoformat()))
+            # require at least one user message, so inject a readable kickoff.
+            # Use the task_prompt from context if available for readability.
+            kickoff = self._ctx.task_prompt or "Go."
+            messages.append(Message(role="user", content=kickoff, created_at=datetime.now(timezone.utc).isoformat()))
 
         turns = 0
         try:
@@ -508,7 +510,8 @@ class AgentRuntime:
                     await self._hook_notify("on_session_end", response.content or "")
 
                     if len(messages) == 2 and self._ctx.parent_session_id is None:
-                        await self._generate_title(user_input, response.content or "")
+                        title_input = user_input or (messages[0].content if messages else "")
+                        await self._generate_title(title_input, response.content or "")
 
                     # Clean up cancel signal file
                     if self._ctx.file_store is not None:
@@ -747,6 +750,7 @@ class AgentRuntime:
                         await self._ctx.hitl_router.route(self._ctx.session_id, req)
                     except Exception as rt_err:
                         logger.warning("HITL route failed for %s: %s", req.hitl_id, rt_err)
+                hitl_exc.already_routed = True
             elif self._ctx.channel_manager is not None:
                 _is_daemon = (self._ctx.trigger is not None and self._ctx.trigger.source == "daemon")
                 if _is_daemon:
@@ -755,6 +759,7 @@ class AgentRuntime:
                             await self._ctx.channel_manager.broadcast(self._ctx.session_id, req)
                         except Exception as bc_err:
                             logger.warning("HITL broadcast failed for %s: %s", req.hitl_id, bc_err)
+                    hitl_exc.already_routed = True
             for req in hitl_exc.requests:
                 self._emit("hitl_requested", {
                     "hitl_id": req.hitl_id,

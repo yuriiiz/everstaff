@@ -95,6 +95,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                                 f"{prompt}"
                             )
                             ctx.system_prompt = (ctx.system_prompt or "") + task_block
+                            ctx.task_prompt = prompt
                             runtime._system_prompt_dirty = True
                         return await runtime.run(None)
 
@@ -434,12 +435,14 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     app.state.channel_manager = channel_manager
     app.state.ws_connections = set()  # Tracks active WebSocket connections for broadcast
 
-    # Inject session_index and mcp_pool into LarkWsChannel instances
+    # Inject session_index, mcp_pool, and channel_manager into LarkWsChannel instances
     from everstaff.channels.lark_ws import LarkWsChannel as _LarkWsChannel
     for _ch in channel_manager._channels:
         if isinstance(_ch, _LarkWsChannel):
             _ch._session_index = _session_index
             _ch._mcp_pool = mcp_pool
+            _ch._channel_manager = channel_manager
+            _ch._config = config
 
     # Set resolve callback on ChannelManager so any channel resolution
     # automatically persists to session.json and resumes the session.
@@ -479,6 +482,11 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                 agent=agent_name, status="running",
                 created_at=_now, updated_at=_now,
             ))
+
+        # Register session source BEFORE spawning task so HITL routes correctly
+        source_type = source_info.get("source_type", "lark")
+        if hitl_router and chat_id:
+            hitl_router.set_session_source(session_id, source_type, {"chat_id": chat_id})
 
         async def _run_and_deliver():
             """Run session and deliver result back to Lark chat."""
@@ -533,6 +541,12 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     from everstaff.channels.lark_message_handler import LarkMessageHandler
 
     _message_handlers: list[LarkMessageHandler] = []
+    # Resolve bot_name per app_id from channel configs
+    _bot_names: dict[str, str] = {}
+    from everstaff.core.config import LarkWsChannelConfig as _LarkWsCfg
+    for _ch_name, _ch_cfg in (config.channels or {}).items():
+        if isinstance(_ch_cfg, _LarkWsCfg) and _ch_cfg.app_id:
+            _bot_names.setdefault(_ch_cfg.app_id, _ch_cfg.bot_name)
     for _app_id, _conn in lark_connections.items():
         _adapter = LarkChannelAdapter(_conn)
         _msg_handler = LarkMessageHandler(
@@ -541,6 +555,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             agents_dir=config.agents_dir,
             session_create_fn=_create_session_from_channel,
             hitl_router=hitl_router,
+            bot_name=_bot_names.get(_app_id, "Agent"),
         )
         _conn._message_handler = _msg_handler
         _message_handlers.append(_msg_handler)

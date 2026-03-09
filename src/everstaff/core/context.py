@@ -49,6 +49,7 @@ class AgentContext:
 
     max_tokens: int | None = None     # output token limit forwarded to LLM; stored in session metadata
     trigger: AgentEvent | None = None  # Event that initiated this session
+    task_prompt: str | None = None     # Daemon task prompt (for readable session display)
 
     sessions_dir: str | None = None   # base dir for dynamic agent/skill storage
     file_store: FileStore | None = None  # FileStore for stateless cancellation signals

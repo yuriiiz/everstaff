@@ -270,6 +270,7 @@ THINK_TOOL_CLASSES = [
 ]
 
 _MAX_THINK_ITERATIONS = 5
+_MAX_BREAKDOWN_ITERATIONS = 10
 
 
 def _build_think_registry(ctx: ThinkToolContext) -> DefaultToolRegistry:
@@ -277,6 +278,13 @@ def _build_think_registry(ctx: ThinkToolContext) -> DefaultToolRegistry:
     registry = DefaultToolRegistry()
     for cls in THINK_TOOL_CLASSES:
         registry.register(cls(ctx))
+    return registry
+
+
+def _build_breakdown_registry(ctx: ThinkToolContext) -> DefaultToolRegistry:
+    """Build a ToolRegistry with only the break_down_goal tool."""
+    registry = DefaultToolRegistry()
+    registry.register(BreakDownGoalTool(ctx))
     return registry
 
 
@@ -338,12 +346,17 @@ class ThinkEngine:
             state_store=self._state_store,
             mem0=self._mem0,
         )
+
+        # Pre-phase: ensure all goals have breakdowns
+        breakdown_messages = await self._ensure_breakdowns(ctx, autonomy_goals)
+
         registry = _build_think_registry(ctx)
 
         system_prompt = self._build_system_prompt(
             agent_name, trigger, pending_events, state, autonomy_goals,
         )
-        messages: list[Message] = [
+        messages: list[Message] = list(breakdown_messages)
+        messages.append(
             Message(
                 role="user",
                 content=(
@@ -352,7 +365,7 @@ class ThinkEngine:
                 ),
                 created_at=datetime.now(timezone.utc).isoformat(),
             ),
-        ]
+        )
 
         # Tool loop — max _MAX_THINK_ITERATIONS rounds
         for iteration in range(_MAX_THINK_ITERATIONS):
@@ -406,6 +419,96 @@ class ThinkEngine:
         return ctx.decision, messages
 
     # ------------------------------------------------------------------
+    # Breakdown pre-phase
+    # ------------------------------------------------------------------
+
+    async def _ensure_breakdowns(
+        self,
+        ctx: ThinkToolContext,
+        goals: list[Any],
+    ) -> list[Message]:
+        """Ensure every goal has a breakdown; run a dedicated LLM phase for missing ones.
+
+        Returns messages produced during the breakdown phase (may be empty).
+        """
+        missing = [g for g in goals if g.id not in ctx.state.goals_breakdown]
+        if not missing:
+            return []
+
+        logger.info("breakdown pre-phase agent=%s missing=%d/%d",
+                     ctx.agent_name, len(missing), len(goals))
+
+        registry = _build_breakdown_registry(ctx)
+
+        goal_lines = "\n".join(
+            f"- id={g.id}  priority={g.priority}  description={g.description}"
+            + (f"  success_criteria={g.success_criteria}" if getattr(g, "success_criteria", None) else "")
+            for g in missing
+        )
+        system = (
+            f"You are the planning engine for agent '{ctx.agent_name}'.\n"
+            "Your ONLY job right now is to break down each goal into actionable sub-goals.\n"
+            "Call the break_down_goal tool once for EACH goal listed below.\n\n"
+            f"## Goals to break down:\n{goal_lines}"
+        )
+        messages: list[Message] = [
+            Message(
+                role="user",
+                content="Break down all listed goals into sub-goals now.",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        ]
+
+        max_iters = len(missing) + _MAX_BREAKDOWN_ITERATIONS
+        for iteration in range(max_iters):
+            response = await self._llm.complete(messages, registry.get_definitions(), system=system)
+
+            if not response.tool_calls:
+                if response.content:
+                    messages.append(Message(
+                        role="assistant", thinking=response.thinking,
+                        content=response.content,
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                break
+
+            assistant_tool_calls = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
+                }
+                for tc in response.tool_calls
+            ]
+            messages.append(Message(
+                role="assistant", thinking=response.thinking,
+                content=response.content,
+                tool_calls=assistant_tool_calls,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ))
+
+            for tc in response.tool_calls:
+                result = await registry.execute(tc.name, tc.args, tc.id)
+                messages.append(Message(
+                    role="tool", content=result.content,
+                    tool_call_id=tc.id,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                ))
+
+            # Check if all missing goals now have breakdowns
+            still_missing = [g for g in missing if g.id not in ctx.state.goals_breakdown]
+            if not still_missing:
+                logger.info("breakdown pre-phase complete agent=%s all goals covered", ctx.agent_name)
+                break
+        else:
+            still_missing = [g.id for g in missing if g.id not in ctx.state.goals_breakdown]
+            if still_missing:
+                logger.warning("breakdown pre-phase incomplete agent=%s missing=%s",
+                               ctx.agent_name, still_missing)
+
+        return messages
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -447,6 +550,12 @@ class ThinkEngine:
             parts.append(f"\n## Recent decisions (last {min(5, len(state.recent_decisions))}):")
             for d in state.recent_decisions[-5:]:
                 parts.append(f"- [{d.get('timestamp', '?')}] {d.get('action', '?')}: {d.get('task', '-')}")
+
+        if state.goals_breakdown:
+            parts.append(
+                "\nReview existing goal breakdowns above. If any breakdown is outdated "
+                "or needs revision based on current context, call break_down_goal again to replace it."
+            )
 
         parts.append("\nUse search_memory tool to retrieve historical context from long-term memory.")
         parts.append("Call make_decision when you've decided what to do.")

@@ -209,6 +209,10 @@ class FileMemoryStore:
             "hitl_requests": hitl_requests if hitl_requests is not None else existing_meta.get("hitl_requests", []),
             "extra_permissions": extra_permissions if extra_permissions is not None else existing_meta.get("extra_permissions", []),
         }
+        # Preserve user_id if it was set during session creation (e.g. Feishu open_id)
+        _user_id = existing_meta.get("user_id")
+        if _user_id:
+            payload["user_id"] = _user_id
         await self._session_store.write(path, json.dumps(payload, ensure_ascii=False, indent=2).encode())
 
         # Upsert session index

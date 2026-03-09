@@ -217,9 +217,13 @@ class AgentLoop:
                     # Broadcast HITL requests to channels (Lark, etc.) so humans
                     # can resolve them. The _on_resolve → _resume_session_task
                     # flow handles resolution and auto-resume.
-                    logger.info("act paused for HITL agent=%s session=%s requests=%d",
-                                self._agent_name, loop_session_id[:8], len(exc.requests))
-                    if scoped_cm is not None:
+                    logger.info("act paused for HITL agent=%s session=%s requests=%d already_routed=%s",
+                                self._agent_name, loop_session_id[:8], len(exc.requests),
+                                getattr(exc, "already_routed", False))
+                    # Only broadcast here if the inner runtime didn't already
+                    # route via hitl_router (e.g. sandbox path where the
+                    # subprocess has no channel_manager).
+                    if scoped_cm is not None and not getattr(exc, "already_routed", False):
                         for req in exc.requests:
                             try:
                                 await scoped_cm.broadcast(loop_session_id, req)
@@ -313,6 +317,21 @@ class AgentLoop:
     # Loop session persistence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _derive_title(event: Any) -> str:
+        """Derive a readable session title from the event."""
+        payload = getattr(event, "payload", {}) or {}
+        # Try common payload fields for a human-readable snippet
+        text = payload.get("content") or payload.get("task") or ""
+        if isinstance(text, str) and text.strip():
+            snippet = text.strip().replace("\n", " ")
+            if len(snippet) > 60:
+                snippet = snippet[:57] + "..."
+            return snippet
+        source = getattr(event, "source", "")
+        etype = getattr(event, "type", "")
+        return f"Daemon: {source}:{etype}"
+
     def _write_loop_session(self, session_id: str, event: Any, now: str) -> None:
         """Write a stub session.json for this loop cycle to sessions_dir."""
         if self._sessions_dir is None:
@@ -328,7 +347,7 @@ class AgentLoop:
                 "updated_at": now,
                 "parent_session_id": None,
                 "metadata": {
-                    "title": f"Daemon: {event.source}:{event.type}",
+                    "title": self._derive_title(event),
                 },
                 "messages": [],
                 "hitl_requests": [],
@@ -345,7 +364,12 @@ class AgentLoop:
             logger.warning("failed to write loop session agent=%s session=%s error=%s", self._agent_name, session_id, exc)
 
     def _append_think_messages(self, session_id: str, think_messages: list) -> None:
-        """Append think-phase messages to the loop session file."""
+        """Append think-phase messages to a separate field in the loop session file.
+
+        Think messages are internal (trigger details, LLM reasoning) and stored
+        under ``think_messages`` so they don't pollute the main ``messages``
+        array that the runtime uses as conversation history.
+        """
         if self._sessions_dir is None:
             return
         meta_path = self._sessions_dir / session_id / "session.json"
@@ -355,8 +379,9 @@ class AgentLoop:
             return
         try:
             data = json.loads(meta_path.read_text())
+            think_list = data.setdefault("think_messages", [])
             for msg in think_messages:
-                data["messages"].append(msg.to_dict() if hasattr(msg, 'to_dict') else msg)
+                think_list.append(msg.to_dict() if hasattr(msg, 'to_dict') else msg)
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
         except Exception as exc:
@@ -385,7 +410,7 @@ class AgentLoop:
             else:
                 thinking = f"Decision: {decision.action}\nReason: {decision.reasoning}"
                 content = f"Decide to {decision.action} the loop"
-                data["messages"].append({"role": "assistant", "content": content, "thinking": thinking, "created_at": datetime.now(timezone.utc).isoformat()})
+                data.setdefault("think_messages", []).append({"role": "assistant", "content": content, "thinking": thinking, "created_at": datetime.now(timezone.utc).isoformat()})
             data["status"] = "completed"
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             meta_path.write_text(json.dumps(data, indent=2))
