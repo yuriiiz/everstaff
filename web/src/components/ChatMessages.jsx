@@ -20,6 +20,7 @@ export function extractThinkingFromContent(thinking, content) {
 export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, sessionId, sessionStatus, toolCallId }) => {
     const [submittingAction, setSubmittingAction] = useState(null);
     const [userInput, setUserInput] = useState('');
+    const [localResolution, setLocalResolution] = useState(null);
 
     const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
     const { prompt, type, options, context, tool_permission_options } = parsedArgs || {};
@@ -67,6 +68,10 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
             }
         }
     }
+    // Fall back to locally tracked resolution when backend output hasn't arrived yet
+    if (!resolution && localResolution) {
+        resolution = localResolution;
+    }
 
     const isPending = !!pendingRequest && pendingRequest.status === 'pending' && !output;
     const isExpired = !!pendingRequest && pendingRequest.status === 'expired' && !output;
@@ -100,6 +105,8 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                 ...extraFields,
                 tool_call_id: toolCallId
             });
+            const label = tool_permission_options?.find(o => o.id === decision)?.label;
+            setLocalResolution({ decision: label || decision });
             setUserInput('');
         } catch (e) {
             console.error("Resolution error:", e);
@@ -147,7 +154,14 @@ export const HitlHistoryCard = ({ args, output, hitlRequests, onResolve, session
                     <div className="hitl-resolution">
                         <div className="hitl-resolution-title">Decision Details:</div>
                         <div className="hitl-resolution-content" style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', color: '#047857' }}>
-                            {resolution.decision || JSON.stringify(resolution)}
+                            {(() => {
+                                const dec = resolution.decision;
+                                if (dec && tool_permission_options?.length) {
+                                    const match = tool_permission_options.find(o => o.id === dec);
+                                    if (match?.label) return match.label;
+                                }
+                                return dec || JSON.stringify(resolution);
+                            })()}
                         </div>
                     </div>
                 ) : (isPending || submittingAction !== null) ? (

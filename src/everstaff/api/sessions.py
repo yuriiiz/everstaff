@@ -323,6 +323,7 @@ async def _resume_session_task(
                                             args=tool_args,
                                             agent_context=ctx,
                                             tool_call_id=tc_id,
+                                            permission_checked=True,
                                         )
                                         result = await ctx.tool_pipeline.execute(tcc)
                                         messages.append(Message(role="tool", content=result.content, tool_call_id=tc_id, created_at=datetime.now(timezone.utc).isoformat()))

@@ -26,7 +26,7 @@ const Toggle = ({ checked, onChange, label }) => (
     </div>
 );
 
-const HitlChannelCard = ({ channel, onUpdate, onDelete, availableRefs = [] }) => {
+const HitlChannelCard = ({ channel, onUpdate, onDelete, availableRefs = [], larkTools = [] }) => {
     const [yamlText, setYamlText] = useState('');
 
     useEffect(() => {
@@ -62,18 +62,33 @@ const HitlChannelCard = ({ channel, onUpdate, onDelete, availableRefs = [] }) =>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>CHANNEL NAME / REF</label>
-                    <CreatableSelect
-                        options={availableRefs.map(r => ({ value: r, label: r }))}
-                        value={channel.ref ? { label: channel.ref, value: channel.ref } : null}
-                        onChange={val => onUpdate({ ...channel, ref: val ? val.value : '' })}
-                        placeholder="e.g. lark-main"
-                        styles={{
-                            control: (base) => ({ ...base, minHeight: '32px', height: '32px', fontSize: '12px', borderColor: '#e5e7eb', borderRadius: '4px' }),
-                            valueContainer: (base) => ({ ...base, padding: '0 8px' }),
-                            input: (base) => ({ ...base, margin: 0, padding: 0 }),
-                            indicatorsContainer: (base) => ({ ...base, height: '30px' })
-                        }}
-                    />
+                    {channel.type === 'lark_ws' ? (
+                        <Select
+                            options={availableRefs.map(r => ({ value: r, label: r }))}
+                            value={channel.ref ? { label: channel.ref, value: channel.ref } : null}
+                            onChange={val => onUpdate({ ...channel, ref: val ? val.value : '' })}
+                            placeholder="Select global channel"
+                            styles={{
+                                control: (base) => ({ ...base, minHeight: '32px', height: '32px', fontSize: '12px', borderColor: '#e5e7eb', borderRadius: '4px' }),
+                                valueContainer: (base) => ({ ...base, padding: '0 8px' }),
+                                input: (base) => ({ ...base, margin: 0, padding: 0 }),
+                                indicatorsContainer: (base) => ({ ...base, height: '30px' })
+                            }}
+                        />
+                    ) : (
+                        <CreatableSelect
+                            options={availableRefs.map(r => ({ value: r, label: r }))}
+                            value={channel.ref ? { label: channel.ref, value: channel.ref } : null}
+                            onChange={val => onUpdate({ ...channel, ref: val ? val.value : '' })}
+                            placeholder="e.g. lark-main"
+                            styles={{
+                                control: (base) => ({ ...base, minHeight: '32px', height: '32px', fontSize: '12px', borderColor: '#e5e7eb', borderRadius: '4px' }),
+                                valueContainer: (base) => ({ ...base, padding: '0 8px' }),
+                                input: (base) => ({ ...base, margin: 0, padding: 0 }),
+                                indicatorsContainer: (base) => ({ ...base, height: '30px' })
+                            }}
+                        />
+                    )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>CHANNEL TYPE</label>
@@ -81,37 +96,71 @@ const HitlChannelCard = ({ channel, onUpdate, onDelete, availableRefs = [] }) =>
                         className="input-field"
                         style={{ height: '32px', fontSize: '12px' }}
                         value={channel.type || 'lark'}
-                        onChange={e => onUpdate({ ...channel, type: e.target.value })}
+                        onChange={e => {
+                            const newType = e.target.value;
+                            if (newType === 'lark_ws') {
+                                onUpdate({ ref: channel.ref, type: newType, chat_id: channel.chat_id, auto_allow_tools: channel.auto_allow_tools });
+                            } else {
+                                onUpdate({ ...channel, type: newType });
+                            }
+                        }}
                     >
                         <option value="lark">Lark (Webhook)</option>
                         <option value="lark_ws">Lark (WS)</option>
                     </select>
                 </div>
             </div>
-            <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>EXTRA CONFIG (YAML){isRefSelected ? ' - Optional' : ''}</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
-                    <textarea
-                        className="input-field"
-                        style={{ flex: 1, minHeight: '120px', fontFamily: 'monospace', fontSize: '12px', background: '#fff', padding: '8px 12px', resize: 'vertical' }}
-                        value={yamlText}
-                        onChange={e => handleYamlChange(e.target.value)}
-                        placeholder={
-                            (channel.type || 'lark') === 'lark_ws'
-                                ? 'app_id: "..."\napp_secret: "..."\nchat_id: "..."\nbot_name: "..."\ndomain: "feishu"'
-                                : 'app_id: "..."\napp_secret: "..."\nverification_token: "..."\nchat_id: "..."\nbot_name: "..."\ndomain: "feishu"'
-                        }
-                    />
-                    <div style={{ width: '160px', background: '#f1f5f9', padding: '8px 10px', borderRadius: '6px', fontSize: '10px', color: '#64748b', fontFamily: 'monospace', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                        <div style={{ color: '#94a3b8', marginBottom: '6px', fontWeight: 600, fontFamily: 'Inter' }}>Available Keys</div>
-                        <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
-                            {channel.type === 'lark_ws'
-                                ? 'app_id: ""\napp_secret: ""\nchat_id: ""\nbot_name: ""\ndomain: "feishu"'
-                                : 'app_id: ""\napp_secret: ""\nverification_token: ""\nchat_id: ""\nbot_name: ""\ndomain: "feishu"'}
+            {channel.type === 'lark_ws' ? (
+                <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>CHAT ID (Optional, defaults from global)</label>
+                        <input
+                            className="input-field"
+                            style={{ height: '32px', fontSize: '12px', padding: '0 8px' }}
+                            placeholder="e.g. oc_..."
+                            value={channel.chat_id || ''}
+                            onChange={e => onUpdate({ ...channel, chat_id: e.target.value || undefined })}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>AUTO ALLOW TOOLS (Optional)</label>
+                        <Select
+                            isMulti
+                            closeMenuOnSelect={false}
+                            options={larkTools}
+                            value={(channel.auto_allow_tools || []).map(t => ({ value: t, label: t }))}
+                            onChange={(val) => onUpdate({ ...channel, auto_allow_tools: val && val.length > 0 ? val.map(v => v.value) : undefined })}
+                            styles={{
+                                control: (base) => ({ ...base, borderColor: '#e5e7eb', borderRadius: '4px', fontSize: '12px', minHeight: '32px' }),
+                                menu: (base) => ({ ...base, fontSize: '12px', zIndex: 100 }),
+                                multiValue: (base) => ({ ...base, fontSize: '11px' })
+                            }}
+                            placeholder="Select tools to bypass HITL..."
+                        />
+                    </div>
+                </div>
+            ) : (
+                <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8' }}>EXTRA CONFIG (YAML){isRefSelected ? ' - Optional' : ''}</label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                        <textarea
+                            className="input-field"
+                            style={{ flex: 1, minHeight: '120px', fontFamily: 'monospace', fontSize: '12px', background: '#fff', padding: '8px 12px', resize: 'vertical' }}
+                            value={yamlText}
+                            onChange={e => handleYamlChange(e.target.value)}
+                            placeholder={
+                                'app_id: "..."\napp_secret: "..."\nverification_token: "..."\nchat_id: "..."\nbot_name: "..."\ndomain: "feishu"'
+                            }
+                        />
+                        <div style={{ width: '160px', background: '#f1f5f9', padding: '8px 10px', borderRadius: '6px', fontSize: '10px', color: '#64748b', fontFamily: 'monospace', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                            <div style={{ color: '#94a3b8', marginBottom: '6px', fontWeight: 600, fontFamily: 'Inter' }}>Available Keys</div>
+                            <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
+                                {'app_id: ""\napp_secret: ""\nverification_token: ""\nchat_id: ""\nbot_name: ""\ndomain: "feishu"'}
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 };
@@ -502,6 +551,7 @@ export default function AgentStore() {
     const [allSkills, setAllSkills] = useState([]);
     const [allTools, setAllTools] = useState([]);
     const [globalHitlChannels, setGlobalHitlChannels] = useState([]);
+    const [larkTools, setLarkTools] = useState([]);
 
     const handleStartChat = () => {
         if (!selectedAgent) return;
@@ -517,21 +567,32 @@ export default function AgentStore() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [agentsRes, skillsRes, toolsRes, configRes] = await Promise.all([
+                const [agentsRes, skillsRes, toolsRes, configRes, larkToolsRes] = await Promise.all([
                     fetch('/api/agents'),
                     fetch('/api/skills'),
                     fetch('/api/tools'),
-                    fetch('/api/config')
+                    fetch('/api/config'),
+                    fetch('/api/tools/lark').catch(() => ({ json: () => ({ categories: {} }) }))
                 ]);
 
                 const agentsData = await agentsRes.json();
                 const skillsData = await skillsRes.json();
                 const toolsData = await toolsRes.json();
                 const configData = await configRes.json();
+                const larkToolsData = await larkToolsRes.json();
 
                 setAgents(agentsData);
                 setAllSkills(skillsData.map(s => ({ value: s.name, label: s.name, description: s.description })));
                 setAllTools(toolsData.map(t => ({ value: t.name, label: t.name, description: t.description })));
+                
+                let lTools = [];
+                if (larkToolsData && larkToolsData.categories) {
+                    Object.values(larkToolsData.categories).forEach(arr => {
+                        arr.forEach(t => lTools.push({ value: t.name, label: t.name, description: t.description }));
+                    });
+                }
+                setLarkTools(lTools);
+
                 if (configData.hitl_channels) {
                     setGlobalHitlChannels(configData.hitl_channels.map(c => c.ref).filter(Boolean));
                 }
@@ -1181,6 +1242,7 @@ export default function AgentStore() {
                                                                         key={idx}
                                                                         channel={channel}
                                                                         availableRefs={globalHitlChannels}
+                                                                        larkTools={larkTools}
                                                                         onUpdate={(val) => {
                                                                             const newChannels = [...selectedAgent.hitl_channels];
                                                                             newChannels[idx] = val;

@@ -19,8 +19,8 @@ def test_two_channels_share_connection():
     assert len(connections) == 1
 
     conn = connections["app1"]
-    ch_a = LarkWsChannel(connection=conn, chat_id="oc_a")
-    ch_b = LarkWsChannel(connection=conn, chat_id="oc_b")
+    ch_a = LarkWsChannel(app_id="app1", app_secret="s", connection=conn, chat_id="oc_a")
+    ch_b = LarkWsChannel(app_id="app1", app_secret="s", connection=conn, chat_id="oc_b")
     assert ch_a._connection is ch_b._connection
     assert ch_a._chat_id == "oc_a"
     assert ch_b._chat_id == "oc_b"
@@ -60,7 +60,7 @@ async def test_channel_send_and_resolve_flow():
     conn.send_card = AsyncMock(return_value="msg_001")
     conn.update_card = AsyncMock()
 
-    ch = LarkWsChannel(connection=conn, chat_id="oc_chatA", bot_name="TestBot")
+    ch = LarkWsChannel(app_id="app1", app_secret="s", connection=conn, chat_id="oc_chatA", bot_name="TestBot")
 
     # Send a request
     request = HitlRequest(hitl_id="h1", type="approve_reject", prompt="Deploy?")
@@ -88,7 +88,7 @@ def test_all_button_types_have_hitl_type():
     """Verify type=hitl on all card button types."""
     conn = MagicMock(spec=LarkWsConnection)
     conn._app_id = "app1"
-    ch = LarkWsChannel(connection=conn, chat_id="oc_a")
+    ch = LarkWsChannel(app_id="app1", app_secret="s", connection=conn, chat_id="oc_a")
 
     # approve_reject
     request = HitlRequest(hitl_id="h1", type="approve_reject", prompt="OK?")
