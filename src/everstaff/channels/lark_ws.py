@@ -269,7 +269,7 @@ class LarkWsChannel:
         if message_id:
             try:
                 token = await self._get_access_token()
-                await self._add_reaction(token, message_id, emoji_type="THUMBSDOWN")
+                await self._add_reaction(token, message_id, emoji_type="ThumbsDown")
             except Exception as exc:
                 logger.warning("whitelist reaction failed err=%s", exc)
         return False

@@ -144,6 +144,15 @@ daemon:
 #       - "tasks"
 #       - "bitable"
 #     auto_allow_tools: ["*"]      # ["*"] = allow all, or list specific tool names
+#     offline_access: true          # auto-append "offline_access" scope for refresh tokens
+#     base_scopes:                  # override default OAuth scopes (null = built-in defaults)
+#       - "im:message"
+#       - "im:message:readonly"
+#       - "im:chat:readonly"
+#       - "calendar:calendar:readonly"
+#       - "task:task:readonly"
+#       - "docx:document:readonly"
+#       - "wiki:wiki:readonly"
 #
 #   lark-main:
 #     type: "lark"

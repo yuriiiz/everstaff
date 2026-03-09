@@ -14,6 +14,8 @@ async def call_with_auth_retry(
     token_store: Any,
     required_scopes: list[str],
     auth_handler: Any | None,
+    base_scopes: list[str] | None = None,
+    include_offline_access: bool = True,
 ) -> str:
     """Call fn via UAT, handling auth errors with blocking poll + auto-retry.
 
@@ -40,6 +42,8 @@ async def call_with_auth_retry(
             update_card_fn=auth_handler.update_card,
             send_text_fn=getattr(auth_handler, "send_text", None),
             token_store=token_store,
+            base_scopes=base_scopes,
+            include_offline_access=include_offline_access,
         )
         if result.get("authorized"):
             # Auth succeeded — retry the original call

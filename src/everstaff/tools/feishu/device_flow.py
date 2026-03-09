@@ -39,6 +39,7 @@ async def request_device_authorization(
     *,
     scope: str = "",
     domain: str = "feishu",
+    include_offline_access: bool = True,
 ) -> dict[str, Any]:
     """Request a device authorization code from Feishu OAuth server.
 
@@ -47,8 +48,8 @@ async def request_device_authorization(
     """
     endpoints = resolve_oauth_endpoints(domain)
 
-    # Always request offline_access for refresh token
-    if "offline_access" not in scope:
+    # Request offline_access for refresh token (configurable)
+    if include_offline_access and "offline_access" not in scope:
         scope = f"{scope} offline_access".strip()
 
     basic_auth = base64.b64encode(f"{app_id}:{app_secret}".encode()).decode()

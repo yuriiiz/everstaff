@@ -8,7 +8,7 @@ from everstaff.tools.native import tool
 logger = logging.getLogger(__name__)
 
 
-def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None, user_open_id: str = "", token_store=None):
+def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu", auth_handler=None, user_open_id: str = "", token_store=None, base_scopes: list[str] | None = None, include_offline_access: bool = True):
     """Create Feishu task NativeTools.
 
     ``user_open_id`` is captured in closures so the LLM never needs to supply it.
@@ -23,7 +23,7 @@ def make_feishu_task_tools(app_id: str, app_secret: str, domain: str = "feishu",
         return dict(
             user_open_id=user_open_id, app_id=app_id, app_secret=app_secret,
             domain=domain, token_store=store, required_scopes=scopes,
-            auth_handler=auth_handler,
+            auth_handler=auth_handler, base_scopes=base_scopes, include_offline_access=include_offline_access,
         )
 
     @tool(name="feishu_create_task", description="创建飞书任务。")

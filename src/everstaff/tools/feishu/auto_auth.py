@@ -34,6 +34,8 @@ async def handle_auth_error(
     token_store: FileTokenStore | None = None,
     poll: bool = True,
     on_authorized: Callable[[], Awaitable[None]] | None = None,
+    base_scopes: list[str] | None = None,
+    include_offline_access: bool = True,
 ) -> dict[str, Any]:
     """Handle a UserAuthRequiredError by initiating Device Flow.
 
@@ -52,6 +54,8 @@ async def handle_auth_error(
         token_store: Where to persist tokens.
         poll: Whether to poll for authorization (False for testing).
         on_authorized: Callback when authorization completes.
+        base_scopes: Override BASE_READONLY_SCOPES. When None, uses built-in defaults.
+        include_offline_access: Whether to auto-append "offline_access" scope.
 
     Returns:
         dict with status info.
@@ -61,11 +65,12 @@ async def handle_auth_error(
 
     # Merge base read-only scopes with the tool's required scopes so the
     # user only needs to authorize once for common read operations.
-    all_scopes = list(dict.fromkeys(BASE_READONLY_SCOPES + err.required_scopes))
+    _base = base_scopes if base_scopes is not None else BASE_READONLY_SCOPES
+    all_scopes = list(dict.fromkeys(_base + err.required_scopes))
     scope = " ".join(all_scopes)
 
     # 1. Request device authorization
-    device_auth = await request_device_authorization(app_id, app_secret, scope=scope, domain=domain)
+    device_auth = await request_device_authorization(app_id, app_secret, scope=scope, domain=domain, include_offline_access=include_offline_access)
 
     # 2. Send auth card
     card = build_auth_card(

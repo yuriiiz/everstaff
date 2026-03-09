@@ -473,6 +473,8 @@ class AgentBuilder:
                     auth_handler=auth_handler,
                     user_open_id=feishu_open_id,
                     token_store=token_store,
+                    base_scopes=ch_cfg.base_scopes,
+                    include_offline_access=ch_cfg.offline_access,
                 )
                 for t in tools:
                     reg.register_native(t)

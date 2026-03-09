@@ -54,6 +54,11 @@ class LarkWsChannelConfig(BaseModel):
     # Valid values: ["docs", "calendar", "tasks", "bitable"]
     # When non-empty, Feishu user-identity tools are registered for agents using this channel
     auto_allow_tools: list[str] = Field(default_factory=list)
+    base_scopes: list[str] | None = None
+    # Override the default BASE_READONLY_SCOPES used during OAuth authorization.
+    # When None, uses the built-in defaults from uat_client.BASE_READONLY_SCOPES.
+    offline_access: bool = True
+    # Whether to auto-append "offline_access" scope for refresh token support.
 
 
 class WebhookChannelConfig(BaseModel):
