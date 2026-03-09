@@ -345,3 +345,29 @@ async def test_stop_sets_stopped(lark_ws_channel):
     lark_ws_channel._started = True
     await lark_ws_channel.stop()
     assert lark_ws_channel._started is False
+
+
+# --- connection delegation ---
+
+def test_channel_stores_connection():
+    from unittest.mock import MagicMock
+    from everstaff.channels.lark_ws import LarkWsChannel
+    conn = MagicMock()
+    ch = LarkWsChannel(app_id="cli_xxx", app_secret="secret", connection=conn)
+    assert ch._connection is conn
+
+
+@pytest.mark.asyncio
+async def test_start_with_connection_does_not_spawn_thread():
+    from unittest.mock import MagicMock
+    from everstaff.channels.lark_ws import LarkWsChannel
+    conn = MagicMock()
+    conn.register_card_handler = MagicMock()
+    conn.register_message_handler = MagicMock()
+    ch = LarkWsChannel(app_id="cli_xxx", app_secret="secret", connection=conn)
+    await ch.start()
+    assert ch._ws_thread is None
+    conn.register_card_handler.assert_called_once()
+    conn.register_message_handler.assert_called_once()
+    assert ch._app_loop is not None
+    await ch.stop()

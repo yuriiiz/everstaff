@@ -53,6 +53,7 @@ class LarkWsChannel:
         domain: str = "feishu",
         web_url: str = "",
         allowed_emails: list[str] | None = None,
+        connection=None,
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
@@ -74,6 +75,7 @@ class LarkWsChannel:
         self._mcp_pool = None
         self._started: bool = False
         self._ws_thread: threading.Thread | None = None
+        self._connection = connection
         self._app_loop: asyncio.AbstractEventLoop | None = None
         self._expiration_task: asyncio.Task | None = None
 
@@ -1193,6 +1195,188 @@ class LarkWsChannel:
         except Exception as exc:
             logger.error("new_conversation failed err=%s", exc, exc_info=True)
 
+    # ── Handler factories for shared LarkWsConnection ──────────
+
+    def _make_sync_message_handler(self):
+        """Return a message_handler closure suitable for LarkWsConnection.register_message_handler()."""
+
+        def message_handler(data):
+            """Handle incoming im.message.receive_v1 events."""
+            try:
+                event = data.event
+                message = event.message
+                sender = event.sender
+
+                chat_type = message.chat_type  # "p2p" or "group"
+                chat_id = message.chat_id
+                message_id = message.message_id
+                open_id = sender.sender_id.open_id
+                parent_id = message.parent_id or ""
+
+                # Extract text content
+                text = ""
+                if message.message_type == "text":
+                    try:
+                        content = json.loads(message.content)
+                        text = content.get("text", "")
+                    except (json.JSONDecodeError, TypeError):
+                        text = ""
+
+                # Check for @bot mentions and strip them from text
+                is_mentioned = False
+                mentions = message.mentions or []
+                for mention in mentions:
+                    if mention.id and mention.id.user_id:
+                        pass  # regular user mention
+                    # Bot mentions have name matching bot_name
+                    if mention.name == self._bot_name or mention.key:
+                        is_mentioned = True
+                        # Strip @mention from text
+                        if mention.key:
+                            text = text.replace(mention.key, "").strip()
+
+                logger.info(
+                    "message_handler chat_type=%s chat_id=%s open_id=%s text=%r message_id=%s parent_id=%s mentioned=%s",
+                    chat_type, chat_id, open_id, text, message_id, parent_id, is_mentioned,
+                )
+
+                if self._app_loop is not None and self._app_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._route_message(chat_type, chat_id, open_id, text, message_id, parent_id, is_mentioned),
+                        self._app_loop,
+                    )
+                else:
+                    logger.error("message_handler app loop unavailable, message dropped")
+            except Exception as exc:
+                logger.error("message_handler failed err=%s", exc, exc_info=True)
+
+        return message_handler
+
+    def _make_sync_card_handler(self):
+        """Return a sync_card_handler closure suitable for LarkWsConnection.register_card_handler()."""
+
+        def sync_card_handler(data):
+            """Parse card action and dispatch resolution to the app event loop.
+
+            Returns a toast response for immediate user feedback.
+            Card update to "Resolved" state is handled by on_resolved() via broadcast.
+            """
+            logger.info("sync_card_handler entered")
+
+            # Quick whitelist check using cached emails
+            if self._allowed_emails:
+                operator = getattr(getattr(data, "event", data), "operator", None)
+                op_open_id = getattr(operator, "open_id", "") if operator else ""
+                email_key = f"email:{op_open_id}"
+                cached_email = self._username_cache.get(email_key)
+                if cached_email is not None and cached_email not in self._allowed_emails:
+                    return {"toast": {"type": "error", "content": "No permission"}}
+
+            # ── Check for agent selection action BEFORE HITL handling ──
+            event = getattr(data, "event", data)
+            action = getattr(event, "action", None)
+            if action is not None:
+                raw_value = getattr(action, "value", None)
+                if isinstance(raw_value, str):
+                    try:
+                        value = json.loads(raw_value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = {}
+                elif isinstance(raw_value, dict):
+                    value = raw_value
+                else:
+                    value = {}
+
+                if value.get("action") == "select_agent":
+                    requester_open_id = value.get("requester", "")
+                    operator = getattr(event, "operator", None)
+                    clicker_open_id = getattr(operator, "open_id", "") if operator else ""
+
+                    if requester_open_id and clicker_open_id and requester_open_id != clicker_open_id:
+                        logger.warning("agent selection requester mismatch requester=%s clicker=%s", requester_open_id, clicker_open_id)
+                        return {"toast": {"type": "info", "content": "Only the requester can select an agent."}}
+
+                    # Extract agent choice from form_value
+                    raw_form = getattr(action, "form_value", None)
+                    if isinstance(raw_form, str):
+                        try:
+                            form_dict = json.loads(raw_form)
+                        except (json.JSONDecodeError, TypeError):
+                            form_dict = {}
+                    elif isinstance(raw_form, dict):
+                        form_dict = raw_form
+                    else:
+                        form_dict = {}
+
+                    agent_choice_raw = form_dict.get("agent_choice", "")
+                    if isinstance(agent_choice_raw, str):
+                        try:
+                            agent_choice = json.loads(agent_choice_raw)
+                        except (json.JSONDecodeError, TypeError):
+                            agent_choice = {}
+                    elif isinstance(agent_choice_raw, dict):
+                        agent_choice = agent_choice_raw
+                    else:
+                        agent_choice = {}
+
+                    agent_name = agent_choice.get("agent_name", "")
+                    agent_uuid = agent_choice.get("agent_uuid", "")
+                    logger.info("sync_card_handler agent selection agent_name=%s agent_uuid=%s open_id=%s", agent_name, agent_uuid, requester_open_id or clicker_open_id)
+
+                    if agent_name and self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_agent_selected(requester_open_id or clicker_open_id, agent_name, agent_uuid),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": f"Starting {agent_name}..."}}
+
+                if value.get("action") == "new_conversation":
+                    operator = getattr(event, "operator", None)
+                    clicker_open_id = getattr(operator, "open_id", "") if operator else ""
+                    session_id = value.get("session_id", "")
+                    agent_name = value.get("agent_name", "")
+                    source_chat_id = value.get("source_chat_id", "")
+
+                    if self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_new_conversation(clicker_open_id, agent_name, session_id, source_chat_id),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": "Creating new conversation group..."}}
+
+            # ── HITL handling (existing logic) ──
+            from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
+
+            hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
+            if not hitl_id:
+                logger.warning("sync_card_handler parse failed, returning empty response")
+                return P2CardActionTriggerResponse({})
+
+            # Build resolved card synchronously for immediate callback response
+            request = self._hitl_requests.get(hitl_id)
+            session_id = self._hitl_session_ids.get(hitl_id, "")
+            resolved_card = self._build_resolved_card(
+                decision, resolved_by, request, session_id,
+            )
+            logger.info("sync_card_handler built resolved card for hitl_id=%s", hitl_id)
+
+            # Dispatch backend processing (persist + resume) to app event loop
+            if self._app_loop is not None and self._app_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_card_action(hitl_id, decision, resolved_by, grant_scope, permission_pattern),
+                    self._app_loop,
+                )
+                logger.info("sync_card_handler dispatched handle_card_action to app loop")
+            else:
+                logger.error("sync_card_handler app loop unavailable, action dropped")
+
+            # Return resolved card directly — Lark replaces the current card
+            return resolved_card
+
+        return sync_card_handler
+
     # ── WS client setup ─────────────────────────────────────────
 
     def _build_ws_client(self, loop: asyncio.AbstractEventLoop):
@@ -1530,6 +1714,14 @@ class LarkWsChannel:
         self._app_loop = loop
         self._expiration_task = asyncio.ensure_future(self._expiration_poll_loop())
 
+        # ── Delegated mode: register handlers on shared LarkWsConnection ──
+        if self._connection is not None:
+            self._connection.register_card_handler(self._make_sync_card_handler())
+            self._connection.register_message_handler(self._make_sync_message_handler())
+            logger.info("started (delegated to shared LarkWsConnection)")
+            return
+
+        # ── Legacy mode: own WS thread ──
         def _run_ws():
             # The lark-oapi SDK stores a module-level ``loop`` captured at
             # import time via ``asyncio.get_event_loop()``.  The ``websockets``
