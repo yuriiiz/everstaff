@@ -115,6 +115,21 @@ class Mem0Client:
             self._memory.add, messages, **kwargs
         )
 
+    async def add_raw(self, text: str, **scope: Any) -> list[dict]:
+        """Store a fact directly as a user message.
+
+        Unlike ``add``, this is intended for agent-driven writes where the
+        content is already a distilled fact.
+        """
+        kwargs = {k: v for k, v in scope.items() if v is not None}
+        return await asyncio.to_thread(
+            self._memory.add, [{"role": "user", "content": text}], **kwargs
+        )
+
+    async def delete(self, memory_id: str) -> None:
+        """Delete a memory by its ID."""
+        await asyncio.to_thread(self._memory.delete, memory_id)
+
     async def search(self, query: str, *, top_k: int | None = None, **scope: Any) -> list[dict]:
         """Retrieve relevant memories with threshold filtering."""
         kwargs = {k: v for k, v in scope.items() if v is not None}

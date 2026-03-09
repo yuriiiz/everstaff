@@ -114,3 +114,61 @@ class TestMem0ClientGetAll:
             await client.get_all(user_id="u1", agent_id=None, limit=100)
 
             mock_instance.get_all.assert_called_once_with(user_id="u1", limit=100)
+
+
+@pytest.mark.asyncio
+class TestMem0ClientAddRaw:
+    async def test_add_raw_stores_as_user_message(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory, \
+             patch("everstaff.memory.mem0_client.litellm", MagicMock()):
+            mock_instance = MagicMock()
+            mock_instance.add.return_value = [{"id": "mem_1", "event": "ADD", "data": {"memory": "test fact"}}]
+            MockMemory.from_config.return_value = mock_instance
+
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+
+            result = await client.add_raw("User prefers dark mode", agent_id="a1")
+
+            mock_instance.add.assert_called_once_with(
+                [{"role": "user", "content": "User prefers dark mode"}],
+                agent_id="a1",
+            )
+            assert result == [{"id": "mem_1", "event": "ADD", "data": {"memory": "test fact"}}]
+
+    async def test_add_raw_filters_none_scope(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory, \
+             patch("everstaff.memory.mem0_client.litellm", MagicMock()):
+            mock_instance = MagicMock()
+            mock_instance.add.return_value = []
+            MockMemory.from_config.return_value = mock_instance
+
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+
+            await client.add_raw("fact", agent_id="a1", user_id=None)
+
+            mock_instance.add.assert_called_once_with(
+                [{"role": "user", "content": "fact"}],
+                agent_id="a1",
+            )
+
+
+@pytest.mark.asyncio
+class TestMem0ClientDelete:
+    async def test_delete_calls_mem0(self):
+        with patch("everstaff.memory.mem0_client.Memory") as MockMemory, \
+             patch("everstaff.memory.mem0_client.litellm", MagicMock()):
+            mock_instance = MagicMock()
+            mock_instance.delete.return_value = None
+            MockMemory.from_config.return_value = mock_instance
+
+            from everstaff.memory.mem0_client import Mem0Client
+            config = MemoryConfig(enabled=True)
+            client = Mem0Client(config, "openai/gpt-4.1-nano", "text-embedding-3-small")
+
+            await client.delete("mem_123")
+
+            mock_instance.delete.assert_called_once_with("mem_123")
