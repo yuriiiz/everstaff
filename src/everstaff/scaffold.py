@@ -155,6 +155,7 @@ daemon:
 #       - "docx:document:readonly"
 #       - "wiki:wiki:readonly"
 #       - "minutes:minutes"
+#       - "search:message"
 #
 #   lark-main:
 #     type: "lark"

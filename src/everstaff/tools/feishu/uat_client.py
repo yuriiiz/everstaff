@@ -33,6 +33,8 @@ BASE_READONLY_SCOPES: list[str] = [
     "wiki:wiki:readonly",
     # Minutes
     "minutes:minutes",
+    # Search
+    "search:message",
 ]
 
 

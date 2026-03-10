@@ -48,7 +48,7 @@ def make_feishu_minutes_tools(
             auth_handler=auth_handler, base_scopes=base_scopes, include_offline_access=include_offline_access,
         )
 
-    @tool(name="feishu_get_minute", description="获取飞书妙记信息，包括标题、时长、创建者、链接等。")
+    @tool(name="feishu_get_minute", description="获取飞书妙记（会议纪要/会议录制的AI转写）的基本信息，包括标题、时长、创建者、链接等。妙记是飞书视频会议的录制转写产物。")
     async def feishu_get_minute(minute_token: str, user_id_type: str = "open_id") -> str:
         """Get minutes meta info.
 
@@ -70,7 +70,7 @@ def make_feishu_minutes_tools(
 
         return await call_with_auth_retry(fn=_call, **_auth_kwargs(["minutes:minutes"]))
 
-    @tool(name="feishu_get_minute_transcript", description="获取飞书妙记的转写内容（文字记录）。默认返回按说话人格式化的文本，设置 raw=true 返回原始 JSON。")
+    @tool(name="feishu_get_minute_transcript", description="获取飞书妙记（会议纪要）的转写内容（文字记录）。妙记是飞书视频会议的录制转写产物。默认返回按说话人格式化的文本，设置 raw=true 返回原始 JSON。")
     async def feishu_get_minute_transcript(minute_token: str, raw: bool = False) -> str:
         """Get minutes transcript content.
 
@@ -102,7 +102,7 @@ def make_feishu_minutes_tools(
 
         return await call_with_auth_retry(fn=_call, **_auth_kwargs(["minutes:minutes"]))
 
-    @tool(name="feishu_get_minute_statistics", description="获取飞书妙记的观看统计信息。")
+    @tool(name="feishu_get_minute_statistics", description="获取飞书妙记（会议纪要）的观看统计信息。")
     async def feishu_get_minute_statistics(minute_token: str) -> str:
         """Get minutes view statistics.
 
@@ -122,7 +122,7 @@ def make_feishu_minutes_tools(
     # Regex to extract minute_token from Feishu/Lark minutes URLs
     _MINUTE_URL_RE = re.compile(r"(?:feishu\.cn|larkoffice\.com|larksuite\.com|feishu-pre\.cn)/minutes/([A-Za-z0-9_-]{20,})")
 
-    @tool(name="feishu_list_minutes", description="搜索并列出飞书妙记。通过搜索消息中的妙记链接来发现妙记，返回妙记列表（标题、时长、创建时间、链接）。")
+    @tool(name="feishu_list_minutes", description="搜索并列出飞书妙记（会议纪要/会议录制转写）。通过搜索消息中的妙记链接来发现妙记，返回妙记列表（标题、时长、创建时间、链接）。当用户想查找会议纪要、会议记录、会议转写时使用此工具。")
     async def feishu_list_minutes(
         query: str = "",
         page_size: int = 20,
@@ -183,6 +183,6 @@ def make_feishu_minutes_tools(
 
             return json.dumps({"minutes": minutes_list, "total": len(minutes_list)}, ensure_ascii=False, indent=2)
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:message:readonly", "minutes:minutes"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["search:message", "minutes:minutes"]))
 
     return [feishu_get_minute, feishu_get_minute_transcript, feishu_get_minute_statistics, feishu_list_minutes]

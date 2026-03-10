@@ -31,10 +31,10 @@ _TOOL_CATALOG: dict[str, list[dict[str, str]]] = {
         {"name": "feishu_search_messages", "description": "搜索飞书消息，支持按关键词、发送者、时间等条件过滤。"},
     ],
     "minutes": [
-        {"name": "feishu_get_minute", "description": "获取飞书妙记信息，包括标题、时长、创建者、链接等。"},
-        {"name": "feishu_get_minute_transcript", "description": "获取飞书妙记的转写内容（文字记录）。支持格式化文本和原始 JSON。"},
-        {"name": "feishu_get_minute_statistics", "description": "获取飞书妙记的观看统计信息。"},
-        {"name": "feishu_list_minutes", "description": "搜索并列出飞书妙记。通过搜索消息中的妙记链接来发现妙记。"},
+        {"name": "feishu_get_minute", "description": "获取飞书妙记（会议纪要/会议录制转写）的基本信息。"},
+        {"name": "feishu_get_minute_transcript", "description": "获取飞书妙记（会议纪要）的转写内容。支持格式化文本和原始 JSON。"},
+        {"name": "feishu_get_minute_statistics", "description": "获取飞书妙记（会议纪要）的观看统计信息。"},
+        {"name": "feishu_list_minutes", "description": "搜索并列出飞书妙记（会议纪要/会议录制转写）。查找会议纪要、会议记录时使用。"},
     ],
 }
 
