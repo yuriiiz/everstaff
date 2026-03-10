@@ -258,7 +258,7 @@ class LarkWsChannel:
         """Check if user is in the allowed_emails whitelist.
 
         Returns True if whitelist is empty (disabled) or email is allowed.
-        Adds THUMBSDOWN reaction if message_id is provided and user is denied.
+        Replies with denial details if message_id is provided and user is denied.
         """
         if not self._allowed_emails:
             return True
@@ -269,9 +269,17 @@ class LarkWsChannel:
         if message_id:
             try:
                 token = await self._get_access_token()
-                await self._add_reaction(token, message_id, emoji_type="ThumbsDown")
+                if email:
+                    deny_text = f"oid: {open_id}  email: {email} 不在白名单中"
+                else:
+                    deny_text = f"oid: {open_id}  email: (无法获取) 不在白名单中"
+                await self._send_message(
+                    token, "", "text",
+                    json.dumps({"text": deny_text}),
+                    reply_to=message_id,
+                )
             except Exception as exc:
-                logger.warning("whitelist reaction failed err=%s", exc)
+                logger.warning("whitelist denial reply failed err=%s", exc)
         return False
 
     async def _load_conv_state(self, key: str) -> dict | None:
@@ -643,10 +651,11 @@ class LarkWsChannel:
                         "name": "agent_choice",
                         "placeholder": {"tag": "plain_text", "content": "Choose an agent..."},
                         "options": options,
+                        "width": "fill",
                     },
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": "Start"},
+                        "text": {"tag": "plain_text", "content": "Start Session"},
                         "type": "primary",
                         "action_type": "form_submit",
                         "name": "submit",
@@ -882,6 +891,19 @@ class LarkWsChannel:
         if text.strip().lower() != "/new":
             state = await self._load_conv_state(conv_key)
             if state and state.get("session_id"):
+                # Reject if session is already running to prevent concurrent execution
+                status = self._read_session_status(state["session_id"])
+                if status == "running":
+                    try:
+                        token = await self._get_access_token()
+                        await self._send_message(
+                            token, "", "text",
+                            json.dumps({"text": "Agent 正在处理中，请等待回复后再发送新消息。"}),
+                            reply_to=message_id,
+                        )
+                    except Exception as exc:
+                        logger.warning("busy reply failed err=%s", exc)
+                    return
                 await self._send_to_session(
                     session_id=state["session_id"],
                     agent_name=state.get("agent_name", ""),
@@ -947,6 +969,19 @@ class LarkWsChannel:
         # Check if this is a spawned conversation group (acts like private chat)
         state = await self._load_conv_state(f"group/{chat_id}")
         if state and state.get("is_conversation_group"):
+            # Reject if session is already running to prevent concurrent execution
+            status = self._read_session_status(state["session_id"])
+            if status == "running":
+                try:
+                    token = await self._get_access_token()
+                    await self._send_message(
+                        token, "", "text",
+                        json.dumps({"text": "Agent 正在处理中，请等待回复后再发送新消息。"}),
+                        reply_to=message_id,
+                    )
+                except Exception as exc:
+                    logger.warning("busy reply failed err=%s", exc)
+                return
             await self._send_to_session(
                 session_id=state["session_id"],
                 agent_name=state.get("agent_name", ""),
@@ -987,6 +1022,33 @@ class LarkWsChannel:
         if mid:
             self._pending_agent_selection[open_id]["selection_card_id"] = mid
 
+    async def _send_error_card(
+        self,
+        token: str,
+        chat_id: str,
+        session_id: str,
+        agent_name: str,
+        error: Exception,
+    ) -> str:
+        """Send an error card. Returns message_id."""
+        short_id = session_id[:8].upper()
+        error_text = f"**{type(error).__name__}:** {error}"
+        card = {
+            "schema": "2.0",
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"[Error] {self._bot_name}"},
+                "template": "red",
+            },
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": error_text},
+                    {"tag": "markdown", "content": f"Session {short_id}"},
+                ],
+            },
+        }
+        return await self._send_card_to(token, chat_id, card)
+
     async def _send_to_session(
         self,
         session_id: str,
@@ -998,25 +1060,72 @@ class LarkWsChannel:
         reply_to: str | None = None,
         sender_open_id: str = "",
     ) -> None:
-        """Send user text to an existing session and relay the agent reply.
-
-        Handles HITL: if the session pauses for human approval, the HITL card
-        is sent to *this* conversation chat. After resolution (triggered by
-        on_resolved → _resolve_hitl_internal) the method waits for the session
-        to finish and then delivers the final reply.
-        """
+        """Send user text to a session and relay each LLM text turn as a separate Feishu card."""
         try:
             token = await self._get_access_token()
             await self._add_reaction(token, message_id, emoji_type="OK")
         except Exception as exc:
             logger.warning("send_to_session reaction failed err=%s", exc)
 
+        processing_mid = ""
         try:
+            # Send "Processing..." card
+            token = await self._get_access_token()
+            processing_card = {
+                "schema": "2.0",
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"},
+                    "template": "wathet",
+                },
+                "body": {"elements": [{"tag": "markdown", "content": "Processing..."}]},
+            }
+            processing_mid = await self._send_card_to(token, chat_id, processing_card)
+
+            # Accumulate text deltas; flush on turn boundaries
+            accumulated_text: list[str] = []
+            short_id = session_id[:8].upper()
+            if self._web_url:
+                web_footer = f"\n\n---\n<font color='grey'>Session {short_id} · {self._web_url}/sessions/{session_id}</font>"
+            else:
+                web_footer = f"\n\n---\n<font color='grey'>Session {short_id}</font>"
+
+            async def _flush_text() -> None:
+                """Send accumulated text as a new Feishu card."""
+                nonlocal accumulated_text
+                if not accumulated_text:
+                    return
+                content = "".join(accumulated_text)
+                accumulated_text = []
+                if not content.strip():
+                    return
+                tk = await self._get_access_token()
+                card = {
+                    "schema": "2.0",
+                    "config": {"wide_screen_mode": True},
+                    "header": {
+                        "title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"},
+                        "template": "blue",
+                    },
+                    "body": {"elements": [{"tag": "markdown", "content": content + web_footer}]},
+                }
+                await self._send_card_to(tk, chat_id, card)
+
+            from everstaff.schema.stream import (
+                TextDelta, ToolCallStart, TurnStart, SessionEnd,
+            )
+
+            async def event_callback(event) -> None:
+                nonlocal accumulated_text
+                if isinstance(event, TextDelta):
+                    accumulated_text.append(event.content)
+                elif isinstance(event, (ToolCallStart, TurnStart)):
+                    await _flush_text()
+                elif isinstance(event, SessionEnd):
+                    await _flush_text()
+
             from everstaff.api.sessions import _resume_session_task
 
-            # Initial run — do NOT pass hitl_router so the runtime won't
-            # broadcast to the default channel chat_id.  We send the HITL
-            # card ourselves to the correct conversation chat below.
             await _resume_session_task(
                 session_id=session_id,
                 agent_name=agent_name,
@@ -1027,19 +1136,17 @@ class LarkWsChannel:
                 mcp_pool=self._mcp_pool,
                 session_index=self._session_index,
                 user_id=sender_open_id or None,
+                event_callback=event_callback,
             )
 
-            # HITL loop — keep sending HITL cards and waiting until session
-            # reaches a terminal state.
+            # HITL loop
             while True:
                 status = self._read_session_status(session_id)
                 if status != "waiting_for_human":
                     break
 
-                # Read pending HITL requests and send cards to this chat
                 await self._send_pending_hitls_to_chat(session_id, chat_id)
 
-                # Wait for on_resolved to fire
                 evt = asyncio.Event()
                 self._session_hitl_events[session_id] = evt
                 try:
@@ -1050,46 +1157,35 @@ class LarkWsChannel:
                 finally:
                     self._session_hitl_events.pop(session_id, None)
 
-                # _resolve_hitl_internal resumes the session; give it time
-                # to run to completion (or the next HITL pause).
                 for _ in range(60):
                     await asyncio.sleep(1)
                     s = self._read_session_status(session_id)
                     if s != "running":
                         break
 
-            reply_text = (await self._read_session_reply(session_id)).strip()
-            token = await self._get_access_token()
+            # Delete "Processing..." card on completion
+            if processing_mid:
+                try:
+                    tk = await self._get_access_token()
+                    await self._delete_message(tk, processing_mid)
+                except Exception:
+                    pass
 
-            short_id = session_id[:8].upper()
-            if self._web_url:
-                footer = f"\n\n---\n<font color='grey'>Session {short_id} · {self._web_url}/sessions/{session_id}</font>"
-            else:
-                footer = f"\n\n---\n<font color='grey'>Session {short_id}</font>"
-            reply_card = {
-                "schema": "2.0",
-                "config": {"wide_screen_mode": True},
-                "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"}, "template": "blue"},
-                "body": {
-                    "elements": [
-                        {"tag": "markdown", "content": reply_text + footer},
-                    ],
-                },
-            }
-            await self._send_message(
-                token, chat_id, "interactive", json.dumps(reply_card),
-                reply_to=reply_to,
-            )
         except Exception as exc:
             logger.error("send_to_session failed session=%s err=%s", session_id, exc, exc_info=True)
+            # Delete processing card on error too
+            if processing_mid:
+                try:
+                    tk = await self._get_access_token()
+                    await self._delete_message(tk, processing_mid)
+                except Exception:
+                    pass
+            # Send error card
             try:
                 token = await self._get_access_token()
-                await self._send_message(
-                    token, chat_id, "text",
-                    json.dumps({"text": f"Error: {exc}"}),
-                )
+                await self._send_error_card(token, chat_id, session_id, agent_name, exc)
             except Exception as inner_exc:
-                logger.error("send_to_session error message failed err=%s", inner_exc)
+                logger.error("send_to_session error card failed err=%s", inner_exc)
 
     def _read_session_status(self, session_id: str) -> str:
         """Read session status from session.json."""
