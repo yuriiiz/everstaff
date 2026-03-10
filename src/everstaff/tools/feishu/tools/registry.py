@@ -1,7 +1,12 @@
 """Feishu tool registry -- creates tool sets by category."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from everstaff.tools.native import tool
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Static catalog -- lightweight metadata that requires no credentials.
@@ -29,6 +34,9 @@ _TOOL_CATALOG: dict[str, list[dict[str, str]]] = {
         {"name": "feishu_list_chats", "description": "获取用户的飞书群聊列表。"},
         {"name": "feishu_search_chats", "description": "搜索飞书群聊。"},
         {"name": "feishu_search_messages", "description": "搜索飞书消息，支持按关键词、发送者、时间等条件过滤。"},
+    ],
+    "_common": [
+        {"name": "feishu_revoke_auth", "description": "取消当前用户的飞书授权。"},
     ],
     "minutes": [
         {"name": "feishu_get_minute", "description": "获取飞书妙记（会议纪要/会议录制转写）的基本信息。"},
@@ -91,5 +99,19 @@ def create_feishu_tools(
     if "minutes" in all_categories:
         from everstaff.tools.feishu.tools.minutes_tools import make_feishu_minutes_tools
         tools.extend(make_feishu_minutes_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store, base_scopes=base_scopes, include_offline_access=include_offline_access))
+
+    # Always register auth management tools when any category is enabled
+    @tool(name="feishu_revoke_auth", description="取消当前用户的飞书授权。删除本地存储的 OAuth token，用户下次使用飞书工具时需要重新授权。")
+    async def feishu_revoke_auth() -> str:
+        """Revoke current user's Feishu authorization by removing stored token."""
+        if token_store is None:
+            return '{"error": "token_store not configured"}'
+        if not user_open_id:
+            return '{"error": "user_open_id unknown, cannot revoke"}'
+        await token_store.remove(app_id, user_open_id)
+        logger.info("feishu auth revoked for user %s", user_open_id)
+        return '{"success": true, "message": "已取消飞书授权，下次使用飞书工具时需要重新授权"}'
+
+    tools.append(feishu_revoke_auth)
 
     return tools
