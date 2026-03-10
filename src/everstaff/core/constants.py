@@ -2,6 +2,7 @@
 
 # Session management
 STALE_SESSION_THRESHOLD_SECONDS = 300   # mark as interrupted if running > 5 min with no update
+SESSION_HEARTBEAT_INTERVAL_SECONDS = 60  # how often the runtime writes a heartbeat while running
 
 # Tool output limits (non-configurable hard caps)
 TOOL_MAX_RESULTS = 200        # max grep/glob results
