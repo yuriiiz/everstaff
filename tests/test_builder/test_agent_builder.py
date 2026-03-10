@@ -68,7 +68,7 @@ def test_builder_resolves_inherit_using_parent_model_id():
     env = TestEnvironment()
     builder = AgentBuilder(spec, env, parent_model_id="anthropic/claude-3-haiku")
     model = builder._resolve_model()
-    assert model == "anthropic/claude-3-haiku"
+    assert model.model_id == "anthropic/claude-3-haiku"
 
 
 def test_builder_model_override_beats_inherit():
@@ -85,7 +85,7 @@ def test_builder_model_override_beats_inherit():
     env = TestEnvironment()
     builder = AgentBuilder(spec, env, parent_model_id="anthropic/claude-3-haiku")
     model = builder._resolve_model()
-    assert model == "openai/gpt-4o"
+    assert model.model_id == "openai/gpt-4o"
 
 
 def test_builder_accepts_parent_session_id():
@@ -281,6 +281,45 @@ async def test_builder_passes_max_tokens_and_temperature_to_llm_client():
     )
     assert captured_kwargs.get("temperature") == 0.3, (
         f"temperature not passed to build_llm_client. kwargs={captured_kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_builder_passes_timeout_and_num_retries_to_llm_client():
+    """ModelMapping.timeout and max_retries must be forwarded to build_llm_client as kwargs."""
+    from everstaff.builder.agent_builder import AgentBuilder
+    from everstaff.builder.environment import TestEnvironment
+    from everstaff.schema.agent_spec import AgentSpec
+
+    spec = AgentSpec(
+        agent_name="timeout-agent",
+        instructions="",
+    )
+
+    captured_kwargs: dict = {}
+
+    class CapturingEnv(TestEnvironment):
+        def build_llm_client(self, model: str, **kwargs):
+            captured_kwargs.update(kwargs)
+            captured_kwargs["model"] = model
+            return super().build_llm_client(model, **kwargs)
+
+    env = CapturingEnv()
+    builder = AgentBuilder(spec, env)
+    await builder.build()
+
+    assert "timeout" in captured_kwargs, (
+        f"timeout not passed to build_llm_client. kwargs={captured_kwargs}"
+    )
+    assert "num_retries" in captured_kwargs, (
+        f"num_retries not passed to build_llm_client. kwargs={captured_kwargs}"
+    )
+    # Default ModelMapping values
+    assert captured_kwargs["timeout"] == 120, (
+        f"Expected timeout=120, got {captured_kwargs['timeout']}"
+    )
+    assert captured_kwargs["num_retries"] == 2, (
+        f"Expected num_retries=2, got {captured_kwargs['num_retries']}"
     )
 
 

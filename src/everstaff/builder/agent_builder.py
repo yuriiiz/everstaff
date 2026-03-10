@@ -14,6 +14,7 @@ from everstaff.core.runtime import AgentRuntime
 from everstaff.tools.pipeline import ToolCallPipeline
 from everstaff.tools.stages import ExecutionStage, PermissionStage
 from everstaff.schema.agent_spec import AgentSpec
+from everstaff.schema.model_config import ModelMapping
 from everstaff.tools.default_registry import DefaultToolRegistry
 from everstaff.protocols import AgentEvent, CancellationEvent
 
@@ -53,8 +54,21 @@ class AgentBuilder:
         self._user_id = user_id
         self._feishu_auto_allow: list[str] = []
 
-    def _resolve_model(self) -> str:
-        """Resolve the concrete LiteLLM model string for this agent.
+    def _resolve_root_user_id(self) -> str | None:
+        """Look up user_id from the root session's persisted session.json."""
+        if not self._root_session_id:
+            return None
+        try:
+            import json
+            raw_sessions_dir = self._env.sessions_dir() or self._env.config.sessions_dir
+            root_path = Path(raw_sessions_dir) / self._root_session_id / "session.json"
+            data = json.loads(root_path.read_text(encoding="utf-8"))
+            return data.get("user_id") or None
+        except Exception:
+            return None
+
+    def _resolve_model(self) -> ModelMapping:
+        """Resolve the concrete LiteLLM model mapping for this agent.
 
         Priority:
         1. spec.model_override — explicit override takes precedence
@@ -62,17 +76,17 @@ class AgentBuilder:
         3. spec.adviced_model_kind → looked up in config.model_mappings
         """
         if self._spec.model_override:
-            return self._spec.model_override
+            return ModelMapping(model_id=self._spec.model_override)
 
         if self._spec.adviced_model_kind == "inherit":
             if self._parent_model_id:
-                return self._parent_model_id
+                return ModelMapping(model_id=self._parent_model_id)
             # fallthrough: defensive, shouldn't happen at top level
 
         kind = self._spec.adviced_model_kind
         if kind == "inherit":
             kind = "smart"  # defensive fallback when no parent provided
-        return self._env.config.resolve_model(kind).model_id
+        return self._env.config.resolve_model(kind)
 
     def _build_system_prompt(self) -> str | None:
         parts = []
@@ -105,7 +119,8 @@ class AgentBuilder:
             root_session_id = self._parent_session_id if self._parent_session_id else session_id
 
         workdir = self._env.working_dir(session_id, root_session_id=root_session_id)
-        model_id = self._resolve_model()
+        mapping = self._resolve_model()
+        model_id = mapping.model_id
 
         # Resolve cancellation FIRST so all children share the same event
         cancellation = self._parent_cancellation if self._parent_cancellation is not None else CancellationEvent()
@@ -301,6 +316,10 @@ class AgentBuilder:
             llm_kwargs["max_tokens"] = self._spec.max_tokens
         if getattr(self._spec, "temperature", None) is not None:
             llm_kwargs["temperature"] = self._spec.temperature
+        if mapping.timeout:
+            llm_kwargs["timeout"] = mapping.timeout
+        if mapping.max_retries:
+            llm_kwargs["num_retries"] = mapping.max_retries
         llm_client = self._env.build_llm_client(model_id, **llm_kwargs)
 
         # 5. Register bootstrap tools only when explicitly enabled
@@ -443,12 +462,15 @@ class AgentBuilder:
                         break
 
             # Resolve Feishu open_id: prefer trigger payload (daemon loop),
-            # fall back to user_id (Lark private-chat sessions via _send_to_session).
+            # fall back to user_id (Lark private-chat sessions via _send_to_session),
+            # then try root session's persisted user_id (for child sessions).
             feishu_open_id = ""
             if self._trigger is not None:
                 feishu_open_id = self._trigger.payload.get("sender_open_id", "")
             if not feishu_open_id and self._user_id:
                 feishu_open_id = self._user_id
+            if not feishu_open_id and self._root_session_id:
+                feishu_open_id = self._resolve_root_user_id() or ""
 
             # Build auth_handler now that feishu_open_id is known
             if _auth_channel is not None:
@@ -615,8 +637,14 @@ class AgentBuilder:
             return None
         from everstaff.workflow.factory import WorkflowSubAgentFactory
         from everstaff.workflow.dag_tool import DAGTool
+        # Ensure each SubAgentSpec has its name set from the dict key
+        resolved_agents = {}
+        for key, sub_spec in (self._spec.sub_agents or {}).items():
+            if not sub_spec.name:
+                sub_spec = sub_spec.model_copy(update={"name": key})
+            resolved_agents[key] = sub_spec
         factory = WorkflowSubAgentFactory(
-            available_agents=self._spec.sub_agents or {},
+            available_agents=resolved_agents,
             env=self._env,
             parent_session_id=session_id,
             parent_cancellation=cancellation,
