@@ -136,7 +136,7 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
                 )
             return resp.text
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["calendar:calendar:readonly"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["calendar:calendar:read"]))
 
     @tool(name="feishu_freebusy", description="查询飞书用户忙闲状态。")
     async def feishu_freebusy(
@@ -157,6 +157,6 @@ def make_feishu_calendar_tools(app_id: str, app_secret: str, domain: str = "feis
                 )
             return resp.text
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["calendar:calendar:readonly"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["calendar:calendar:read"]))
 
     return [feishu_create_event, feishu_list_events, feishu_freebusy]

@@ -148,8 +148,8 @@ daemon:
 #     base_scopes:                  # override default OAuth scopes (null = built-in defaults)
 #       - "im:message"
 #       - "im:message:readonly"
-#       - "im:chat:readonly"
-#       - "calendar:calendar:readonly"
+#       - "im:chat:read"
+#       - "calendar:calendar:read"
 #       - "task:task:readonly"
 #       - "docx:document:readonly"
 #       - "wiki:wiki:readonly"

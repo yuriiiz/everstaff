@@ -36,7 +36,9 @@ class UnixSocketChannel(IpcChannel):
         return self._next_id_counter
 
     async def connect(self, address: str) -> None:
-        self._reader, self._writer = await asyncio.open_unix_connection(address)
+        self._reader, self._writer = await asyncio.open_unix_connection(
+            address, limit=16 * 1024 * 1024,  # 16 MiB
+        )
         self._connected = True
         self._listen_task = asyncio.create_task(self._listen_loop())
 
@@ -147,7 +149,8 @@ class UnixSocketServer:
 
     async def start(self) -> None:
         self._server = await asyncio.start_unix_server(
-            self._handle_client, self._socket_path
+            self._handle_client, self._socket_path,
+            limit=16 * 1024 * 1024,  # 16 MiB
         )
 
     async def stop(self) -> None:

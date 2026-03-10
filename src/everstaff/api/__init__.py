@@ -26,8 +26,14 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Re-claim loggers after uvicorn has configured its own handlers
-        from everstaff.utils.logging import reclaim_loggers
+        # Ensure logging is configured in the worker process (needed with --reload)
+        import os
+        from everstaff.utils.logging import setup_logging, reclaim_loggers
+        setup_logging(
+            console=True,
+            file=os.getenv("LOG_FILE"),
+            level=os.getenv("LOG_LEVEL", "INFO"),
+        )
         reclaim_loggers()
 
         # Startup: start all channels

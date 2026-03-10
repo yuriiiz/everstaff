@@ -22,9 +22,9 @@ BASE_READONLY_SCOPES: list[str] = [
     # IM
     "im:message",
     "im:message:readonly",
-    "im:chat:readonly",
+    "im:chat:read",
     # Calendar
-    "calendar:calendar:readonly",
+    "calendar:calendar:read",
     # Tasks
     "task:task:readonly",
     # Docs
