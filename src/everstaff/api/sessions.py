@@ -97,6 +97,7 @@ async def _resume_session_task(
     executor_manager=None,  # sandbox ExecutorManager
     user_id: str | None = None,
     hitl_router=None,  # HitlRouter for source-aware HITL routing
+    event_callback=None,  # async callable(StreamEvent) -> None, called per streaming event
 ) -> None:
     from everstaff.builder.agent_builder import AgentBuilder
     from everstaff.builder.environment import DefaultEnvironment
@@ -438,6 +439,12 @@ async def _resume_session_task(
                     await broadcast_fn({**event.model_dump(), "session_id": session_id})
                 except Exception as exc:
                     logger.debug("broadcast failed session=%s event=%s err=%s",
+                                 _sid, type(event).__name__, exc)
+            if event_callback is not None:
+                try:
+                    await event_callback(event)
+                except Exception as exc:
+                    logger.debug("event_callback failed session=%s event=%s err=%s",
                                  _sid, type(event).__name__, exc)
         logger.info("end agent=%s session=%s", agent_name, _sid)
     except HumanApprovalRequired:
