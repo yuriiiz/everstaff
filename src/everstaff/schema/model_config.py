@@ -12,3 +12,5 @@ class ModelMapping(BaseModel):
     max_tokens: int = 8192
     temperature: float = 0.7
     supports_tools: bool = True
+    timeout: int = 120           # seconds before LLM API call times out
+    max_retries: int = 2         # number of retries on timeout/transient errors
