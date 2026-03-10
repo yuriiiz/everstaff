@@ -120,7 +120,7 @@ def make_feishu_minutes_tools(
         return await call_with_auth_retry(fn=_call, **_auth_kwargs(["minutes:minutes"]))
 
     # Regex to extract minute_token from Feishu/Lark minutes URLs
-    _MINUTE_URL_RE = re.compile(r"(?:feishu\.cn|larkoffice\.com|larksuite\.com)/minutes/([A-Za-z0-9]{20,})")
+    _MINUTE_URL_RE = re.compile(r"(?:feishu\.cn|larkoffice\.com|larksuite\.com|feishu-pre\.cn)/minutes/([A-Za-z0-9_-]{20,})")
 
     @tool(name="feishu_list_minutes", description="搜索并列出飞书妙记。通过搜索消息中的妙记链接来发现妙记，返回妙记列表（标题、时长、创建时间、链接）。")
     async def feishu_list_minutes(
@@ -133,31 +133,24 @@ def make_feishu_minutes_tools(
             query: Optional keyword to narrow search (e.g. meeting topic). Empty for all minutes.
             page_size: Max number of minutes to return (default 20).
         """
-        async def _call(uat: str) -> str:
-            # Step 1: Search messages for minutes URLs
-            search_query = query if query else "feishu.cn/minutes"
-            params = {
-                "query": search_query,
-                "page_size": min(max(page_size, 1), 50),
-            }
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    f"{api_base}/open-apis/im/v1/messages/search",
-                    params=params,
-                    json={},
-                    headers={"Authorization": f"Bearer {uat}"},
-                )
-            data = resp.json()
-            if data.get("code") != 0:
-                return json.dumps({"error": data.get("msg", "search failed"), "code": data.get("code")}, ensure_ascii=False)
+        from everstaff.tools.feishu.mcp_proxy import call_feishu_mcp
 
-            # Step 2: Extract unique minute_tokens from message content
+        async def _call(uat: str) -> str:
+            # Step 1: Search messages for minutes URLs via MCP proxy
+            search_args: dict = {"query": query if query else "feishu.cn/minutes"}
+            search_args["page_size"] = min(max(page_size, 1), 50)
+            result = await call_feishu_mcp(tool_name="search-messages", args=search_args, uat=uat)
+            search_text = ""
+            result_content = result.get("content", [])
+            if result_content and result_content[0].get("text"):
+                search_text = result_content[0]["text"]
+            else:
+                search_text = str(result)
+
+            # Step 2: Extract unique minute_tokens from search results
             tokens_seen: set[str] = set()
-            items = data.get("data", {}).get("items", [])
-            for item in items:
-                body = item.get("body", {}).get("content", "")
-                for match in _MINUTE_URL_RE.finditer(body):
-                    tokens_seen.add(match.group(1))
+            for match in _MINUTE_URL_RE.finditer(search_text):
+                tokens_seen.add(match.group(1))
 
             if not tokens_seen:
                 return json.dumps({"minutes": [], "message": "未找到妙记链接"}, ensure_ascii=False)
