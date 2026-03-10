@@ -1029,10 +1029,18 @@ class LarkWsChannel:
         session_id: str,
         agent_name: str,
         error: Exception,
+        agent_uuid: str = "",
     ) -> str:
-        """Send an error card. Returns message_id."""
+        """Send an error card with a Retry button. Returns message_id."""
         short_id = session_id[:8].upper()
         error_text = f"**{type(error).__name__}:** {error}"
+        retry_value = json.dumps({
+            "action": "retry_session",
+            "session_id": session_id,
+            "agent_name": agent_name,
+            "agent_uuid": agent_uuid,
+            "chat_id": chat_id,
+        })
         card = {
             "schema": "2.0",
             "config": {"wide_screen_mode": True},
@@ -1044,10 +1052,43 @@ class LarkWsChannel:
                 "elements": [
                     {"tag": "markdown", "content": error_text},
                     {"tag": "markdown", "content": f"Session {short_id}"},
+                    {
+                        "tag": "action",
+                        "actions": [
+                            {
+                                "tag": "button",
+                                "text": {"tag": "plain_text", "content": "Retry"},
+                                "type": "primary",
+                                "value": retry_value,
+                            }
+                        ],
+                    },
                 ],
             },
         }
         return await self._send_card_to(token, chat_id, card)
+
+    async def _handle_retry_session(
+        self,
+        session_id: str,
+        agent_name: str,
+        agent_uuid: str,
+        chat_id: str,
+        sender_open_id: str,
+    ) -> None:
+        """Resume a failed session (triggered by Retry button on error card)."""
+        try:
+            await self._send_to_session(
+                session_id=session_id,
+                agent_name=agent_name,
+                agent_uuid=agent_uuid,
+                text="",
+                message_id="",
+                chat_id=chat_id,
+                sender_open_id=sender_open_id,
+            )
+        except Exception as exc:
+            logger.error("handle_retry_session failed session=%s err=%s", session_id, exc, exc_info=True)
 
     async def _send_to_session(
         self,
@@ -1183,7 +1224,7 @@ class LarkWsChannel:
             # Send error card
             try:
                 token = await self._get_access_token()
-                await self._send_error_card(token, chat_id, session_id, agent_name, exc)
+                await self._send_error_card(token, chat_id, session_id, agent_name, exc, agent_uuid=agent_uuid)
             except Exception as inner_exc:
                 logger.error("send_to_session error card failed err=%s", inner_exc)
 
@@ -1621,6 +1662,25 @@ class LarkWsChannel:
 
                     return {"toast": {"type": "success", "content": "Creating new conversation group..."}}
 
+                if value.get("action") == "retry_session":
+                    retry_session_id = value.get("session_id", "")
+                    retry_agent_name = value.get("agent_name", "")
+                    retry_agent_uuid = value.get("agent_uuid", "")
+                    retry_chat_id = value.get("chat_id", "")
+                    operator = getattr(event, "operator", None)
+                    retry_open_id = getattr(operator, "open_id", "") if operator else ""
+
+                    if retry_session_id and self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_retry_session(
+                                retry_session_id, retry_agent_name, retry_agent_uuid,
+                                retry_chat_id, retry_open_id,
+                            ),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": "Retrying..."}}
+
             # ── HITL handling (existing logic) ──
             from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
 
@@ -1820,6 +1880,25 @@ class LarkWsChannel:
                         )
 
                     return {"toast": {"type": "success", "content": "Creating new conversation group..."}}
+
+                if value.get("action") == "retry_session":
+                    retry_session_id = value.get("session_id", "")
+                    retry_agent_name = value.get("agent_name", "")
+                    retry_agent_uuid = value.get("agent_uuid", "")
+                    retry_chat_id = value.get("chat_id", "")
+                    operator = getattr(event, "operator", None)
+                    retry_open_id = getattr(operator, "open_id", "") if operator else ""
+
+                    if retry_session_id and self._app_loop is not None and self._app_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_retry_session(
+                                retry_session_id, retry_agent_name, retry_agent_uuid,
+                                retry_chat_id, retry_open_id,
+                            ),
+                            self._app_loop,
+                        )
+
+                    return {"toast": {"type": "success", "content": "Retrying..."}}
 
             # ── HITL handling (existing logic) ──
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)
