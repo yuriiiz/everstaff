@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +15,36 @@ from everstaff.schema.memory import Session
 from everstaff.schema.api_models import SessionMetadata
 from everstaff.core.constants import STALE_SESSION_THRESHOLD_SECONDS
 from everstaff.session.index import SessionIndex
+
+
+def _is_stale_running(raw: dict, root_dir: Path) -> bool:
+    """Return True if a 'running' session should be marked 'interrupted'.
+
+    Checks both session.json ``updated_at`` and an optional heartbeat file
+    written by the runtime.  If either is recent enough the session is
+    considered alive.
+    """
+    if (root_dir / "cancel.signal").exists():
+        return False
+    try:
+        updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
+        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+        if age <= STALE_SESSION_THRESHOLD_SECONDS:
+            return False
+    except Exception:
+        return False
+
+    # Check heartbeat file written by the runtime heartbeat loop
+    heartbeat = root_dir / "heartbeat"
+    if heartbeat.exists():
+        try:
+            hb_age = _time.time() - heartbeat.stat().st_mtime
+            if hb_age <= STALE_SESSION_THRESHOLD_SECONDS:
+                return False
+        except OSError:
+            pass
+
+    return True
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +199,15 @@ async def _resume_session_task(
             _existing["status"] = "running"
             _existing["updated_at"] = _now
             _existing.pop("error", None)
+            # Pre-write the new user message for immediate Web UI visibility
+            if decision_text:
+                _existing_msgs = _existing.get("messages", [])
+                _existing_msgs.append({
+                    "role": "user",
+                    "content": decision_text,
+                    "created_at": _now,
+                })
+                _existing["messages"] = _existing_msgs
             _meta.write_text(json.dumps(_existing, indent=2))
             # Recover persisted user_id for the builder (e.g. Feishu open_id)
             if not user_id:
@@ -176,6 +216,15 @@ async def _resume_session_task(
             pass
     else:
         # New session: write initial session.json.
+        # Pre-write the user message so it's visible in the Web UI
+        # immediately, even before AgentBuilder.build() completes.
+        _init_messages = []
+        if decision_text:
+            _init_messages.append({
+                "role": "user",
+                "content": decision_text,
+                "created_at": _now,
+            })
         _init: dict = {
             "session_id": session_id,
             "agent_name": agent_name,
@@ -185,7 +234,7 @@ async def _resume_session_task(
             "updated_at": _now,
             "parent_session_id": None,
             "metadata": {"title": agent_name},
-            "messages": [],
+            "messages": _init_messages,
             "hitl_requests": [],
         }
         if user_id:
@@ -796,15 +845,9 @@ def make_router(config) -> APIRouter:
                     raw = json.loads(meta_path.read_text())
                     status_val = raw.get("status", "unknown")
                     if status_val == "running":
-                        cancel_path = sessions_dir / SessionIndex.signal_relpath(entry.id, root_for_path)
-                        if not cancel_path.exists():
-                            try:
-                                updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
-                                age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-                                if age > STALE_SESSION_THRESHOLD_SECONDS:
-                                    status_val = "interrupted"
-                            except Exception:
-                                pass
+                        _root_for_stale = sessions_dir / (entry.root if entry.root != entry.id else entry.id)
+                        if _is_stale_running(raw, _root_for_stale):
+                            status_val = "interrupted"
                     if status is not None and status_val != status:
                         continue
                     sessions.append(Session(
@@ -827,16 +870,8 @@ def make_router(config) -> APIRouter:
         # Fallback: iterdir when no index available (root + sub_sessions)
         def _append_session(raw: dict, fallback_id: str, root_dir: Path) -> None:
             status_val = raw.get("status", "unknown")
-            if status_val == "running":
-                is_cancel_active = (root_dir / "cancel.signal").exists()
-                if not is_cancel_active:
-                    try:
-                        updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
-                        age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-                        if age > STALE_SESSION_THRESHOLD_SECONDS:
-                            status_val = "interrupted"
-                    except Exception:
-                        pass
+            if status_val == "running" and _is_stale_running(raw, root_dir):
+                status_val = "interrupted"
             raw_agent_name = raw.get("agent_name", "")
             raw_agent_uuid = raw.get("agent_uuid")
             if status is not None and status_val != status:
@@ -896,17 +931,8 @@ def make_router(config) -> APIRouter:
 
         # Detect interrupted status
         status_val = raw.get("status", "unknown")
-        if status_val == "running":
-            root_d = _root_dir(session_id, index)
-            is_cancel_active = (root_d / "cancel.signal").exists()
-            if not is_cancel_active:
-                try:
-                    updated_at = datetime.fromisoformat(raw.get("updated_at", ""))
-                    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-                    if age > STALE_SESSION_THRESHOLD_SECONDS:
-                        status_val = "interrupted"
-                except Exception:
-                    pass
+        if status_val == "running" and _is_stale_running(raw, _root_dir(session_id, index)):
+            status_val = "interrupted"
 
         return Session(
             session_id=raw.get("session_id", session_id),
@@ -1015,17 +1041,8 @@ def make_router(config) -> APIRouter:
         current_status = session_raw.get("status", "unknown")
 
         # Apply the same interrupted detection as list_sessions
-        if current_status == "running":
-            root_d = _root_dir(session_id, index)
-            is_cancel_active = (root_d / "cancel.signal").exists()
-            if not is_cancel_active:
-                try:
-                    updated_at = datetime.fromisoformat(session_raw.get("updated_at", ""))
-                    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-                    if age > STALE_SESSION_THRESHOLD_SECONDS:
-                        current_status = "interrupted"
-                except Exception:
-                    pass
+        if current_status == "running" and _is_stale_running(session_raw, _root_dir(session_id, index)):
+            current_status = "interrupted"
 
         if current_status not in RESUMABLE_STATES:
             raise HTTPException(

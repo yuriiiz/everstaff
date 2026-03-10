@@ -267,16 +267,37 @@ class AgentRuntime:
         except Exception as e:
             logger.debug("Title generation failed: %s", e)
 
+    async def _heartbeat_loop(self) -> None:
+        """Periodically write a heartbeat file to prevent stale-session detection."""
+        from everstaff.core.constants import SESSION_HEARTBEAT_INTERVAL_SECONDS
+        store = self._ctx.file_store
+        if store is None:
+            return
+        root = self._ctx.root_session_id or self._ctx.session_id
+        heartbeat_path = f"{root}/heartbeat"
+        while True:
+            await asyncio.sleep(SESSION_HEARTBEAT_INTERVAL_SECONDS)
+            try:
+                await store.write(heartbeat_path, _now().encode())
+            except Exception as e:
+                logger.debug("Heartbeat write failed: %s", e)
+
     async def run_stream(self, user_input: "str | None") -> AsyncIterator[StreamEvent]:
         """Primary execution path — yields StreamEvent objects in real time.
 
         Pass user_input=None for HITL resume where the decision has already been
         inserted into memory as a tool message; no new user message will be appended.
         """
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
             async for event in self._run_stream_inner(user_input):
                 yield event
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
             if hasattr(self._ctx.tracer, "aflush"):
                 await self._ctx.tracer.aflush()
 
@@ -314,7 +335,9 @@ class AgentRuntime:
         messages = await self._ctx.memory.load(self._ctx.session_id)
         messages = _drop_dangling_tool_calls(messages)
         if user_input is not None:
-            messages.append(Message(role="user", content=user_input, created_at=datetime.now(timezone.utc).isoformat()))
+            # Avoid duplicate if the message was pre-written by _resume_session_task
+            if not (messages and messages[-1].role == "user" and messages[-1].content == user_input):
+                messages.append(Message(role="user", content=user_input, created_at=datetime.now(timezone.utc).isoformat()))
             # Persist user message immediately so it survives page refresh
             await self._save_session(
                 self._ctx.session_id,
@@ -677,17 +700,19 @@ class AgentRuntime:
                             except OSError:
                                 pass
 
-                # Batch save after ALL tool calls in this turn complete
-                await self._save_session(
-                    self._ctx.session_id,
-                    messages,
-                    agent_name=self._ctx.agent_name,
-                    agent_uuid=self._ctx.agent_uuid,
-                    parent_session_id=self._ctx.parent_session_id,
-                    stats=stats,
-                    status="running",
-                    max_tokens=self._ctx.max_tokens,
-                )
+                    # Incremental save: persist after each tool result so the
+                    # Web UI shows progress and crashes don't lose completed work.
+                    # _drop_dangling_tool_calls handles partially-saved batches on resume.
+                    await self._save_session(
+                        self._ctx.session_id,
+                        messages,
+                        agent_name=self._ctx.agent_name,
+                        agent_uuid=self._ctx.agent_uuid,
+                        parent_session_id=self._ctx.parent_session_id,
+                        stats=stats,
+                        status="running",
+                        max_tokens=self._ctx.max_tokens,
+                    )
 
 
         except HumanApprovalRequired as hitl_exc:
