@@ -125,12 +125,16 @@ def make_feishu_minutes_tools(
     @tool(name="feishu_list_minutes", description="搜索并列出飞书妙记（会议纪要/会议录制转写）。通过搜索消息中的妙记链接来发现妙记，返回妙记列表（标题、时长、创建时间、链接）。当用户想查找会议纪要、会议记录、会议转写时使用此工具。")
     async def feishu_list_minutes(
         query: str = "",
+        start_time: str = "",
+        end_time: str = "",
         page_size: int = 20,
     ) -> str:
         """List Feishu minutes by searching for minutes links in messages.
 
         Args:
             query: Optional keyword to narrow search (e.g. meeting topic). Empty for all minutes.
+            start_time: Start time filter in ISO 8601 format (e.g. "2024-01-01T00:00:00+08:00").
+            end_time: End time filter in ISO 8601 format.
             page_size: Max number of minutes to return (default 20).
         """
         from everstaff.tools.feishu.mcp_proxy import call_feishu_mcp
@@ -139,6 +143,11 @@ def make_feishu_minutes_tools(
             # Step 1: Search messages for minutes URLs via MCP proxy
             search_args: dict = {"query": query if query else "feishu.cn/minutes"}
             search_args["page_size"] = min(max(page_size, 1), 50)
+            search_args["sort_type"] = "ByCreateTime"
+            if start_time:
+                search_args["start_time"] = start_time
+            if end_time:
+                search_args["end_time"] = end_time
             result = await call_feishu_mcp(tool_name="search-messages", args=search_args, uat=uat)
             search_text = ""
             result_content = result.get("content", [])
