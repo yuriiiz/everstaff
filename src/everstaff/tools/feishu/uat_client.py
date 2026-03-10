@@ -31,6 +31,8 @@ BASE_READONLY_SCOPES: list[str] = [
     "docx:document:readonly",
     # Wiki (used by list-docs)
     "wiki:wiki:readonly",
+    # Minutes
+    "minutes:minutes",
 ]
 
 

@@ -7,6 +7,7 @@ def test_list_all_tools_returns_all_categories():
     assert "docs" in result
     assert "calendar" in result
     assert "tasks" in result
+    assert "minutes" in result
 
 
 def test_list_all_tools_has_name_and_description():
@@ -57,6 +58,11 @@ def test_list_all_tools_known_tool_names():
     task_names = [t["name"] for t in result["tasks"]]
     assert "feishu_create_task" in task_names
     assert "feishu_list_tasks" in task_names
+
+    minutes_names = [t["name"] for t in result["minutes"]]
+    assert "feishu_get_minute" in minutes_names
+    assert "feishu_get_minute_transcript" in minutes_names
+    assert "feishu_get_minute_statistics" in minutes_names
 
 
 def test_list_all_tools_returns_copy():

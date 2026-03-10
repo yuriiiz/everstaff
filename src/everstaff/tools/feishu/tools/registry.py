@@ -30,6 +30,11 @@ _TOOL_CATALOG: dict[str, list[dict[str, str]]] = {
         {"name": "feishu_search_chats", "description": "搜索飞书群聊。"},
         {"name": "feishu_search_messages", "description": "搜索飞书消息，支持按关键词、发送者、时间等条件过滤。"},
     ],
+    "minutes": [
+        {"name": "feishu_get_minute", "description": "获取飞书妙记信息，包括标题、时长、创建者、链接等。"},
+        {"name": "feishu_get_minute_transcript", "description": "获取飞书妙记的转写内容（文字记录）。支持格式化文本和原始 JSON。"},
+        {"name": "feishu_get_minute_statistics", "description": "获取飞书妙记的观看统计信息。"},
+    ],
 }
 
 
@@ -56,14 +61,14 @@ def create_feishu_tools(
 ) -> list[Any]:
     """Create Feishu NativeTools filtered by category.
 
-    Categories: docs, calendar, tasks, im, bitable (future)
+    Categories: docs, calendar, tasks, im, minutes, bitable (future)
     If categories is None, all tools are created.
 
     ``user_open_id`` is auto-injected from the session context so the LLM
     does not need to supply it.  When empty, tools will raise
     ``UserAuthRequiredError`` to trigger the Device Flow.
     """
-    all_categories = categories or ["docs", "calendar", "tasks", "im"]
+    all_categories = categories or ["docs", "calendar", "tasks", "im", "minutes"]
     tools: list[Any] = []
 
     if "docs" in all_categories:
@@ -81,5 +86,9 @@ def create_feishu_tools(
     if "im" in all_categories:
         from everstaff.tools.feishu.tools.im_tools import make_feishu_im_tools
         tools.extend(make_feishu_im_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store, base_scopes=base_scopes, include_offline_access=include_offline_access))
+
+    if "minutes" in all_categories:
+        from everstaff.tools.feishu.tools.minutes_tools import make_feishu_minutes_tools
+        tools.extend(make_feishu_minutes_tools(app_id, app_secret, domain, auth_handler=auth_handler, user_open_id=user_open_id, token_store=token_store, base_scopes=base_scopes, include_offline_access=include_offline_access))
 
     return tools
