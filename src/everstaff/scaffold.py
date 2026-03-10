@@ -142,6 +142,7 @@ daemon:
 #       - "docs"
 #       - "calendar"
 #       - "tasks"
+#       - "minutes"
 #       - "bitable"
 #     auto_allow_tools: ["*"]      # ["*"] = allow all, or list specific tool names
 #     offline_access: true          # auto-append "offline_access" scope for refresh tokens
@@ -153,6 +154,7 @@ daemon:
 #       - "task:task:readonly"
 #       - "docx:document:readonly"
 #       - "wiki:wiki:readonly"
+#       - "minutes:minutes"
 #
 #   lark-main:
 #     type: "lark"

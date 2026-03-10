@@ -92,7 +92,7 @@ tracers:
 #     app_secret: "xxx"
 #     chat_id: "oc_xxx"
 #     bot_name: "MyAgent"
-#     feishu_tools: ["im", "docs", "calendar", "tasks"]
+#     feishu_tools: ["im", "docs", "calendar", "tasks", "minutes"]
 #     auto_allow_tools: ["*"]
 ```
 

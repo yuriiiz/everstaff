@@ -51,7 +51,7 @@ class LarkWsChannelConfig(BaseModel):
     web_url: str = ""
     allowed_emails: list[str] = Field(default_factory=list)
     feishu_tools: list[str] = Field(default_factory=list)
-    # Valid values: ["docs", "calendar", "tasks", "bitable"]
+    # Valid values: ["docs", "calendar", "tasks", "minutes", "bitable"]
     # When non-empty, Feishu user-identity tools are registered for agents using this channel
     auto_allow_tools: list[str] = Field(default_factory=list)
     base_scopes: list[str] | None = None
