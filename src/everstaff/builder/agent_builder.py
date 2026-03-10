@@ -316,10 +316,8 @@ class AgentBuilder:
             llm_kwargs["max_tokens"] = self._spec.max_tokens
         if getattr(self._spec, "temperature", None) is not None:
             llm_kwargs["temperature"] = self._spec.temperature
-        if mapping.timeout:
-            llm_kwargs["timeout"] = mapping.timeout
-        if mapping.max_retries:
-            llm_kwargs["num_retries"] = mapping.max_retries
+        llm_kwargs["timeout"] = mapping.timeout
+        llm_kwargs["num_retries"] = mapping.max_retries
         llm_client = self._env.build_llm_client(model_id, **llm_kwargs)
 
         # 5. Register bootstrap tools only when explicitly enabled

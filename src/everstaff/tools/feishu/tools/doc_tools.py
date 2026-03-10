@@ -77,7 +77,7 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
                 return content[0]["text"]
             return str(result)
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document:create", "docx:document:write_only"]))
 
     @tool(name="feishu_update_doc", description="更新飞书云文档内容。支持 7 种模式：overwrite、append、replace_range、replace_all、insert_before、insert_after、delete_range。")
     async def feishu_update_doc(
@@ -111,7 +111,7 @@ def make_feishu_doc_tools(app_id: str, app_secret: str, domain: str = "feishu", 
                 return content[0]["text"]
             return str(result)
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["docx:document:write_only"]))
 
     @tool(name="feishu_list_docs", description="获取知识空间节点下的云文档列表，或查询「我的文档库」下的文档。支持分页。")
     async def feishu_list_docs(
