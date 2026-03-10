@@ -1,7 +1,9 @@
 """Feishu minutes (妙记) tools -- direct OAPI calls."""
 from __future__ import annotations
 
+import json
 import logging
+import re
 
 from everstaff.tools.native import tool
 
@@ -117,4 +119,77 @@ def make_feishu_minutes_tools(
 
         return await call_with_auth_retry(fn=_call, **_auth_kwargs(["minutes:minutes"]))
 
-    return [feishu_get_minute, feishu_get_minute_transcript, feishu_get_minute_statistics]
+    # Regex to extract minute_token from Feishu/Lark minutes URLs
+    _MINUTE_URL_RE = re.compile(r"(?:feishu\.cn|larkoffice\.com|larksuite\.com)/minutes/([A-Za-z0-9]{20,})")
+
+    @tool(name="feishu_list_minutes", description="搜索并列出飞书妙记。通过搜索消息中的妙记链接来发现妙记，返回妙记列表（标题、时长、创建时间、链接）。")
+    async def feishu_list_minutes(
+        query: str = "",
+        page_size: int = 20,
+    ) -> str:
+        """List Feishu minutes by searching for minutes links in messages.
+
+        Args:
+            query: Optional keyword to narrow search (e.g. meeting topic). Empty for all minutes.
+            page_size: Max number of minutes to return (default 20).
+        """
+        async def _call(uat: str) -> str:
+            # Step 1: Search messages for minutes URLs
+            search_query = query if query else "feishu.cn/minutes"
+            params = {
+                "query": search_query,
+                "page_size": min(max(page_size, 1), 50),
+            }
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{api_base}/open-apis/im/v1/messages/search",
+                    params=params,
+                    json={},
+                    headers={"Authorization": f"Bearer {uat}"},
+                )
+            data = resp.json()
+            if data.get("code") != 0:
+                return json.dumps({"error": data.get("msg", "search failed"), "code": data.get("code")}, ensure_ascii=False)
+
+            # Step 2: Extract unique minute_tokens from message content
+            tokens_seen: set[str] = set()
+            items = data.get("data", {}).get("items", [])
+            for item in items:
+                body = item.get("body", {}).get("content", "")
+                for match in _MINUTE_URL_RE.finditer(body):
+                    tokens_seen.add(match.group(1))
+
+            if not tokens_seen:
+                return json.dumps({"minutes": [], "message": "未找到妙记链接"}, ensure_ascii=False)
+
+            # Step 3: Fetch meta for each unique token
+            minutes_list = []
+            async with httpx.AsyncClient(timeout=30) as client:
+                for token in list(tokens_seen)[:page_size]:
+                    try:
+                        meta_resp = await client.get(
+                            f"{api_base}/open-apis/minutes/v1/minutes/{token}",
+                            headers={"Authorization": f"Bearer {uat}"},
+                        )
+                        meta = meta_resp.json()
+                        if meta.get("code") == 0:
+                            minute = meta.get("data", {}).get("minute", {})
+                            minutes_list.append({
+                                "token": minute.get("token", token),
+                                "title": minute.get("title", ""),
+                                "duration": _format_timestamp_ms(minute.get("duration", "0")),
+                                "create_time": minute.get("create_time", ""),
+                                "url": minute.get("url", ""),
+                                "owner_id": minute.get("owner_id", ""),
+                            })
+                    except Exception as e:
+                        logger.warning("Failed to fetch minute meta for %s: %s", token, e)
+
+            # Sort by create_time descending (newest first)
+            minutes_list.sort(key=lambda m: m.get("create_time", "0"), reverse=True)
+
+            return json.dumps({"minutes": minutes_list, "total": len(minutes_list)}, ensure_ascii=False, indent=2)
+
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:message:readonly", "minutes:minutes"]))
+
+    return [feishu_get_minute, feishu_get_minute_transcript, feishu_get_minute_statistics, feishu_list_minutes]

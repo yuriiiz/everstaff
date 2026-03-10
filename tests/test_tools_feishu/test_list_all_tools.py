@@ -63,6 +63,7 @@ def test_list_all_tools_known_tool_names():
     assert "feishu_get_minute" in minutes_names
     assert "feishu_get_minute_transcript" in minutes_names
     assert "feishu_get_minute_statistics" in minutes_names
+    assert "feishu_list_minutes" in minutes_names
 
 
 def test_list_all_tools_returns_copy():
