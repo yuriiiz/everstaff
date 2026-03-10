@@ -136,7 +136,7 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:chat:read"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:chat:readonly"]))
 
     @tool(name="feishu_search_chats", description="搜索飞书群聊。")
     async def feishu_search_chats(query: str, page_size: int = 20) -> str:
@@ -155,7 +155,7 @@ def make_feishu_im_tools(app_id: str, app_secret: str, domain: str = "feishu", a
                 )
             return resp.text
 
-        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:chat:read"]))
+        return await call_with_auth_retry(fn=_call, **_auth_kwargs(["im:chat:readonly"]))
 
     @tool(name="feishu_search_messages", description="搜索飞书消息，支持按关键词、发送者、时间、类型等条件过滤。")
     async def feishu_search_messages(
