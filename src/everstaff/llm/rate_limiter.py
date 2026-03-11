@@ -31,15 +31,30 @@ class TokenBucket:
 
     async def acquire(self, amount: float = 1) -> None:
         """Wait until bucket has >= amount tokens, then deduct."""
+        _waited = False
+        _t0 = time.monotonic()
         while True:
             async with self._lock:
                 self._refill()
                 if self._tokens >= amount:
                     self._tokens -= amount
+                    if _waited:
+                        logger.info(
+                            "Rate limit wait finished: %.1fs (bucket %.0f/%.0f)",
+                            time.monotonic() - _t0, self._tokens, self._capacity,
+                        )
                     return
                 deficit = amount - self._tokens
                 wait = deficit / self._refill_rate
+                available = self._tokens
             # Sleep OUTSIDE the lock so other coroutines can proceed
+            if not _waited:
+                logger.warning(
+                    "Rate limit throttling: need %.0f tokens, have %.0f, "
+                    "waiting ~%.1fs (bucket capacity=%.0f)",
+                    amount, available, wait, self._capacity,
+                )
+                _waited = True
             await asyncio.sleep(wait)
 
     async def consume(self, amount: float) -> None:
