@@ -90,7 +90,8 @@ class AgentSpec(BaseModel):
 
     model_override: str | None = None
     temperature: float | None = None
-    max_tokens: int | None = None
+    max_tokens: int | None = None          # context window override (for compression threshold)
+    max_output_tokens: int | None = None   # per-response output token limit override
     enable_bootstrap: bool = False
 
     # HITL — controls when the request_human_input tool is registered

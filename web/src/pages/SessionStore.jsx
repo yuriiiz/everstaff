@@ -789,7 +789,7 @@ export default function SessionStore() {
     const stopSession = async () => {
         if (!selectedSession?.session_id) return;
         try {
-            await fetch(`/api/sessions/${selectedSession.session_id}/stop`, { method: 'POST' });
+            await fetch(`/api/sessions/${selectedSession.session_id}/stop?force=true`, { method: 'POST' });
         } catch (error) {
             console.error('Failed to stop session:', error);
         }

@@ -47,7 +47,8 @@ class AgentContext:
     cancellation: CancellationEvent = field(default_factory=CancellationEvent)
     caller_span_id: str | None = None  # parent's span_id when this session was spawned
 
-    max_tokens: int | None = None     # output token limit forwarded to LLM; stored in session metadata
+    max_tokens: int | None = None          # context window size; stored in session metadata for UI display
+    max_output_tokens: int | None = None   # per-response output token limit forwarded to LLM
     trigger: AgentEvent | None = None  # Event that initiated this session
     task_prompt: str | None = None     # Daemon task prompt (for readable session display)
 

@@ -24,6 +24,8 @@ def build_auth_card(
             },
         ]},
         {"tag": "div", "text": {"tag": "plain_text", "content": f"授权链接将在 {expires_min} 分钟后失效"}},
+        {"tag": "hr"},
+        {"tag": "div", "text": {"tag": "lark_md", "content": "⏳ 需要您授权飞书权限后才能继续操作，请点击上方链接完成授权。等待中..."}},
     ]
 
     return {

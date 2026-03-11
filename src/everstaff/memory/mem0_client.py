@@ -47,9 +47,32 @@ Detect the language of the conversation and record facts in the same language.
 try:
     import litellm
     from mem0 import Memory
+    from mem0.utils.factory import EmbedderFactory
+    from mem0.configs.embeddings.base import BaseEmbedderConfig
 except ImportError:
     litellm = None  # type: ignore[assignment]
     Memory = None  # type: ignore[assignment,misc]
+    EmbedderFactory = None  # type: ignore[assignment]
+    BaseEmbedderConfig = None  # type: ignore[assignment]
+
+# Providers built into mem0's EmbedderConfig validator.  Any provider NOT in
+# this set needs special handling to bypass pydantic validation.
+_MEM0_BUILTIN_PROVIDERS = frozenset({
+    "openai", "ollama", "huggingface", "azure_openai", "gemini",
+    "vertexai", "together", "lmstudio", "langchain", "aws_bedrock", "fastembed",
+})
+_CUSTOM_PROVIDERS_REGISTERED = False
+
+
+def _register_custom_embedder_providers() -> None:
+    """Register custom embedder providers in mem0's EmbedderFactory."""
+    global _CUSTOM_PROVIDERS_REGISTERED
+    if _CUSTOM_PROVIDERS_REGISTERED or EmbedderFactory is None:
+        return
+    EmbedderFactory.provider_to_class["ark_multimodal"] = (
+        "everstaff.memory.ark_multimodal_embedding.ArkMultimodalEmbedding"
+    )
+    _CUSTOM_PROVIDERS_REGISTERED = True
 
 
 class Mem0Client:
@@ -70,6 +93,7 @@ class Mem0Client:
                 "mem0ai is required for memory integration. "
                 "Install it with: pip install 'everstaff[mem0]'"
             )
+        _register_custom_embedder_providers()
         embed_provider, embed_model = self._parse_embedding_model(embedding_model_id)
         embedder_config: dict = {"model": embed_model}
         if embedder_api_key:
@@ -79,21 +103,48 @@ class Mem0Client:
         # strip unsupported parameters instead of raising.
         litellm.drop_params = True
 
+        # mem0's EmbedderConfig pydantic validator hardcodes its allowed
+        # provider list.  For custom providers (e.g. ark_multimodal), we pass
+        # "openai" to satisfy validation, then replace the embedding model
+        # after construction.
+        is_custom = embed_provider not in _MEM0_BUILTIN_PROVIDERS
+        validation_provider = "openai" if is_custom else embed_provider
+
+        # mem0's litellm LLM provider checks
+        # litellm.supports_function_calling(model), which fails for
+        # Ark-style endpoint IDs that litellm doesn't recognise.
+        # When the model string starts with "openai/", use mem0's native
+        # OpenAI provider (which has no such check) instead.
+        llm_config = self._build_llm_config(llm_model_id)
+
+        # For custom providers, pre-instantiate the embedder so we can
+        # read its native dimension and pass it to the vector store.
+        custom_embedder = None
+        vector_store_cfg: dict = {"path": config.vector_store_path}
+        if is_custom:
+            custom_embedder = EmbedderFactory.create(
+                embed_provider, embedder_config, None,
+            )
+            if hasattr(custom_embedder, "config") and custom_embedder.config.embedding_dims:
+                vector_store_cfg["embedding_model_dims"] = custom_embedder.config.embedding_dims
+
         self._memory = Memory.from_config({
-            "llm": {
-                "provider": "litellm",
-                "config": {"model": llm_model_id},
-            },
+            "llm": llm_config,
             "embedder": {
-                "provider": embed_provider,
+                "provider": validation_provider,
                 "config": embedder_config,
             },
             "vector_store": {
                 "provider": config.vector_store,
-                "config": {"path": config.vector_store_path},
+                "config": vector_store_cfg,
             },
             "custom_fact_extraction_prompt": FACT_EXTRACTION_PROMPT,
         })
+
+        if custom_embedder is not None:
+            self._memory.embedding_model = custom_embedder
+            logger.info("Using custom embedder provider '%s'", embed_provider)
+
         self._top_k = config.search_top_k
         self._threshold = config.search_threshold
 
@@ -107,6 +158,24 @@ class Mem0Client:
             provider, model = model_id.split("/", 1)
             return provider, model
         return "openai", model_id
+
+    @staticmethod
+    def _build_llm_config(llm_model_id: str) -> dict:
+        """Build mem0 LLM config from a litellm-style model string.
+
+        For ``openai/<model>`` strings, uses mem0's native OpenAI provider
+        (which has no ``litellm.supports_function_calling`` gate) so that
+        Ark endpoint IDs work without litellm recognising them.
+        """
+        if llm_model_id.startswith("openai/"):
+            return {
+                "provider": "openai",
+                "config": {"model": llm_model_id.removeprefix("openai/")},
+            }
+        return {
+            "provider": "litellm",
+            "config": {"model": llm_model_id},
+        }
 
     async def add(self, messages: list[dict], **scope: Any) -> list[dict]:
         """Extract memories from conversation messages."""

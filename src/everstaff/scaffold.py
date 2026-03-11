@@ -56,17 +56,20 @@ context:
 model_mappings:
   smart:
     model_id: "anthropic/claude-sonnet-4-20250514"
-    max_tokens: 8192
+    max_tokens: 200000
+    max_output_tokens: 8192
     temperature: 0.7
     supports_tools: true
   fast:
     model_id: "anthropic/claude-haiku-4-5-20251001"
-    max_tokens: 4096
+    max_tokens: 200000
+    max_output_tokens: 4096
     temperature: 0.5
     supports_tools: true
   reasoning:
     model_id: "anthropic/claude-opus-4-6"
-    max_tokens: 16384
+    max_tokens: 200000
+    max_output_tokens: 16384
     temperature: 1.0
     supports_tools: true
 

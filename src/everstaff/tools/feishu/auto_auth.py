@@ -29,7 +29,7 @@ async def handle_auth_error(
     domain: str = "feishu",
     send_card_fn: Callable[[dict], Awaitable[str]],
     update_card_fn: Callable[[str, dict], Awaitable[None]] | None = None,
-    send_text_fn: Callable[[str], Awaitable[str]] | None = None,
+    send_text_fn: Callable[[str], Awaitable[str]] | None = None,  # deprecated, kept for compat
     bot_name: str = "Agent",
     token_store: FileTokenStore | None = None,
     poll: bool = True,
@@ -80,13 +80,6 @@ async def handle_auth_error(
         bot_name=bot_name,
     )
     message_id = await send_card_fn(card)
-
-    # 2b. Send a text notification so the user knows the bot is waiting
-    if send_text_fn:
-        try:
-            await send_text_fn("⏳ 需要您授权飞书权限后才能继续操作，请点击上方卡片中的链接完成授权。等待中...")
-        except Exception as e:
-            logger.warning("auto-auth: failed to send text notification: %s", e, exc_info=True)
 
     # 3. Poll for authorization (block until authorized or timeout)
     max_wait = min(device_auth["expires_in"], 180)  # cap at 3 minutes

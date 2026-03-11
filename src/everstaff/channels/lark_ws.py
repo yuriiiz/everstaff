@@ -72,6 +72,7 @@ class LarkWsChannel:
         self._allowed_emails: set[str] = set(allowed_emails) if allowed_emails else set()
         self._pending_agent_selection: dict[str, dict] = {}
         self._session_hitl_events: dict[str, asyncio.Event] = {}  # session_id -> Event (set on HITL resolution)
+        self._conversation_groups: dict[str, str] = {}  # chat_id -> owner open_id
         self._session_index = None
         self._mcp_pool = None
         self._started: bool = False
@@ -185,6 +186,47 @@ class LarkWsChannel:
             async with s.delete(url, headers=headers) as r:
                 data = await r.json()
                 logger.info("DELETE response status=%s resp=%s", r.status, json.dumps(data, ensure_ascii=False))
+
+    # ── CardKit streaming helpers ───────────────────────────────
+
+    async def _cardkit_create(self, token: str, card_json: dict) -> str:
+        """Create a CardKit card entity. Returns card_id."""
+        import aiohttp
+
+        url = f"{self._api_base}/cardkit/v1/cards"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"type": "card_json", "data": json.dumps(card_json, ensure_ascii=False)}
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, headers=headers, json=body) as r:
+                data = await r.json()
+                card_id = data.get("data", {}).get("card_id", "")
+                if not card_id:
+                    logger.error("cardkit_create failed code=%s msg=%s", data.get("code"), data.get("msg"))
+                return card_id
+
+    async def _cardkit_update(self, token: str, card_id: str, card_json: dict, sequence: int) -> bool:
+        """Update a CardKit card entity with incremented sequence. Returns True on success."""
+        import aiohttp
+
+        url = f"{self._api_base}/cardkit/v1/cards/{card_id}"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {
+            "card": {"type": "card_json", "data": json.dumps(card_json, ensure_ascii=False)},
+            "sequence": sequence,
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.put(url, headers=headers, json=body) as r:
+                data = await r.json()
+                ok = data.get("code", -1) == 0
+                if not ok:
+                    logger.warning("cardkit_update failed card_id=%s seq=%d code=%s msg=%s",
+                                   card_id, sequence, data.get("code"), data.get("msg"))
+                return ok
+
+    async def _send_card_id_message(self, token: str, chat_id: str, card_id: str) -> str:
+        """Send a message referencing a CardKit card_id. Returns message_id."""
+        content = json.dumps({"type": "card", "data": {"card_id": card_id}})
+        return await self._send_message(token, chat_id, "interactive", content)
 
     async def _forward_message(self, token: str, message_id: str, chat_id: str) -> str:
         """Forward a message to a chat. Returns new message_id."""
@@ -596,26 +638,12 @@ class LarkWsChannel:
         }
 
     async def _list_agents(self) -> list[dict]:
-        """List available agents from builtin + user agents_dir. User agents override builtins by uuid."""
+        """List available user agents from agents_dir (excludes builtins)."""
         from pathlib import Path
         from everstaff.utils.yaml_loader import load_yaml
-        from everstaff.core.config import _builtin_agents_path
 
         agents_by_uuid: dict[str, dict] = {}
 
-        # Collect builtin agents first
-        builtin_path = _builtin_agents_path()
-        if builtin_path:
-            bp = Path(builtin_path)
-            for f in sorted(bp.glob("*.yaml")):
-                try:
-                    spec = load_yaml(f)
-                    uid = spec.get("uuid", f.stem)
-                    agents_by_uuid[uid] = spec
-                except Exception as exc:
-                    logger.warning("skip builtin agent %s err=%s", f.name, exc)
-
-        # Collect user agents (override by uuid)
         if self._config and self._config.agents_dir:
             user_dir = Path(self._config.agents_dir).expanduser().resolve()
             if user_dir.is_dir():
@@ -881,17 +909,15 @@ class LarkWsChannel:
     async def _handle_private_message(self, open_id: str, text: str, message_id: str, chat_id: str) -> None:
         """Handle a private (p2p) message from a user."""
         conv_key = f"private/{open_id}"
+        stripped = text.strip().lower()
 
-        # /new command: reset conversation state
-        if text.strip().lower() == "/new":
-            await self._delete_conv_state(conv_key)
-            # Fall through to agent selection below
+        # ── Quick commands (private chat only) ──────────────────────
+        _INTRO_PROMPT = "简介你的能力"
 
-        # Check for existing active session
-        if text.strip().lower() != "/new":
+        if stripped == "/help":
+            # If active session exists, send intro prompt to it
             state = await self._load_conv_state(conv_key)
             if state and state.get("session_id"):
-                # Reject if session is already running to prevent concurrent execution
                 status = self._read_session_status(state["session_id"])
                 if status == "running":
                     try:
@@ -908,13 +934,88 @@ class LarkWsChannel:
                     session_id=state["session_id"],
                     agent_name=state.get("agent_name", ""),
                     agent_uuid=state.get("agent_uuid", ""),
-                    text=text,
+                    text=_INTRO_PROMPT,
                     message_id=message_id,
                     chat_id=chat_id,
                     reply_to=None,
                     sender_open_id=open_id,
                 )
                 return
+            # No active session — list agents and instructions
+            agents = await self._list_agents()
+            if not agents:
+                token = await self._get_access_token()
+                await self._send_message(token, chat_id, "text", json.dumps({"text": "当前没有可用的 Agent。"}))
+                return
+            lines = ["以下是可用的 Agent 列表：", ""]
+            for agent in agents:
+                name = agent.get("agent_name", "Unknown")
+                desc = agent.get("description", "")
+                lines.append(f"• **{name}**：{desc}" if desc else f"• **{name}**")
+            lines.append("")
+            lines.append("发送任意消息即可开始选择 Agent 并创建会话。")
+            lines.append("快捷命令：/new 开始新会话 · /new_group 在新群组中开始会话 · /help 查看帮助")
+            token = await self._get_access_token()
+            help_card = {
+                "schema": "2.0",
+                "config": {"wide_screen_mode": True},
+                "header": {"title": {"tag": "plain_text", "content": f"[{self._bot_name}] Help"}, "template": "blue"},
+                "body": {"elements": [{"tag": "markdown", "content": "\n".join(lines)}]},
+            }
+            await self._send_card_to(token, chat_id, help_card)
+            return
+
+        if stripped in ("/new", "/new_group"):
+            await self._delete_conv_state(conv_key)
+            # Show agent selection; use "group" chat_type for /new_group so a
+            # conversation group is created when the agent is selected.
+            agents = await self._list_agents()
+            if not agents:
+                token = await self._get_access_token()
+                await self._send_message(token, chat_id, "text", json.dumps({"text": "当前没有可用的 Agent。"}))
+                return
+            self._pending_agent_selection[open_id] = {
+                "text": _INTRO_PROMPT,
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "chat_type": "group" if stripped == "/new_group" else "p2p",
+            }
+            token = await self._get_access_token()
+            card = self._build_agent_selection_card(agents, open_id)
+            sel_mid = await self._send_card_to(token, chat_id, card)
+            if sel_mid:
+                self._pending_agent_selection[open_id]["selection_message_id"] = sel_mid
+            logger.info("sent agent selection card (cmd=%s) to open_id=%s mid=%s", stripped, open_id, sel_mid)
+            return
+
+        # ── Normal message handling ─────────────────────────────────
+        # Check for existing active session
+        state = await self._load_conv_state(conv_key)
+        if state and state.get("session_id"):
+            # Reject if session is already running to prevent concurrent execution
+            status = self._read_session_status(state["session_id"])
+            if status == "running":
+                try:
+                    token = await self._get_access_token()
+                    await self._send_message(
+                        token, "", "text",
+                        json.dumps({"text": "Agent 正在处理中，请等待回复后再发送新消息。"}),
+                        reply_to=message_id,
+                    )
+                except Exception as exc:
+                    logger.warning("busy reply failed err=%s", exc)
+                return
+            await self._send_to_session(
+                session_id=state["session_id"],
+                agent_name=state.get("agent_name", ""),
+                agent_uuid=state.get("agent_uuid", ""),
+                text=text,
+                message_id=message_id,
+                chat_id=chat_id,
+                reply_to=None,
+                sender_open_id=open_id,
+            )
+            return
 
         # No active session — show agent selection
         agents = await self._list_agents()
@@ -968,7 +1069,11 @@ class LarkWsChannel:
 
         # Check if this is a spawned conversation group (acts like private chat)
         state = await self._load_conv_state(f"group/{chat_id}")
-        if state and state.get("is_conversation_group"):
+        is_conv_group = chat_id in self._conversation_groups
+        if not is_conv_group and state and state.get("is_conversation_group"):
+            is_conv_group = True
+            self._conversation_groups[chat_id] = state.get("open_id", "")
+        if is_conv_group and state:
             # Reject if session is already running to prevent concurrent execution
             status = self._read_session_status(state["session_id"])
             if status == "running":
@@ -1031,7 +1136,7 @@ class LarkWsChannel:
         error: Exception,
         agent_uuid: str = "",
     ) -> str:
-        """Send an error card with a Retry button. Returns message_id."""
+        """Send an error card with a Continue button. Returns message_id."""
         short_id = session_id[:8].upper()
         error_text = f"**{type(error).__name__}:** {error}"
         retry_value = json.dumps({
@@ -1057,7 +1162,7 @@ class LarkWsChannel:
                         "actions": [
                             {
                                 "tag": "button",
-                                "text": {"tag": "plain_text", "content": "Retry"},
+                                "text": {"tag": "plain_text", "content": "Continue"},
                                 "type": "primary",
                                 "value": retry_value,
                             }
@@ -1101,69 +1206,110 @@ class LarkWsChannel:
         reply_to: str | None = None,
         sender_open_id: str = "",
     ) -> None:
-        """Send user text to a session and relay each LLM text turn as a separate Feishu card."""
+        """Send user text to a session and stream LLM output to a Feishu card via CardKit."""
         try:
             token = await self._get_access_token()
             await self._add_reaction(token, message_id, emoji_type="OK")
         except Exception as exc:
             logger.warning("send_to_session reaction failed err=%s", exc)
 
-        processing_mid = ""
+        card_id = ""
+        card_mid = ""
         try:
-            # Send "Processing..." card
-            token = await self._get_access_token()
-            processing_card = {
-                "schema": "2.0",
-                "config": {"wide_screen_mode": True},
-                "header": {
-                    "title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"},
-                    "template": "wathet",
-                },
-                "body": {"elements": [{"tag": "markdown", "content": "Processing..."}]},
-            }
-            processing_mid = await self._send_card_to(token, chat_id, processing_card)
-
-            # Accumulate text deltas; flush on turn boundaries
-            accumulated_text: list[str] = []
             short_id = session_id[:8].upper()
             if self._web_url:
                 web_footer = f"\n\n---\n<font color='grey'>Session {short_id} · {self._web_url}/sessions/{session_id}</font>"
             else:
                 web_footer = f"\n\n---\n<font color='grey'>Session {short_id}</font>"
 
-            async def _flush_text() -> None:
-                """Send accumulated text as a new Feishu card."""
-                nonlocal accumulated_text
-                if not accumulated_text:
-                    return
-                content = "".join(accumulated_text)
-                accumulated_text = []
-                if not content.strip():
-                    return
-                tk = await self._get_access_token()
-                card = {
+            def _build_card_json(content: str, *, template: str = "wathet") -> dict:
+                return {
                     "schema": "2.0",
                     "config": {"wide_screen_mode": True},
                     "header": {
                         "title": {"tag": "plain_text", "content": f"[{self._bot_name}] {agent_name}"},
-                        "template": "blue",
+                        "template": template,
                     },
-                    "body": {"elements": [{"tag": "markdown", "content": content + web_footer}]},
+                    "body": {"elements": [{"tag": "markdown", "content": content}]},
                 }
-                await self._send_card_to(tk, chat_id, card)
+
+            # Create streaming card entity and send it
+            token = await self._get_access_token()
+            card_id = await self._cardkit_create(token, _build_card_json("Processing..." + web_footer))
+            if card_id:
+                card_mid = await self._send_card_id_message(token, chat_id, card_id)
+
+            # Streaming state
+            accumulated_text: list[str] = []
+            full_text_parts: list[str] = []  # all text across turns
+            sequence = 1
+            last_update_time = 0.0
+            _UPDATE_INTERVAL = 1.5  # seconds between streaming updates
+
+            async def _stream_update(*, final: bool = False, template: str = "wathet") -> None:
+                """Push accumulated text to the CardKit card."""
+                nonlocal sequence, last_update_time, accumulated_text, full_text_parts
+                if not card_id:
+                    return
+                if not accumulated_text and not final:
+                    return
+                if accumulated_text:
+                    full_text_parts.extend(accumulated_text)
+                    accumulated_text = []
+                content = "".join(full_text_parts)
+                if not content.strip() and not final:
+                    return
+                display = (content.strip() or "Processing...") + web_footer
+                try:
+                    tk = await self._get_access_token()
+                    card_json = _build_card_json(display, template=template)
+                    ok = await self._cardkit_update(tk, card_id, card_json, sequence)
+                    if not ok:
+                        # Retry once: the server may have processed the previous
+                        # sequence but returned an error, so try next sequence.
+                        await asyncio.sleep(0.5)
+                        tk = await self._get_access_token()
+                        ok = await self._cardkit_update(tk, card_id, card_json, sequence + 1)
+                        if ok:
+                            sequence += 2
+                            last_update_time = time.monotonic()
+                            return
+                    # Always bump sequence to avoid getting stuck on a
+                    # permanently-rejected sequence number.
+                    sequence += 1
+                    if ok:
+                        last_update_time = time.monotonic()
+                except Exception:
+                    logger.exception("_stream_update failed for card_id=%s seq=%d", card_id, sequence)
+                    sequence += 1  # bump even on exception to avoid stuck state
 
             from everstaff.schema.stream import (
-                TextDelta, ToolCallStart, TurnStart, SessionEnd,
+                TextDelta, ToolCallStart, TurnStart, SessionEnd, ErrorEvent,
             )
 
+            session_error: Exception | None = None
+
             async def event_callback(event) -> None:
-                nonlocal accumulated_text
+                nonlocal accumulated_text, last_update_time, session_error
                 if isinstance(event, TextDelta):
                     accumulated_text.append(event.content)
+                    # Throttled streaming update
+                    now = time.monotonic()
+                    if now - last_update_time >= _UPDATE_INTERVAL:
+                        await _stream_update()
                 elif isinstance(event, (ToolCallStart, TurnStart)):
-                    await _flush_text()
+                    # Flush text at turn boundary
+                    await _stream_update()
+                    # Separate content from different turns with a blank line
+                    if isinstance(event, TurnStart) and full_text_parts:
+                        full_text_parts.append("\n\n")
+                elif isinstance(event, ErrorEvent):
+                    session_error = RuntimeError(event.error)
+                    accumulated_text.append(f"\n\n**Error:** {event.error}")
+                    await _stream_update(final=True, template="red")
                 elif isinstance(event, SessionEnd):
-                    await _flush_text()
+                    # Final update with blue template
+                    await _stream_update(final=True, template="blue")
 
             from everstaff.api.sessions import _resume_session_task
 
@@ -1204,24 +1350,42 @@ class LarkWsChannel:
                     if s != "running":
                         break
 
-            # Delete "Processing..." card on completion
-            if processing_mid:
+            # Check if session ended abnormally
+            final_status = self._read_session_status(session_id)
+            if final_status in ("failed", "cancelled") or session_error is not None:
+                # Update streaming card to red
+                if card_id:
+                    try:
+                        await _stream_update(final=True, template="red")
+                    except Exception:
+                        pass
+                # Send a dedicated error card with continue button
+                _err = session_error or RuntimeError(f"Session {final_status}")
                 try:
-                    tk = await self._get_access_token()
-                    await self._delete_message(tk, processing_mid)
-                except Exception:
-                    pass
+                    token = await self._get_access_token()
+                    await self._send_error_card(token, chat_id, session_id, agent_name, _err, agent_uuid=agent_uuid)
+                except Exception as inner_exc:
+                    logger.error("send_to_session error card failed err=%s", inner_exc)
+            else:
+                # Final card update — mark done with blue template
+                if card_id:
+                    try:
+                        await _stream_update(final=True, template="blue")
+                    except Exception:
+                        pass
 
         except Exception as exc:
             logger.error("send_to_session failed session=%s err=%s", session_id, exc, exc_info=True)
-            # Delete processing card on error too
-            if processing_mid:
+            # Update streaming card to show error, or send error card as fallback
+            if card_id:
                 try:
                     tk = await self._get_access_token()
-                    await self._delete_message(tk, processing_mid)
+                    error_text = f"**{type(exc).__name__}:** {exc}"
+                    error_card = _build_card_json(error_text + web_footer, template="red")
+                    await self._cardkit_update(tk, card_id, error_card, sequence)
                 except Exception:
                     pass
-            # Send error card
+            # Also send a dedicated error card with continue button
             try:
                 token = await self._get_access_token()
                 await self._send_error_card(token, chat_id, session_id, agent_name, exc, agent_uuid=agent_uuid)
@@ -1348,12 +1512,19 @@ class LarkWsChannel:
         if chat_type == "p2p":
             await self._handle_private_message(open_id, text, message_id, chat_id)
         elif chat_type == "group":
-            # In bot-created conversation groups, respond without @mention
-            state = await self._load_conv_state(f"group/{chat_id}")
-            if is_mentioned or (state and state.get("is_conversation_group")):
+            # In bot-created conversation groups, the owner can message without @mention;
+            # other users need to @bot. All users share the same session.
+            owner_open_id = self._conversation_groups.get(chat_id)
+            if owner_open_id is None:
+                state = await self._load_conv_state(f"group/{chat_id}")
+                if state and state.get("is_conversation_group"):
+                    owner_open_id = state.get("open_id", "")
+                    self._conversation_groups[chat_id] = owner_open_id
+            is_owner = owner_open_id is not None and open_id == owner_open_id
+            if is_mentioned or is_owner:
                 await self._handle_group_message(open_id, text, message_id, chat_id, parent_id)
             else:
-                logger.debug("ignoring group message chat_type=%s mentioned=%s", chat_type, is_mentioned)
+                logger.debug("ignoring group message chat_id=%s open_id=%s mentioned=%s", chat_id, open_id, is_mentioned)
         else:
             logger.debug("ignoring message chat_type=%s mentioned=%s", chat_type, is_mentioned)
 
@@ -1415,6 +1586,7 @@ class LarkWsChannel:
                         logger.warning("forward user message failed err=%s", exc)
 
                 # Save conversation state for the new group
+                self._conversation_groups[new_chat_id] = open_id
                 await self._save_conv_state(f"group/{new_chat_id}", {
                     "session_id": session_id,
                     "agent_name": agent_name,
@@ -1497,6 +1669,7 @@ class LarkWsChannel:
                     break
 
             # Persist group state
+            self._conversation_groups[new_chat_id] = open_id
             await self._save_conv_state(f"group/{new_chat_id}", {
                 "session_id": session_id,
                 "agent_name": agent_name,
@@ -1679,7 +1852,7 @@ class LarkWsChannel:
                             self._app_loop,
                         )
 
-                    return {"toast": {"type": "success", "content": "Retrying..."}}
+                    return {"toast": {"type": "success", "content": "Continuing..."}}
 
             # ── HITL handling (existing logic) ──
             from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
@@ -1898,7 +2071,7 @@ class LarkWsChannel:
                             self._app_loop,
                         )
 
-                    return {"toast": {"type": "success", "content": "Retrying..."}}
+                    return {"toast": {"type": "success", "content": "Continuing..."}}
 
             # ── HITL handling (existing logic) ──
             hitl_id, decision, resolved_by, grant_scope, permission_pattern = self._parse_card_action(data)

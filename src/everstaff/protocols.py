@@ -181,10 +181,16 @@ class LLMResponse:
     thinking: str | None = None   # Claude extended thinking or o1/o3 reasoning
     input_tokens: int = 0
     output_tokens: int = 0
+    finish_reason: str | None = None  # "stop", "length", "tool_calls", etc.
 
     @property
     def is_final(self) -> bool:
         return not self.tool_calls
+
+    @property
+    def is_truncated(self) -> bool:
+        """True when the response was cut short by the max_tokens limit."""
+        return self.finish_reason == "length"
 
 
 @dataclass
