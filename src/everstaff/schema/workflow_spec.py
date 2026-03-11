@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
+import yaml
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -60,6 +62,60 @@ class TaskResult(BaseModel):
     child_stats: Any = None  # SessionStats from the sub-agent run, if available
 
 
+class PlanFileTask(BaseModel):
+    """Merged TaskNodeSpec + TaskResult for YAML file I/O.
+
+    Combines spec fields (what to do) with runtime fields (what happened)
+    so a single YAML file can capture both the plan and its execution state.
+    """
+
+    # --- Spec fields (from TaskNodeSpec) ---
+    task_id: str
+    title: str
+    description: str
+    assigned_agent: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    acceptance_criteria: str | None = None
+    max_retries: int = 2
+    timeout_seconds: int = 300
+    requires_evaluation: bool = False
+
+    # --- Runtime fields (from TaskResult) ---
+    status: TaskStatus = TaskStatus.PENDING
+    output: str = ""
+    retries: int = 0
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    evaluation: TaskEvaluation | None = None
+
+    def to_task_node_spec(self) -> TaskNodeSpec:
+        """Extract a TaskNodeSpec from this file task."""
+        return TaskNodeSpec(
+            task_id=self.task_id,
+            title=self.title,
+            description=self.description,
+            assigned_agent=self.assigned_agent,
+            dependencies=list(self.dependencies),
+            acceptance_criteria=self.acceptance_criteria,
+            max_retries=self.max_retries,
+            timeout_seconds=self.timeout_seconds,
+            requires_evaluation=self.requires_evaluation,
+        )
+
+    def to_task_result(self) -> TaskResult:
+        """Extract a TaskResult from this file task."""
+        return TaskResult(
+            task_id=self.task_id,
+            status=self.status,
+            output=self.output,
+            agent_name=self.assigned_agent,
+            retries=self.retries,
+            started_at=self.started_at,
+            completed_at=self.completed_at,
+            evaluation=self.evaluation,
+        )
+
+
 class PlanSpec(BaseModel):
     """A plan containing a DAG of tasks."""
 
@@ -68,7 +124,10 @@ class PlanSpec(BaseModel):
     goal: str = ""
     tasks: list[TaskNodeSpec] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
-    status: str = "draft"  # draft | approved | executing | completed | failed
+    updated_at: datetime = Field(default_factory=datetime.now)
+    status: str = "draft"  # draft | executing | completed | failed | stopped
+    max_parallel: int = 5
+    file_tasks: list[PlanFileTask] = Field(default_factory=list)
 
     # --- DAG helpers ----------------------------------------------------------
 
@@ -151,6 +210,30 @@ class PlanSpec(BaseModel):
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
         return order
+
+    # --- YAML file I/O --------------------------------------------------------
+
+    def save_yaml(self, path: Path) -> None:
+        """Serialize plan to a YAML file.
+
+        Updates ``updated_at`` before writing.  Creates parent directories
+        if they don't exist.  The ``tasks`` field is excluded from the
+        output (use ``file_tasks`` instead).
+        """
+        self.updated_at = datetime.now()
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = self.model_dump(exclude={"tasks"}, mode="json")
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    @classmethod
+    def load_yaml(cls, path: Path) -> "PlanSpec":
+        """Deserialize a PlanSpec from a YAML file."""
+        path = Path(path)
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        return cls.model_validate(data)
 
 
 class WorkflowSpec(BaseModel):
