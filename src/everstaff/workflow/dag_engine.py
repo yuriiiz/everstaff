@@ -414,7 +414,7 @@ class DAGEngine:
                     all_requests = []
                     for exc in hitl_exceptions:
                         all_requests.extend(exc.requests)
-                    raise HumanApprovalRequired(all_requests)  # propagate up to DAGTool → AgentRuntime
+                    raise HumanApprovalRequired(all_requests)  # propagate up to ExecutePlanStepTool → AgentRuntime
 
                 self._update_progress_markdown()
                 if self._on_plan_updated:
