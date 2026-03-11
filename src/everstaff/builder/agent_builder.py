@@ -203,7 +203,7 @@ class AgentBuilder:
         if getattr(self._spec, "sub_agents", None):
             system_tool_names.add("delegate_task_to_subagent")
         if getattr(self._spec, "workflow", None):
-            system_tool_names.add("write_workflow_plan")
+            system_tool_names.update({"write_plan", "execute_plan_step"})
         if getattr(self._spec, "enable_bootstrap", False):
             system_tool_names.update(("create_agent", "create_skill"))
 
@@ -214,6 +214,8 @@ class AgentBuilder:
         source = getattr(self._spec, "source", "custom")
         if source == "builtin":
             system_tool_names.update(spec_tools & _FRAMEWORK_TOOL_NAMES)
+        if "update_skill" in spec_tools:
+            system_tool_names.add("update_skill")
 
         # Resolve file_store BEFORE permissions (needed for session grants)
         try:
@@ -234,6 +236,11 @@ class AgentBuilder:
             tool_registry.register(tool)
         for tool in skill_provider.get_tools():
             tool_registry.register(tool)
+        # Register update_skill if requested in agent tools
+        if "update_skill" in spec_tools and hasattr(skill_provider, "create_update_skill_tool"):
+            _update_skill_tool = skill_provider.create_update_skill_tool()
+            if _update_skill_tool is not None:
+                tool_registry.register_native(_update_skill_tool)
         for tool in knowledge_provider.get_tools():
             tool_registry.register(tool)
         for tool in mcp_provider.get_tools():
@@ -241,10 +248,10 @@ class AgentBuilder:
         for tool in memory_tool_provider.get_tools():
             tool_registry.register(tool)
 
-        # 1c. Register DAGTool if workflow is configured
-        dag_tool = self._build_workflow_tool(session_id, model_id, cancellation, tracer, memory, root_session_id)
-        if dag_tool:
-            tool_registry.register_native(dag_tool)
+        # 1c. Register workflow tools if workflow is configured
+        workflow_tools = self._build_workflow_tool(session_id, model_id, cancellation, tracer, memory, root_session_id, workdir=workdir)
+        for wf_tool in workflow_tools:
+            tool_registry.register_native(wf_tool)
 
         # 2. Assemble pipeline (order is explicit and intentional)
         pipeline = ToolCallPipeline([
@@ -414,6 +421,10 @@ class AgentBuilder:
         # Separate framework tools from regular tools
         framework_tools, regular_tools = self._split_framework_tools(tool_names)
 
+        # Filter out skill-managed tools (registered later via skill_provider)
+        _SKILL_MANAGED_TOOLS = {"update_skill"}
+        regular_tools = [t for t in regular_tools if t not in _SKILL_MANAGED_TOOLS]
+
         # Register regular tools via ToolLoader
         if regular_tools:
             from everstaff.tools.loader import ToolLoader
@@ -546,7 +557,9 @@ class AgentBuilder:
         return framework, regular
 
     async def _build_skill_provider(self):
-        if not self._spec.skills:
+        spec_tools = set(getattr(self._spec, "tools", None) or [])
+        needs_skill_manager = self._spec.skills or ("update_skill" in spec_tools)
+        if not needs_skill_manager:
             from everstaff.nulls import NullSkillProvider
             return NullSkillProvider()
         try:
@@ -630,17 +643,21 @@ class AgentBuilder:
         tracer: Any,
         memory: Any = None,
         root_session_id: str | None = None,
+        workdir: Path | None = None,
     ):
         if not getattr(self._spec, "workflow", None):
-            return None
+            return []
+        from everstaff.workflow.plan_tool import WritePlanTool
+        from everstaff.workflow.step_tool import ExecutePlanStepTool
         from everstaff.workflow.factory import WorkflowSubAgentFactory
-        from everstaff.workflow.dag_tool import DAGTool
+
         # Ensure each SubAgentSpec has its name set from the dict key
         resolved_agents = {}
         for key, sub_spec in (self._spec.sub_agents or {}).items():
             if not sub_spec.name:
                 sub_spec = sub_spec.model_copy(update={"name": key})
             resolved_agents[key] = sub_spec
+
         factory = WorkflowSubAgentFactory(
             available_agents=resolved_agents,
             env=self._env,
@@ -649,12 +666,26 @@ class AgentBuilder:
             parent_model_id=model_id,
             root_session_id=root_session_id,
         )
-        return DAGTool(
+
+        max_parallel = self._spec.workflow.max_parallel
+        effective_workdir = workdir or Path(".")
+
+        write_tool = WritePlanTool(
             factory=factory,
-            max_parallel=self._spec.workflow.max_parallel,
+            max_parallel=max_parallel,
             cancellation=cancellation,
             tracer=tracer,
             session_id=session_id,
+            workdir=effective_workdir,
+            coordinator_name=self._spec.agent_name,
+        )
+        step_tool = ExecutePlanStepTool(
+            factory=factory,
+            cancellation=cancellation,
+            tracer=tracer,
+            session_id=session_id,
+            workdir=effective_workdir,
             coordinator_name=self._spec.agent_name,
             memory=memory,
         )
+        return [write_tool, step_tool]
