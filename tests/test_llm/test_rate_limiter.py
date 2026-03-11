@@ -111,23 +111,6 @@ async def test_rate_limiter_rpm_throttles():
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_tpm_throttles_after_consume():
-    """TPM bucket should throttle after heavy token consumption."""
-    rl = RateLimiter(tpm_limit=600)  # 10 tokens/sec
-    await rl.before_request()
-    # Consume more than the bucket capacity to go negative
-    await rl.after_request(700)
-    # Next before_request should wait for tokens to refill to >= 0
-    t0 = time.monotonic()
-    await rl.before_request()
-    elapsed = time.monotonic() - t0
-    # Need to recover ~100 tokens at 10/sec => ~10s... that's too long.
-    # Actually 600 tpm = 10 tokens/sec. 700-600=100 deficit => 10s.
-    # Let's use a bigger tpm_limit for a shorter test.
-    # Re-test with better numbers below.
-
-
-@pytest.mark.asyncio
 async def test_rate_limiter_tpm_throttles_after_consume_fast():
     """TPM bucket should throttle after heavy token consumption (fast refill)."""
     rl = RateLimiter(tpm_limit=6000)  # 100 tokens/sec
