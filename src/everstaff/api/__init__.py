@@ -68,7 +68,17 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
                     """Create a real LLM client for daemon ThinkEngine."""
                     mapping = config.resolve_model(model_kind)
                     logger.debug("daemon llm_factory model_kind=%s model_id=%s", model_kind, mapping.model_id)
-                    return LiteLLMClient(model=mapping.model_id, max_tokens=mapping.max_tokens, temperature=mapping.temperature)
+                    return LiteLLMClient(
+                        model=mapping.model_id,
+                        max_tokens=mapping.max_output_tokens,
+                        temperature=mapping.temperature,
+                        timeout=mapping.timeout,
+                        num_retries=mapping.max_retries,
+                        stream_chunk_timeout=mapping.stream_chunk_timeout,
+                        stream_total_timeout=mapping.stream_total_timeout,
+                        tpm_limit=mapping.tpm_limit,
+                        rpm_limit=mapping.rpm_limit,
+                    )
 
                 class _DaemonRuntimeProxy:
                     """Wraps AgentBuilder: build() + run() in a single .run() call.
@@ -542,6 +552,44 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             pass
         return ""
 
+    async def _continue_session_from_channel(
+        *,
+        session_id: str,
+        agent_name: str,
+        user_input: str,
+        chat_id: str,
+        sender_open_id: str,
+    ) -> None:
+        """Continue an existing session with new user input (conversation group follow-up)."""
+        from everstaff.api.sessions import _resume_session_task, _extract_broadcast_fn
+
+        async def _run_and_deliver():
+            try:
+                await _resume_session_task(
+                    session_id, agent_name, user_input, config,
+                    broadcast_fn=_extract_broadcast_fn(channel_manager),
+                    channel_manager=channel_manager,
+                    mcp_pool=mcp_pool,
+                    session_index=_session_index,
+                    executor_manager=getattr(app.state, 'executor_manager', None),
+                    hitl_router=hitl_router,
+                    user_id=sender_open_id or None,
+                )
+            except Exception:
+                logger.exception("channel session continue failed session=%s", session_id[:8])
+
+            if chat_id:
+                try:
+                    result = _read_session_result(session_id)
+                    if result:
+                        for h in getattr(app.state, 'message_handlers', []):
+                            await h.deliver_result(session_id, chat_id, result)
+                            break
+                except Exception as exc:
+                    logger.warning("result delivery failed session=%s err=%s", session_id[:8], exc)
+
+        _asyncio.create_task(_run_and_deliver())
+
     # Create LarkMessageHandler instances for each connection
     from everstaff.channels.lark_adapter import LarkChannelAdapter
     from everstaff.channels.lark_message_handler import LarkMessageHandler
@@ -560,6 +608,7 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
             event_bus=event_bus,
             agents_dir=config.agents_dir,
             session_create_fn=_create_session_from_channel,
+            session_continue_fn=_continue_session_from_channel,
             hitl_router=hitl_router,
             bot_name=_bot_names.get(_app_id, "Agent"),
         )
