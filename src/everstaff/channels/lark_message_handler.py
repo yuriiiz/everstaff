@@ -2,6 +2,7 @@
 
 Subscribes to EventBus lark_message events.
 Sends agent selection card -> user selects -> retract card -> create session.
+Follow-up messages in conversation groups are routed to the existing session.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ class LarkMessageHandler:
         event_bus: "EventBus",
         agents_dir: str,
         session_create_fn: Callable[..., Awaitable[str]] | None = None,
+        session_continue_fn: Callable[..., Awaitable[None]] | None = None,
         hitl_router: Any = None,
         bot_name: str = "Agent",
     ) -> None:
@@ -36,10 +38,13 @@ class LarkMessageHandler:
         self._bus = event_bus
         self._agents_dir = Path(agents_dir).expanduser().resolve()
         self._session_create_fn = session_create_fn
+        self._session_continue_fn = session_continue_fn
         self._hitl_router = hitl_router
         self._bot_name = bot_name
         self._task: asyncio.Task | None = None
         self._pending_selections: dict[str, dict[str, str]] = {}
+        # chat_id -> conversation group state (session_id, agent_name, ...)
+        self._conversation_groups: dict[str, dict[str, str]] = {}
 
     async def start(self) -> None:
         self._bus.subscribe(_SUBSCRIBER)
@@ -71,6 +76,7 @@ class LarkMessageHandler:
         chat_id = payload.get("chat_id", "")
         sender = payload.get("sender_open_id", "")
         text = payload.get("content", "")
+        message_id = payload.get("message_id", "")
 
         if not chat_id or not text.strip():
             return
@@ -79,6 +85,28 @@ class LarkMessageHandler:
         if text.strip() == "/help":
             await self._send_help(chat_id)
             return
+
+        # Check if this is a known conversation group — only the owner gets free pass
+        conv = self._conversation_groups.get(chat_id)
+        if conv and sender == conv.get("open_id"):
+            logger.info("routing to conversation group chat_id=%s session=%s text=%s",
+                        chat_id, conv.get("session_id", "?")[:8], text[:80])
+            if self._session_continue_fn:
+                await self._session_continue_fn(
+                    session_id=conv["session_id"],
+                    agent_name=conv.get("agent_name", ""),
+                    user_input=text,
+                    chat_id=chat_id,
+                    sender_open_id=sender,
+                )
+            else:
+                logger.warning("conversation group message dropped: no session_continue_fn chat_id=%s", chat_id)
+            return
+
+        # Handle /new command: reset conversation
+        if text.strip().lower() == "/new":
+            self._conversation_groups.pop(chat_id, None)
+            # Fall through to agent selection below
 
         agents = self._list_agents()
         if not agents:
@@ -101,7 +129,8 @@ class LarkMessageHandler:
         )
         help_text = (
             "**Supported Commands**\n\n"
-            "/help - Show this help message\n\n"
+            "/help - Show this help message\n"
+            "/new - Start a new conversation\n\n"
             "**How to use**\n"
             "Send any message to start a session. "
             "You will be prompted to select an agent, "
@@ -120,27 +149,10 @@ class LarkMessageHandler:
 
     def _list_agents(self) -> list[dict[str, str]]:
         from everstaff.utils.yaml_loader import load_yaml
-        from everstaff.core.config import _builtin_agents_path
 
         agents_by_uuid: dict[str, dict[str, str]] = {}
 
-        # Collect builtin agents first
-        builtin_path = _builtin_agents_path()
-        if builtin_path:
-            bp = Path(builtin_path)
-            for f in sorted(bp.glob("*.yaml")):
-                try:
-                    spec = load_yaml(str(f))
-                    uid = spec.get("uuid", f.stem)
-                    agents_by_uuid[uid] = {
-                        "name": spec.get("agent_name", f.stem),
-                        "uuid": uid,
-                        "description": spec.get("description", ""),
-                    }
-                except Exception:
-                    continue
-
-        # Collect user agents (override builtins by uuid)
+        # Only collect user agents (exclude builtins)
         if self._agents_dir.exists():
             for f in sorted(self._agents_dir.glob("*.yaml")):
                 try:
@@ -258,6 +270,16 @@ class LarkMessageHandler:
         session_id = await self._session_create_fn(
             agent_name, user_input, source_info
         )
+
+        # Register this group as a conversation group for follow-up messages
+        self._conversation_groups[new_chat_id] = {
+            "session_id": session_id,
+            "agent_name": agent_name,
+            "agent_uuid": value.get("agent_uuid", ""),
+            "open_id": operator_open_id,
+        }
+        logger.info("registered conversation group chat_id=%s session=%s agent=%s",
+                     new_chat_id, session_id[:8], agent_name)
 
         return {
             "toast": {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Save, Trash2, FileCode, Layout, Settings, ChevronRight, X, Check, User, MessageSquare, Users, UserPlus, Shield, Info, Terminal, Bot, Activity, Search, Share2, Book, Database, Filter, Eye, UserCheck, GitGraph, Globe, Server, Zap, AlertCircle } from 'lucide-react';
+import { Plus, Save, Trash2, FileCode, Layout, Settings, ChevronRight, X, Check, User, MessageSquare, Users, UserPlus, Shield, Info, Terminal, Bot, Activity, Search, Share2, Book, Database, Filter, Eye, UserCheck, GitGraph, Globe, Server, Zap, AlertCircle, Copy } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
@@ -307,6 +307,27 @@ const TagList = ({ items, onRemove }) => {
 const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools, testTrigger }) => {
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState(null);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        const serverConfig = {};
+        if (server.transport === 'stdio') {
+            serverConfig.command = server.command;
+            if (server.args && server.args.length > 0) serverConfig.args = server.args;
+            if (server.env && Object.keys(server.env).length > 0) serverConfig.env = server.env;
+        } else {
+            serverConfig.url = server.url;
+            if (server.headers && Object.keys(server.headers).length > 0) serverConfig.headers = server.headers;
+        }
+        const config = { mcpServers: { [server.name]: serverConfig } };
+        try {
+            await navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+        }
+    };
 
     const handleTest = async () => {
         setTesting(true);
@@ -346,6 +367,9 @@ const McpServerCard = ({ server, onEdit, onDelete, onTest, onShowTools, testTrig
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={handleCopy} style={{ padding: '6px', borderRadius: '6px', border: `1px solid ${copied ? '#bbf7d0' : '#e5e7eb'}`, background: copied ? '#f0fdf4' : 'white', cursor: 'pointer', color: copied ? '#15803d' : '#6b7280', transition: 'all 0.2s' }} title="Copy Config">
+                        {copied ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
                     <button onClick={handleTest} disabled={testing} style={{ padding: '6px', borderRadius: '6px', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', color: '#6b7280' }} title="Test Connection">
                         {testing ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}><AlertCircle size={14} /></motion.div> : <Zap size={14} />}
                     </button>
@@ -1831,7 +1855,11 @@ export default function AgentStore() {
                             body: JSON.stringify(spec)
                         });
                         if (res.ok) {
-                            setAgentMcpServers(prev => [...prev, spec]);
+                            const newServers = [...(selectedAgent.mcp_servers || []), spec];
+                            setAgentMcpServers(newServers);
+                            const updated = { ...selectedAgent, mcp_servers: newServers };
+                            setSelectedAgent(updated);
+                            if (editMode === 'yaml') setEditorContent(yaml.dump(updated));
                             setAddMcpModal({ isOpen: false });
                         } else {
                             const err = await res.json();
@@ -1852,7 +1880,11 @@ export default function AgentStore() {
                             body: JSON.stringify(updatedSpec)
                         });
                         if (res.ok) {
-                            setAgentMcpServers(prev => prev.map(s => s.name === editMcpModal.server.name ? updatedSpec : s));
+                            const newServers = (selectedAgent.mcp_servers || []).map(s => s.name === editMcpModal.server.name ? updatedSpec : s);
+                            setAgentMcpServers(newServers);
+                            const updatedAgent = { ...selectedAgent, mcp_servers: newServers };
+                            setSelectedAgent(updatedAgent);
+                            if (editMode === 'yaml') setEditorContent(yaml.dump(updatedAgent));
                             setEditMcpModal({ isOpen: false, server: null });
                         } else {
                             const err = await res.json();
@@ -1870,7 +1902,11 @@ export default function AgentStore() {
                     try {
                         const res = await fetch(`/api/agents/${selectedAgent.uuid}/mcp-servers/${deleteMcpModal.server.name}`, { method: 'DELETE' });
                         if (res.ok) {
-                            setAgentMcpServers(prev => prev.filter(p => p.name !== deleteMcpModal.server.name));
+                            const newServers = (selectedAgent.mcp_servers || []).filter(p => p.name !== deleteMcpModal.server.name);
+                            setAgentMcpServers(newServers);
+                            const updatedAgent = { ...selectedAgent, mcp_servers: newServers };
+                            setSelectedAgent(updatedAgent);
+                            if (editMode === 'yaml') setEditorContent(yaml.dump(updatedAgent));
                             setDeleteMcpModal({ isOpen: false, server: null });
                         } else {
                             const err = await res.json();

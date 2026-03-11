@@ -43,6 +43,7 @@ def make_router(config) -> APIRouter:
             kind: {
                 "model_id": m.model_id,
                 "max_tokens": m.max_tokens,
+                "max_output_tokens": m.max_output_tokens,
                 "temperature": m.temperature,
                 "supports_tools": m.supports_tools,
             }

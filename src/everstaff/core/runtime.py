@@ -13,6 +13,7 @@ from pathlib import Path
 from everstaff.core.context import AgentContext
 from everstaff.session.index import SessionIndex as _SI
 from everstaff.tools.pipeline import ToolCallContext
+from everstaff.memory.strategies import _clean_orphan_tool_results
 from everstaff.protocols import HumanApprovalRequired, LLMClient, Message, TraceEvent
 from everstaff.utils.workspace_diff import snapshot_workspace, diff_snapshots, guess_mime
 from everstaff.schema.token_stats import SessionStats, TokenUsage
@@ -333,6 +334,7 @@ class AgentRuntime:
         stats = existing_stats if existing_stats is not None else SessionStats()
         self.stats = stats  # expose so DelegateTaskTool can read after run()
         messages = await self._ctx.memory.load(self._ctx.session_id)
+        messages = _clean_orphan_tool_results(messages)
         messages = _drop_dangling_tool_calls(messages)
         if user_input is not None:
             # Avoid duplicate if the message was pre-written by _resume_session_task
@@ -450,6 +452,7 @@ class AgentRuntime:
                 self._emit("llm_end", {
                     "input_tokens": response.input_tokens,
                     "output_tokens": response.output_tokens,
+                    "finish_reason": response.finish_reason,
                     "response": {
                         "content": response.content,
                         "tool_calls": [
@@ -500,6 +503,106 @@ class AgentRuntime:
                             pass
                     yield SessionEnd(response=_STOPPED)
                     return
+
+                # Handle repetition loop: the LLM fell into a degenerate
+                # cycle (same text over and over).  Discard the broken turn
+                # and nudge the model to take action instead of reasoning.
+                if response.finish_reason == "repetition_detected":
+                    logger.warning(
+                        "Repetition loop detected — discarding output and "
+                        "nudging model to act (session=%s)",
+                        self._ctx.session_id,
+                    )
+                    self._emit("llm_repetition_loop", {
+                        "content_length": len(response.content or ""),
+                        "thinking_length": len(response.thinking or ""),
+                    })
+                    messages.append(Message(
+                        role="user",
+                        content=(
+                            "[SYSTEM] Your previous response was aborted because "
+                            "you entered a repetitive loop — generating the same "
+                            "text over and over. Stop reasoning and take action "
+                            "now. Call a tool or give a direct answer. Do NOT "
+                            "repeat what you already said."
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    turns += 1
+                    continue
+
+                # Handle max_tokens truncation: when finish_reason is "length",
+                # the LLM response was cut short. If it looks final (no tool
+                # calls), the tool calls were likely lost to truncation — ask
+                # the LLM to continue instead of ending the session.
+                if response.is_truncated and response.is_final:
+                    logger.warning(
+                        "LLM response truncated by max_tokens (finish_reason=length) "
+                        "with no tool calls — requesting continuation (session=%s)",
+                        self._ctx.session_id,
+                    )
+                    self._emit("llm_truncated", {
+                        "finish_reason": response.finish_reason,
+                        "had_tool_calls": False,
+                        "content_length": len(response.content or ""),
+                    })
+                    # Preserve the partial content so context is not lost
+                    if response.content:
+                        messages.append(Message(
+                            role="assistant",
+                            content=response.content,
+                            thinking=response.thinking,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+                    messages.append(Message(
+                        role="user",
+                        content=(
+                            "[SYSTEM] Your previous response was truncated due to "
+                            "the output length limit (max_tokens). Your output was "
+                            "cut off mid-way. Please continue from where you left "
+                            "off. If you were about to call a tool, call it now."
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    turns += 1
+                    continue
+
+                if response.is_truncated and not response.is_final:
+                    logger.warning(
+                        "LLM response truncated by max_tokens (finish_reason=length) "
+                        "with %d tool call(s) — discarding truncated tool calls and "
+                        "requesting retry (session=%s)",
+                        len(response.tool_calls), self._ctx.session_id,
+                    )
+                    self._emit("llm_truncated", {
+                        "finish_reason": response.finish_reason,
+                        "had_tool_calls": True,
+                        "tool_call_count": len(response.tool_calls),
+                    })
+                    # Discard truncated tool calls — arguments are likely
+                    # malformed JSON.  Preserve any partial text content and ask
+                    # the LLM to retry with a shorter output.
+                    if response.content:
+                        messages.append(Message(
+                            role="assistant",
+                            content=response.content,
+                            thinking=response.thinking,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+                    messages.append(Message(
+                        role="user",
+                        content=(
+                            "[SYSTEM] Your previous response was truncated due to "
+                            "the output length limit (max_tokens). Your tool call "
+                            "arguments were cut off and discarded. Please retry "
+                            "with a shorter output — reduce the size of tool call "
+                            "arguments (e.g. shorten descriptions, split into "
+                            "fewer tasks per call)."
+                        ),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    turns += 1
+                    continue
 
                 if response.is_final:
                     # Framework fallback: if any child HITL requests remain unresolved, raise

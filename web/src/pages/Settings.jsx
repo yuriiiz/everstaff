@@ -140,8 +140,12 @@ export default function Settings() {
                                     </div>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
-                                            <span style={{ color: '#6b7280' }}>Tokens / Temp</span>
-                                            <span style={{ color: '#111827', fontWeight: 500 }}>{mapping.max_tokens} / {mapping.temperature}</span>
+                                            <span style={{ color: '#6b7280' }}>Context / Output</span>
+                                            <span style={{ color: '#111827', fontWeight: 500 }}>{Math.floor(mapping.max_tokens / 1000)}K / {Math.floor((mapping.max_output_tokens || 8192) / 1000)}K</span>
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                                            <span style={{ color: '#6b7280' }}>Temperature</span>
+                                            <span style={{ color: '#111827', fontWeight: 500 }}>{mapping.temperature}</span>
                                         </div>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
                                             <span style={{ color: '#6b7280' }}>Tools</span>

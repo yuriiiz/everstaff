@@ -368,8 +368,17 @@ class SkillManager:
         return "\n".join(lines)
 
     def get_tools(self) -> list[NativeTool]:
-        tool = self.create_use_skill_tool()
-        return [tool] if tool is not None else []
+        tools = []
+        use_skill = self.create_use_skill_tool()
+        if use_skill is not None:
+            tools.append(use_skill)
+        read_resource = self.create_read_skill_resource_tool()
+        if read_resource is not None:
+            tools.append(read_resource)
+        update = self.create_update_skill_tool()
+        if update is not None:
+            tools.append(update)
+        return tools
 
     async def activate_skill(self, skill_name: str) -> str:
         if skill_name in self._activated:
@@ -381,7 +390,10 @@ class SkillManager:
             content = self.get(skill_name)
             instructions = content.instructions
             if content.resource_files:
-                resource_list = "\n".join(f"  - {f}" for f in content.resource_files)
+                skill_dir = content.metadata.path.parent
+                resource_list = "\n".join(
+                    f"  - {f.relative_to(skill_dir)}" for f in content.resource_files
+                )
                 instructions += f"\n\n## Bundled Resources\n{resource_list}"
             self._activated[skill_name] = instructions
             return instructions
@@ -417,3 +429,143 @@ class SkillManager:
             source="builtin",
         )
         return NativeTool(func=use_skill, definition_=defn)
+
+    def create_read_skill_resource_tool(self) -> NativeTool | None:
+        """Create the read_skill_resource tool for reading files in skill directories."""
+        if not self._active_metadata:
+            return None
+        manager = self
+
+        async def read_skill_resource(skill_name: str, file_path: str = "") -> str:
+            active_names = {m.name for m in manager._active_metadata}
+            if skill_name not in active_names:
+                return f"Error: Skill '{skill_name}' not available. Available: {sorted(active_names)}"
+
+            try:
+                content = manager.get(skill_name)
+            except FileNotFoundError:
+                return f"Error: Skill '{skill_name}' not found."
+
+            skill_dir = content.metadata.path.parent
+
+            if not file_path:
+                # Return file listing (relative paths, excludes SKILL.md)
+                if not content.resource_files:
+                    return ""
+                return "\n".join(
+                    str(f.relative_to(skill_dir)) for f in content.resource_files
+                )
+
+            # Resolve and validate path
+            target = (skill_dir / file_path).resolve()
+            try:
+                target.relative_to(skill_dir.resolve())
+            except ValueError:
+                return f"Error: Invalid path '{file_path}' — outside skill directory."
+
+            if not target.exists():
+                return f"Error: file not found: {file_path}"
+
+            try:
+                return target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return "Error: file appears to be binary and cannot be displayed as text."
+
+        skills_detail = "\n".join(
+            f'  - "{m.name}": {m.description}' for m in self._active_metadata
+        )
+        defn = ToolDefinition(
+            name="read_skill_resource",
+            description=(
+                "Read a resource file from a skill directory. "
+                "Pass an empty file_path to list all available files.\n\n"
+                f"Available skills:\n{skills_detail}"
+            ),
+            parameters=[
+                ToolParameter(
+                    name="skill_name",
+                    type="string",
+                    description=f"One of: {', '.join(repr(m.name) for m in self._active_metadata)}",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="Relative path to the file within the skill directory (e.g. 'scripts/run.py'). Leave empty to list all files.",
+                    required=False,
+                    default="",
+                ),
+            ],
+            source="builtin",
+        )
+        return NativeTool(func=read_skill_resource, definition_=defn)
+
+    @staticmethod
+    def _update_skill_definition(skills_suffix: str = "") -> ToolDefinition:
+        """Shared definition for update_skill tool."""
+        desc = (
+            "Update skill files. Only use this tool when the user explicitly asks to update or modify skills. "
+            "Use action 'write' to create or overwrite a file, "
+            "or 'delete' to remove a file. Cannot delete SKILL.md."
+        )
+        if skills_suffix:
+            desc += f"\n\n{skills_suffix}"
+        return ToolDefinition(
+            name="update_skill",
+            description=desc,
+            parameters=[
+                ToolParameter(
+                    name="skill_name",
+                    type="string",
+                    description="Name of the skill to update",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="action",
+                    type="string",
+                    description="'write' to create/overwrite a file, 'delete' to remove a file",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="Relative path within the skill directory (e.g. 'SKILL.md', 'scripts/run.py')",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="content",
+                    type="string",
+                    description="File content (required for 'write', ignored for 'delete')",
+                    required=False,
+                    default="",
+                ),
+            ],
+            source="builtin",
+        )
+
+    def create_update_skill_tool(self) -> NativeTool | None:
+        """Create the update_skill tool for modifying skill files."""
+        if not self._active_metadata:
+            return None
+        manager = self
+
+        async def update_skill(skill_name: str, action: str, file_path: str, content: str = "") -> str:
+            if action not in ("write", "delete"):
+                return f"Error: Invalid action '{action}'. Must be 'write' or 'delete'."
+
+            try:
+                if action == "write":
+                    manager.write_file(skill_name, file_path, content)
+                    return f"Written: {file_path} (skill: {skill_name})"
+                else:  # delete
+                    manager.delete_file(skill_name, file_path)
+                    return f"Deleted: {file_path} (skill: {skill_name})"
+            except FileNotFoundError as e:
+                return f"Error: {e}"
+            except ValueError as e:
+                return f"Error: {e}"
+
+        all_skills = manager.discover()
+        skills_list = ", ".join(repr(m.name) for m in all_skills) if all_skills else "(none discovered)"
+        defn = self._update_skill_definition(f"Discovered skills: {skills_list}")
+        return NativeTool(func=update_skill, definition_=defn)

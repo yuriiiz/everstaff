@@ -8,10 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_orphan_tool_results(messages: list[Message]) -> list[Message]:
-    """Remove leading tool-result messages whose assistant tool_call is missing.
+    """Remove tool-result messages whose assistant tool_call is missing.
 
     This preserves the invariant that every tool result has a preceding
     assistant message containing the matching tool_call id.
+
+    Orphaned results can appear at any position (not just the leading edge)
+    when context truncation removes an assistant message but its tool results
+    are scattered across the conversation due to late arrival or duplication.
     """
     available_call_ids: set[str] = set()
     for m in messages:
@@ -21,20 +25,18 @@ def _clean_orphan_tool_results(messages: list[Message]) -> list[Message]:
                 if call_id:
                     available_call_ids.add(call_id)
 
-    start = 0
-    while start < len(messages):
-        m = messages[start]
+    cleaned: list[Message] = []
+    for m in messages:
         if m.role == "tool" and m.tool_call_id and m.tool_call_id not in available_call_ids:
             logger.warning(
                 "Dropping orphan tool result (tool_call_id=%s) "
                 "whose assistant message was truncated away.",
                 m.tool_call_id,
             )
-            start += 1
-        else:
-            break
+            continue
+        cleaned.append(m)
 
-    return messages[start:]
+    return cleaned
 
 
 class TruncationStrategy:

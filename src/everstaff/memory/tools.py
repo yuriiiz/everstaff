@@ -73,8 +73,12 @@ class WriteMemoryTool:
             result = await self._mem0.add_raw(content, **self._scope)
             return ToolResult(tool_call_id="", content=f"Memory saved. ({len(result)} entries processed)")
         except Exception as exc:
-            logger.warning("write_memory failed: %s", exc)
-            return ToolResult(tool_call_id="", content=f"Failed to save memory: {exc}", is_error=True)
+            logger.warning("write_memory failed: %s: %s", type(exc).__name__, exc, exc_info=True)
+            return ToolResult(
+                tool_call_id="",
+                content=f"Failed to save memory: [{type(exc).__name__}] {exc}",
+                is_error=True,
+            )
 
 
 class DeleteMemoryTool:

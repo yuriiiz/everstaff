@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -447,6 +448,27 @@ async def _resume_session_task(
                     logger.debug("event_callback failed session=%s event=%s err=%s",
                                  _sid, type(event).__name__, exc)
         logger.info("end agent=%s session=%s", agent_name, _sid)
+    except asyncio.CancelledError:
+        # Force-cancelled by stop_session(force=True) — save as cancelled.
+        logger.info("force-cancelled agent=%s session=%s", agent_name, _sid)
+        try:
+            _cancel_meta = sessions_dir / SessionIndex.session_relpath(session_id, root_session_id)
+            if _cancel_meta.exists():
+                _cancel_data = json.loads(_cancel_meta.read_text())
+            else:
+                _cancel_data = {"session_id": session_id, "agent_name": agent_name}
+            _cancel_data["status"] = "cancelled"
+            _cancel_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _cancel_meta.write_text(json.dumps(_cancel_data, indent=2))
+        except Exception:
+            pass
+        # Clean up cancel signal file
+        try:
+            _signal = sessions_dir / SessionIndex.signal_relpath(session_id, root_session_id)
+            if _signal.exists():
+                _signal.unlink()
+        except Exception:
+            pass
     except HumanApprovalRequired:
         # HITL pause — runtime already wrote status="waiting_for_human".
         logger.info("paused for HITL agent=%s session=%s", agent_name, _sid)
@@ -694,6 +716,21 @@ def make_router(config) -> APIRouter:
     sessions_dir = Path(config.sessions_dir).expanduser().resolve()
     router = APIRouter(tags=["sessions"])
 
+    # Registry of running session asyncio.Tasks so we can force-cancel them.
+    _session_tasks: dict[str, asyncio.Task] = {}
+
+    def _launch_session_task(session_id: str, coro) -> asyncio.Task:
+        """Create an asyncio task for a session and register it for force-cancel."""
+        async def _wrapper():
+            try:
+                await coro
+            finally:
+                _session_tasks.pop(session_id, None)
+
+        task = asyncio.create_task(_wrapper())
+        _session_tasks[session_id] = task
+        return task
+
     def _get_index(request: Request):
         return getattr(request.app.state, "session_index", None)
 
@@ -806,8 +843,8 @@ def make_router(config) -> APIRouter:
         executor_mgr = getattr(request.app.state, "executor_manager", None)
         user_id = _resolve_user_id(request)
         hitl_router = getattr(request.app.state, "hitl_router", None)
-        background_tasks.add_task(
-            _resume_session_task, session_id, agent_name, body.user_input, config,
+        _launch_session_task(session_id, _resume_session_task(
+            session_id, agent_name, body.user_input, config,
             broadcast_fn=broadcast_fn,
             channel_manager=cm,
             agent_uuid=agent_uuid,
@@ -816,7 +853,7 @@ def make_router(config) -> APIRouter:
             executor_manager=executor_mgr,
             user_id=user_id,
             hitl_router=hitl_router,
-        )
+        ))
         return {"session_id": session_id, "status": "running"}
 
     @router.get("/sessions", response_model=list[Session])
@@ -1028,6 +1065,14 @@ def make_router(config) -> APIRouter:
                 except Exception as e:
                     logger.debug("sandbox cancel push failed err=%s", e)
 
+        # Force-cancel: immediately cancel the asyncio task so the runtime
+        # doesn't have to wait for the next cooperative checkpoint.
+        if force:
+            task = _session_tasks.get(session_id)
+            if task is not None and not task.done():
+                task.cancel()
+                logger.info("force-cancelled asyncio task session=%s", session_id[:8])
+
         return {"status": "cancelled", "force": force, "session_id": session_id}
 
     @router.post("/sessions/{session_id}/resume", status_code=202)
@@ -1069,8 +1114,8 @@ def make_router(config) -> APIRouter:
         if current_status in ("cancelled", "failed", "interrupted"):
             user_input = (body.user_input if body else "") or ""
             _idx = _get_index(request)
-            background_tasks.add_task(
-                _resume_session_task, session_id, agent_name, user_input, config,
+            _launch_session_task(session_id, _resume_session_task(
+                session_id, agent_name, user_input, config,
                 broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
                 channel_manager=cm,
                 agent_uuid=agent_uuid,
@@ -1079,7 +1124,7 @@ def make_router(config) -> APIRouter:
                 executor_manager=executor_mgr,
                 user_id=user_id,
                 hitl_router=hitl_router,
-            )
+            ))
             return {"status": "resuming", "session_id": session_id}
 
         # For waiting_for_human/paused: check all HITL requests are resolved
@@ -1092,8 +1137,8 @@ def make_router(config) -> APIRouter:
             )
 
         _idx = _get_index(request)
-        background_tasks.add_task(
-            _resume_session_task, session_id, agent_name, "", config,
+        _launch_session_task(session_id, _resume_session_task(
+            session_id, agent_name, "", config,
             broadcast_fn=_extract_broadcast_fn(cm) if cm is not None else None,
             channel_manager=cm,
             agent_uuid=agent_uuid,
@@ -1102,7 +1147,7 @@ def make_router(config) -> APIRouter:
             executor_manager=executor_mgr,
             user_id=user_id,
             hitl_router=hitl_router,
-        )
+        ))
         return {"status": "resuming", "session_id": session_id}
 
     def _guard_workspace_path(session_id: str, subpath: str = "", index=None) -> Path:
