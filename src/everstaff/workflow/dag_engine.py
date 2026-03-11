@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -23,6 +24,18 @@ if TYPE_CHECKING:
     from everstaff.workflow.factory import WorkflowSubAgentFactory
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StepResult:
+    """Result of a single execute_step() invocation."""
+
+    completed_tasks: set[str] = field(default_factory=set)
+    failed_tasks: set[str] = field(default_factory=set)
+    pending_tasks: set[str] = field(default_factory=set)
+    is_plan_done: bool = False
+    results: dict[str, TaskResult] = field(default_factory=dict)
+    child_stats: Any = None
 
 # -- Concise mode preamble injected into every sub-agent prompt ----------------
 _CONCISE_PREAMBLE = """\
@@ -148,6 +161,149 @@ class DAGEngine:
                 if result.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED):
                     self._task_status[task_id] = result.status
                     self._results[task_id] = result
+
+    # ------------------------------------------------------------------
+    # Single-round execution (used by ExecutePlanStepTool)
+    # ------------------------------------------------------------------
+
+    async def execute_step(self) -> StepResult:
+        """Execute one round of ready tasks and return a StepResult.
+
+        Unlike :meth:`execute`, this does **not** loop.  It processes all
+        currently-ready tasks (batched by *max_parallel*) and returns.
+        The caller is responsible for calling this repeatedly until
+        ``StepResult.is_plan_done`` is ``True``.
+        """
+        from everstaff.schema.token_stats import SessionStats
+
+        if self._plan.status not in ("executing", "approved"):
+            self._plan.status = "executing"
+
+        step = StepResult()
+        aggregated_stats: SessionStats | None = None
+
+        ready = self._get_ready_tasks()
+
+        # Nothing ready — determine if we are done or blocked
+        if not ready:
+            terminal = {TaskStatus.COMPLETED, TaskStatus.SKIPPED, TaskStatus.FAILED}
+            all_done = all(s in terminal for s in self._task_status.values())
+            step.is_plan_done = all_done
+            # Populate pending (non-terminal tasks that were not ready)
+            for tid, st in self._task_status.items():
+                if st not in terminal:
+                    step.pending_tasks.add(tid)
+            return step
+
+        # Batch ready tasks by max_parallel and process each batch
+        batches = [
+            ready[i : i + self._max_parallel]
+            for i in range(0, len(ready), self._max_parallel)
+        ]
+
+        for batch in batches:
+            # Mark tasks as RUNNING
+            for task in batch:
+                self._task_status[task.task_id] = TaskStatus.RUNNING
+                await self._persist_workflow()
+                if self._on_task_start:
+                    try:
+                        await self._on_task_start(task)
+                    except Exception as e:
+                        logger.warning("on_task_start callback failed: %s", e)
+
+            coros = [self._execute_task(task) for task in batch]
+            batch_results = await asyncio.gather(*coros, return_exceptions=True)
+
+            # First pass: record all non-exception results
+            hitl_exceptions: list[HumanApprovalRequired] = []
+            for task, result in zip(batch, batch_results):
+                if isinstance(result, BaseException):
+                    if isinstance(result, HumanApprovalRequired):
+                        hitl_exceptions.append(result)
+                        # Reset triggering task to PENDING so it can be retried
+                        self._task_status[task.task_id] = TaskStatus.PENDING
+                    else:
+                        failed_result = TaskResult(
+                            task_id=task.task_id,
+                            status=TaskStatus.FAILED,
+                            output=f"Exception: {result}",
+                        )
+                        self._results[task.task_id] = failed_result
+                        self._task_status[task.task_id] = failed_result.status
+                        step.failed_tasks.add(task.task_id)
+                        step.results[task.task_id] = failed_result
+                        await self._persist_workflow()
+                    continue
+
+                # Evaluation / retry logic
+                needs_eval = task.requires_evaluation or bool(task.acceptance_criteria)
+                if needs_eval and result.status == TaskStatus.COMPLETED:
+                    evaluation = await self._evaluate_task(task, result)
+                    result.evaluation = evaluation
+                    if not evaluation.meets_criteria:
+                        if result.retries < task.max_retries:
+                            result.retries += 1
+                            self._task_status[task.task_id] = TaskStatus.PENDING
+                            self._results[task.task_id] = result
+                            logger.info(
+                                "Task %s failed evaluation, retrying (%d/%d)",
+                                task.task_id,
+                                result.retries,
+                                task.max_retries,
+                            )
+                            continue
+                        else:
+                            result.status = TaskStatus.FAILED
+
+                self._results[task.task_id] = result
+                self._task_status[task.task_id] = result.status
+                step.results[task.task_id] = result
+                await self._persist_workflow()
+
+                if result.status == TaskStatus.COMPLETED:
+                    step.completed_tasks.add(task.task_id)
+                elif result.status == TaskStatus.FAILED:
+                    step.failed_tasks.add(task.task_id)
+
+                # Accumulate child_stats
+                if getattr(result, "child_stats", None) is not None:
+                    if aggregated_stats is None:
+                        aggregated_stats = SessionStats()
+                    aggregated_stats.merge(result.child_stats)
+
+                if self._on_task_complete:
+                    try:
+                        await self._on_task_complete(task.task_id, result)
+                    except Exception:
+                        logger.warning("on_task_complete callback failed for task %s", task.task_id)
+
+            # If HITL exceptions occurred, persist completed results and re-raise
+            if hitl_exceptions:
+                self._update_progress_markdown()
+                all_requests = []
+                for exc in hitl_exceptions:
+                    all_requests.extend(exc.requests)
+                raise HumanApprovalRequired(all_requests)
+
+            self._update_progress_markdown()
+            if self._on_plan_updated:
+                try:
+                    await self._on_plan_updated(self._plan)
+                except Exception as e:
+                    logger.warning("on_plan_updated failed: %s", e)
+
+        # Populate pending tasks (still PENDING after this round)
+        for tid, st in self._task_status.items():
+            if st == TaskStatus.PENDING:
+                step.pending_tasks.add(tid)
+
+        # Determine if plan is done
+        terminal = {TaskStatus.COMPLETED, TaskStatus.SKIPPED, TaskStatus.FAILED}
+        step.is_plan_done = all(s in terminal for s in self._task_status.values())
+
+        step.child_stats = aggregated_stats
+        return step
 
     # ------------------------------------------------------------------
     # Main execution loop
