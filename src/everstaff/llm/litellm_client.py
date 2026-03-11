@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import logging
+import random
 import re
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -44,6 +47,57 @@ OpenAIChatCompletionStreamingHandler.chunk_parser = _safe_chunk_parser
 # Some models (e.g. MiniMax) emit reasoning inside <think> XML tags in the
 # content field instead of using a dedicated thinking/reasoning_content field.
 # ---------------------------------------------------------------------------
+
+class _RepetitionDetector:
+    """Detects when the LLM output falls into a repetitive loop.
+
+    Splits accumulated text into fixed-size segments and checks whether the
+    last few segments are (near-)identical, which is the telltale pattern of a
+    model that has entered a degenerate repetition cycle.
+
+    Only monitors a rolling window so memory stays bounded.
+    """
+
+    def __init__(
+        self,
+        segment_size: int = 200,
+        min_repeats: int = 3,
+        window_segments: int = 12,
+    ) -> None:
+        self._segment_size = segment_size
+        self._min_repeats = min_repeats      # how many identical segments trigger detection
+        self._window_segments = window_segments
+        self._buf = ""
+        self._segments: list[str] = []
+
+    def feed(self, text: str) -> bool:
+        """Append *text* and return True if a repetition loop is detected."""
+        self._buf += text
+        # Slice buffer into segments once enough chars accumulate
+        while len(self._buf) >= self._segment_size:
+            seg = self._buf[:self._segment_size]
+            self._buf = self._buf[self._segment_size:]
+            self._segments.append(seg)
+            # Keep window bounded
+            if len(self._segments) > self._window_segments:
+                self._segments = self._segments[-self._window_segments:]
+        return self._check()
+
+    def _check(self) -> bool:
+        if len(self._segments) < self._min_repeats:
+            return False
+        # Check if the last N segments are all identical
+        tail = self._segments[-self._min_repeats:]
+        if len(set(tail)) == 1:
+            return True
+        # Also check for 2-segment period: ABABAB...
+        if len(self._segments) >= self._min_repeats * 2:
+            pair = self._segments[-self._min_repeats * 2:]
+            pattern = (pair[0], pair[1])
+            if all(pair[i] == pattern[i % 2] for i in range(len(pair))):
+                return True
+        return False
+
 
 class _ThinkTagStreamParser:
     """Separates <think>...</think> thinking content from regular text in streaming chunks.
@@ -162,6 +216,18 @@ def _parse_xml_tool_calls(content: str) -> tuple[list[ToolCallRequest], str]:
     return [], content
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Check if an exception is a rate limit (429) error."""
+    exc_type = type(exc).__name__
+    if "RateLimit" in exc_type:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    msg = str(exc).lower()
+    return "429" in msg or "rate limit" in msg or "too many requests" in msg
+
+
 def _params_to_json_schema(t: Any) -> dict[str, Any]:
     """Convert a ToolDefinition's parameters to a JSON Schema dict.
 
@@ -202,6 +268,22 @@ def _params_to_json_schema(t: Any) -> dict[str, Any]:
 class LiteLLMClient:
     def __init__(self, model: str, **kwargs: Any) -> None:
         self._model = model
+        self._stream_chunk_timeout: int | None = kwargs.pop("stream_chunk_timeout", None)
+        # Total wall-clock cap for the entire streaming call (connection + all chunks).
+        # Defaults to 5× the per-request timeout so slow but active streams are still
+        # bounded.  E.g. timeout=120 → stream_total_timeout=600 (10 min).
+        _request_timeout = kwargs.get("timeout") or 120
+        self._stream_total_timeout: int = kwargs.pop(
+            "stream_total_timeout", _request_timeout * 5
+        )
+        # Rate limiting — pop our custom keys before forwarding to litellm
+        _tpm_limit: int | None = kwargs.pop("tpm_limit", None)
+        _rpm_limit: int | None = kwargs.pop("rpm_limit", None)
+        from everstaff.llm.rate_limiter import get_rate_limiter
+        self._rate_limiter = get_rate_limiter(model, tpm_limit=_tpm_limit, rpm_limit=_rpm_limit)
+        # Take over retry control — disable litellm's built-in retry so our
+        # retry loop can re-acquire from the rate limiter before each attempt.
+        self._max_retries: int = kwargs.pop("num_retries", 2)
         self._kwargs = kwargs
 
     @property
@@ -232,69 +314,92 @@ class LiteLLMClient:
             for t in tools
         ] or None
 
-        response = await litellm.acompletion(
-            model=self._model,
-            messages=msgs,
-            tools=litellm_tools,
-            **self._kwargs,
-        )
-
-        msg = response.choices[0].message
-        tool_calls: list[ToolCallRequest] = []
-
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except (json.JSONDecodeError, TypeError):
-                    try:
-                        args = ast.literal_eval(tc.function.arguments)
-                    except Exception:
-                        args = {}
-                tool_calls.append(ToolCallRequest(
-                    id=tc.id,
-                    name=tc.function.name,
-                    args=args,
-                ))
-
-        # Fallback: extract XML-style tool calls from content when the model
-        # embeds them in the text instead of using the function calling API.
-        content = msg.content
-        if not tool_calls and content and litellm_tools:
-            xml_calls, cleaned_content = _parse_xml_tool_calls(content)
-            if xml_calls:
-                logger.warning(
-                    "Model %s returned %d tool call(s) as XML in content; "
-                    "using fallback parser",
-                    self._model, len(xml_calls),
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            await self._rate_limiter.before_request()
+            try:
+                response = await litellm.acompletion(
+                    model=self._model,
+                    messages=msgs,
+                    tools=litellm_tools,
+                    **self._kwargs,
                 )
-                tool_calls = xml_calls
-                content = cleaned_content or None
+            except Exception as exc:
+                if _is_rate_limit_error(exc) and attempt < self._max_retries:
+                    delay = min(2 ** attempt, 30) * random.uniform(0.5, 1.5)
+                    logger.warning(
+                        "429 rate limited (model=%s), retry %d/%d in %.1fs: %s",
+                        self._model, attempt + 1, self._max_retries, delay, exc,
+                    )
+                    last_exc = exc
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
-        # Extract thinking/reasoning tokens
-        thinking: str | None = getattr(msg, "thinking", None)
-        if not thinking:
-            thinking = getattr(msg, "reasoning_content", None) or None
-        # Fallback: extract <think>...</think> tags from content for models that
-        # embed thinking inline (e.g. MiniMax) when no dedicated thinking field exists.
-        if not thinking and content:
-            extracted_thinking, content = _extract_think_tags(content)
-            if extracted_thinking:
-                thinking = extracted_thinking
-                content = content or None
+            choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            msg = choice.message
+            tool_calls: list[ToolCallRequest] = []
 
-        # Extract token usage from response.usage (provider may omit it)
-        usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        try:
+                            args = ast.literal_eval(tc.function.arguments)
+                        except Exception:
+                            args = {}
+                    tool_calls.append(ToolCallRequest(
+                        id=tc.id,
+                        name=tc.function.name,
+                        args=args,
+                    ))
 
-        return LLMResponse(
-            content=content,
-            tool_calls=tool_calls,
-            thinking=thinking,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+            # Fallback: extract XML-style tool calls from content when the model
+            # embeds them in the text instead of using the function calling API.
+            content = msg.content
+            if not tool_calls and content and litellm_tools:
+                xml_calls, cleaned_content = _parse_xml_tool_calls(content)
+                if xml_calls:
+                    logger.warning(
+                        "Model %s returned %d tool call(s) as XML in content; "
+                        "using fallback parser",
+                        self._model, len(xml_calls),
+                    )
+                    tool_calls = xml_calls
+                    content = cleaned_content or None
+
+            # Extract thinking/reasoning tokens
+            thinking: str | None = getattr(msg, "thinking", None)
+            if not thinking:
+                thinking = getattr(msg, "reasoning_content", None) or None
+            # Fallback: extract <think>...</think> tags from content for models that
+            # embed thinking inline (e.g. MiniMax) when no dedicated thinking field exists.
+            if not thinking and content:
+                extracted_thinking, content = _extract_think_tags(content)
+                if extracted_thinking:
+                    thinking = extracted_thinking
+                    content = content or None
+
+            # Extract token usage from response.usage (provider may omit it)
+            usage = getattr(response, "usage", None)
+            input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+
+            # Deduct actual tokens
+            await self._rate_limiter.after_request(input_tokens + output_tokens)
+
+            return LLMResponse(
+                content=content,
+                tool_calls=tool_calls,
+                thinking=thinking,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+            )
+
+        raise last_exc or RuntimeError("Rate limit retries exhausted")
 
     async def complete_stream(
         self,
@@ -325,102 +430,177 @@ class LiteLLMClient:
             for t in tools
         ] or None
 
-        full_content: list[str] = []
-        thinking_chunks: list[str] = []
-        tool_calls_acc: dict[int, dict] = {}  # index → {id, name, args_str}
-        input_tokens = 0
-        output_tokens = 0
-
-        parser = _ThinkTagStreamParser()
-
-        stream = await litellm.acompletion(
-            model=self._model,
-            messages=msgs,
-            tools=litellm_tools,
-            stream=True,
-            stream_options={"include_usage": True},
-            **self._kwargs,
-        )
-
-        async for chunk in stream:
-            delta = chunk.choices[0].delta
-
-            # Text content — route through <think> tag parser
-            if delta.content:
-                for kind, text in parser.feed(delta.content):
-                    if kind == "thinking":
-                        thinking_chunks.append(text)
-                        yield ("thinking", text)
-                    else:
-                        full_content.append(text)
-                        yield ("text", text)
-
-            # Thinking tokens from dedicated thinking field (e.g. Claude Extended Thinking)
-            thinking_chunk = getattr(delta, "thinking", None) or getattr(delta, "reasoning_content", None)
-            if thinking_chunk:
-                thinking_chunks.append(thinking_chunk)
-                yield ("thinking", thinking_chunk)
-
-            # Tool calls — accumulate partial chunks by index
-            if delta.tool_calls:
-                for tc_chunk in delta.tool_calls:
-                    idx = tc_chunk.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": "", "name": "", "args_str": ""}
-                    if tc_chunk.id:
-                        tool_calls_acc[idx]["id"] = tc_chunk.id
-                    fn = tc_chunk.function
-                    if getattr(fn, "name", None):
-                        tool_calls_acc[idx]["name"] += fn.name
-                    if getattr(fn, "arguments", None):
-                        tool_calls_acc[idx]["args_str"] += fn.arguments
-
-            # Usage (last chunk for most providers)
-            usage = getattr(chunk, "usage", None)
-            if usage:
-                input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-                output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-
-        # Flush any remaining partial-tag content from the parser
-        for kind, text in parser.flush():
-            if kind == "thinking":
-                thinking_chunks.append(text)
-                yield ("thinking", text)
-            else:
-                full_content.append(text)
-                yield ("text", text)
-
-        # Build final tool call list
-        tool_calls: list[ToolCallRequest] = []
-        for idx in sorted(tool_calls_acc):
-            tc = tool_calls_acc[idx]
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            await self._rate_limiter.before_request()
             try:
-                args = json.loads(tc["args_str"])
-            except (json.JSONDecodeError, ValueError):
-                try:
-                    args = ast.literal_eval(tc["args_str"])
-                except Exception:
-                    args = {}
-            tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], args=args))
-
-        content = "".join(full_content) or None
-        thinking = "".join(thinking_chunks) or None
-
-        # XML fallback for models that embed tool calls in text
-        if not tool_calls and content and litellm_tools:
-            xml_calls, cleaned_content = _parse_xml_tool_calls(content)
-            if xml_calls:
-                logger.warning(
-                    "Model %s returned %d tool call(s) as XML in content (streaming); using fallback parser",
-                    self._model, len(xml_calls),
+                stream = await litellm.acompletion(
+                    model=self._model,
+                    messages=msgs,
+                    tools=litellm_tools,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    **self._kwargs,
                 )
-                tool_calls = xml_calls
-                content = cleaned_content or None
+            except Exception as exc:
+                if _is_rate_limit_error(exc) and attempt < self._max_retries:
+                    delay = min(2 ** attempt, 30) * random.uniform(0.5, 1.5)
+                    logger.warning(
+                        "429 rate limited on stream init (model=%s), retry %d/%d in %.1fs",
+                        self._model, attempt + 1, self._max_retries, delay,
+                    )
+                    last_exc = exc
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
-        yield ("done", LLMResponse(
-            content=content,
-            tool_calls=tool_calls,
-            thinking=thinking,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        ))
+            # Stream opened successfully — process chunks
+            full_content: list[str] = []
+            thinking_chunks: list[str] = []
+            tool_calls_acc: dict[int, dict] = {}  # index → {id, name, args_str}
+            input_tokens = 0
+            output_tokens = 0
+            finish_reason: str | None = None
+
+            parser = _ThinkTagStreamParser()
+            repetition_detector = _RepetitionDetector()
+
+            # Iterate with per-chunk timeout to detect stalled streams.
+            # When the LLM server establishes a connection but stops sending data,
+            # the HTTP-level timeout won't fire — this catches that case.
+            # Additionally, enforce a total wall-clock timeout so that slow but
+            # active streams (e.g. keepalive chunks without real data) don't run
+            # indefinitely.
+            _chunk_timeout = self._stream_chunk_timeout
+            _total_timeout = self._stream_total_timeout
+            _stream_start = time.monotonic()
+            _SENTINEL = object()
+            _aiter = stream.__aiter__()
+            while True:
+                # Total wall-clock guard
+                _elapsed = time.monotonic() - _stream_start
+                if _total_timeout and _elapsed > _total_timeout:
+                    raise TimeoutError(
+                        f"LLM streaming total timeout: {_elapsed:.0f}s exceeded "
+                        f"{_total_timeout}s limit (model={self._model})"
+                    )
+                try:
+                    chunk = await asyncio.wait_for(
+                        anext(_aiter, _SENTINEL),
+                        timeout=_chunk_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    raise TimeoutError(
+                        f"LLM streaming stalled: no chunk received for "
+                        f"{_chunk_timeout}s (model={self._model})"
+                    ) from None
+                if chunk is _SENTINEL:
+                    break
+
+                delta = chunk.choices[0].delta
+
+                # Text content — route through <think> tag parser
+                _repetition_hit = False
+                if delta.content:
+                    for kind, text in parser.feed(delta.content):
+                        if kind == "thinking":
+                            thinking_chunks.append(text)
+                            yield ("thinking", text)
+                            if repetition_detector.feed(text):
+                                _repetition_hit = True
+                        else:
+                            full_content.append(text)
+                            yield ("text", text)
+
+                # Thinking tokens from dedicated thinking field (e.g. Claude Extended Thinking)
+                thinking_chunk = getattr(delta, "thinking", None) or getattr(delta, "reasoning_content", None)
+                if thinking_chunk:
+                    thinking_chunks.append(thinking_chunk)
+                    yield ("thinking", thinking_chunk)
+                    if repetition_detector.feed(thinking_chunk):
+                        _repetition_hit = True
+
+                if _repetition_hit:
+                    logger.warning(
+                        "Repetition loop detected in LLM streaming output "
+                        "(model=%s) — aborting stream early",
+                        self._model,
+                    )
+                    finish_reason = "repetition_detected"
+                    break
+
+                # Tool calls — accumulate partial chunks by index
+                if delta.tool_calls:
+                    for tc_chunk in delta.tool_calls:
+                        idx = tc_chunk.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "args_str": ""}
+                        if tc_chunk.id:
+                            tool_calls_acc[idx]["id"] = tc_chunk.id
+                        fn = tc_chunk.function
+                        if getattr(fn, "name", None):
+                            tool_calls_acc[idx]["name"] += fn.name
+                        if getattr(fn, "arguments", None):
+                            tool_calls_acc[idx]["args_str"] += fn.arguments
+
+                # finish_reason (set on the final content chunk)
+                _fr = getattr(chunk.choices[0], "finish_reason", None)
+                if _fr:
+                    finish_reason = _fr
+
+                # Usage (last chunk for most providers)
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+
+            # Flush any remaining partial-tag content from the parser
+            for kind, text in parser.flush():
+                if kind == "thinking":
+                    thinking_chunks.append(text)
+                    yield ("thinking", text)
+                else:
+                    full_content.append(text)
+                    yield ("text", text)
+
+            # Build final tool call list
+            tool_calls: list[ToolCallRequest] = []
+            for idx in sorted(tool_calls_acc):
+                tc = tool_calls_acc[idx]
+                try:
+                    args = json.loads(tc["args_str"])
+                except (json.JSONDecodeError, ValueError):
+                    try:
+                        args = ast.literal_eval(tc["args_str"])
+                    except Exception:
+                        args = {}
+                tool_calls.append(ToolCallRequest(id=tc["id"], name=tc["name"], args=args))
+
+            content = "".join(full_content) or None
+            thinking = "".join(thinking_chunks) or None
+
+            # XML fallback for models that embed tool calls in text
+            if not tool_calls and content and litellm_tools:
+                xml_calls, cleaned_content = _parse_xml_tool_calls(content)
+                if xml_calls:
+                    logger.warning(
+                        "Model %s returned %d tool call(s) as XML in content (streaming); using fallback parser",
+                        self._model, len(xml_calls),
+                    )
+                    tool_calls = xml_calls
+                    content = cleaned_content or None
+
+            # Deduct actual tokens
+            await self._rate_limiter.after_request(input_tokens + output_tokens)
+
+            yield ("done", LLMResponse(
+                content=content,
+                tool_calls=tool_calls,
+                thinking=thinking,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+            ))
+            return  # exit retry loop
+
+        raise last_exc or RuntimeError("Rate limit retries exhausted")
