@@ -11,7 +11,7 @@ version = "0.1.0"
 description = ""
 requires-python = ">=3.11"
 dependencies = [
-    "everstaff>=0.1.8",
+    "everstaff>=0.1.9",
     "python-dotenv>=1.0.0",
 ]
 """,
