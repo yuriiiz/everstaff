@@ -214,9 +214,6 @@ class AgentBuilder:
         source = getattr(self._spec, "source", "custom")
         if source == "builtin":
             system_tool_names.update(spec_tools & _FRAMEWORK_TOOL_NAMES)
-        if "update_skill" in spec_tools:
-            system_tool_names.add("update_skill")
-
         # Resolve file_store BEFORE permissions (needed for session grants)
         try:
             file_store = self._env.build_file_store()
@@ -236,11 +233,6 @@ class AgentBuilder:
             tool_registry.register(tool)
         for tool in skill_provider.get_tools():
             tool_registry.register(tool)
-        # Register update_skill if requested in agent tools
-        if "update_skill" in spec_tools and hasattr(skill_provider, "create_update_skill_tool"):
-            _update_skill_tool = skill_provider.create_update_skill_tool()
-            if _update_skill_tool is not None:
-                tool_registry.register_native(_update_skill_tool)
         for tool in knowledge_provider.get_tools():
             tool_registry.register(tool)
         for tool in mcp_provider.get_tools():
@@ -294,8 +286,9 @@ class AgentBuilder:
             file_store=file_store,
             workdir=workdir,
 
-            # LLM limits for metadata persistence
-            max_tokens=getattr(self._spec, "max_tokens", None),
+            # Context window size for metadata persistence / compression
+            max_tokens=getattr(self._spec, "max_tokens", None) or mapping.max_tokens,
+            max_output_tokens=getattr(self._spec, "max_output_tokens", None) or mapping.max_output_tokens,
 
             # Event that triggered this session (e.g. from scheduler)
             trigger=self._trigger,
@@ -317,14 +310,20 @@ class AgentBuilder:
                     tool._session_id = session_id
 
         # 4. Build LLM client and runtime
-        # Forward AgentSpec overrides (max_tokens, temperature) to LiteLLM kwargs.
+        # Forward output-token limit and temperature to LiteLLM kwargs.
+        # litellm uses "max_tokens" as the per-response output limit.
         llm_kwargs: dict = {}
-        if getattr(self._spec, "max_tokens", None) is not None:
-            llm_kwargs["max_tokens"] = self._spec.max_tokens
+        max_output = getattr(self._spec, "max_output_tokens", None) or mapping.max_output_tokens
+        if max_output is not None:
+            llm_kwargs["max_tokens"] = max_output
         if getattr(self._spec, "temperature", None) is not None:
             llm_kwargs["temperature"] = self._spec.temperature
         llm_kwargs["timeout"] = mapping.timeout
         llm_kwargs["num_retries"] = mapping.max_retries
+        llm_kwargs["stream_chunk_timeout"] = mapping.stream_chunk_timeout
+        llm_kwargs["stream_total_timeout"] = mapping.stream_total_timeout
+        llm_kwargs["tpm_limit"] = mapping.tpm_limit
+        llm_kwargs["rpm_limit"] = mapping.rpm_limit
         llm_client = self._env.build_llm_client(model_id, **llm_kwargs)
 
         # 5. Register bootstrap tools only when explicitly enabled
@@ -420,10 +419,6 @@ class AgentBuilder:
 
         # Separate framework tools from regular tools
         framework_tools, regular_tools = self._split_framework_tools(tool_names)
-
-        # Filter out skill-managed tools (registered later via skill_provider)
-        _SKILL_MANAGED_TOOLS = {"update_skill"}
-        regular_tools = [t for t in regular_tools if t not in _SKILL_MANAGED_TOOLS]
 
         # Register regular tools via ToolLoader
         if regular_tools:
@@ -557,9 +552,7 @@ class AgentBuilder:
         return framework, regular
 
     async def _build_skill_provider(self):
-        spec_tools = set(getattr(self._spec, "tools", None) or [])
-        needs_skill_manager = self._spec.skills or ("update_skill" in spec_tools)
-        if not needs_skill_manager:
+        if not self._spec.skills:
             from everstaff.nulls import NullSkillProvider
             return NullSkillProvider()
         try:
