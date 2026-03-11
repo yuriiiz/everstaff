@@ -91,7 +91,8 @@ def test_plan_file_task_to_task_node_spec():
     assert spec.assigned_agent == "w"
     assert spec.max_retries == 3
     # Runtime fields should NOT be in spec
-    assert not hasattr(spec, 'output') or not hasattr(spec, 'retries')
+    assert not hasattr(spec, 'output')
+    assert not hasattr(spec, 'retries')
 
 
 def test_plan_file_task_to_task_result():
@@ -105,3 +106,12 @@ def test_plan_file_task_to_task_result():
     assert result.output == "result"
     assert result.retries == 2
     assert result.agent_name == "w"
+
+
+def test_plan_spec_status_values():
+    """PlanSpec status does not include 'approved', includes 'stopped'."""
+    from everstaff.schema.workflow_spec import PlanSpec
+
+    for status in ["draft", "executing", "completed", "failed", "stopped"]:
+        p = PlanSpec(title="t", goal="g", status=status)
+        assert p.status == status
