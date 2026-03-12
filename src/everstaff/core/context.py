@@ -49,6 +49,7 @@ class AgentContext:
 
     max_tokens: int | None = None          # context window size; stored in session metadata for UI display
     max_output_tokens: int | None = None   # per-response output token limit forwarded to LLM
+    max_turns: int | None = None           # hard cap on conversation turns (None = unlimited)
     trigger: AgentEvent | None = None  # Event that initiated this session
     task_prompt: str | None = None     # Daemon task prompt (for readable session display)
 

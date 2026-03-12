@@ -103,16 +103,17 @@ class DefaultEnvironment(RuntimeEnvironment):
         index = self._session_index or SessionIndex(Path(self._sessions_dir))
         store = FileMemoryStore(self.build_file_store(), index=index)
 
+        strategy_kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
         if self._config.memory.enabled:
             from everstaff.memory.strategies import Mem0ExtractionStrategy
             client = self._get_or_create_mem0_client()
-            strategy = Mem0ExtractionStrategy(client, **mem0_scope)
+            strategy = Mem0ExtractionStrategy(client, **mem0_scope, **strategy_kwargs)
         else:
             from everstaff.memory.strategies import TruncationStrategy
-            strategy = TruncationStrategy()
+            strategy = TruncationStrategy(**strategy_kwargs)
 
-        kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
-        return CompressibleMemoryStore(store, strategy, **kwargs)
+        compress_kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
+        return CompressibleMemoryStore(store, strategy, **compress_kwargs)
 
     def build_mem0_provider(self, **mem0_scope):
         if not self._config.memory.enabled:

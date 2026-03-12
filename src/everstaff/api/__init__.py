@@ -464,7 +464,9 @@ def create_app(config=None, *, sessions_dir: str | None = None) -> FastAPI:
     # automatically persists to session.json and resumes the session.
     async def _on_resolve(hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None):
         from everstaff.api.hitl import _resolve_hitl_internal
-        await _resolve_hitl_internal(app, hitl_id, decision, comment, grant_scope=grant_scope, permission_pattern=permission_pattern)
+        # skip_resume=True — the Lark HITL loop in send_to_session handles
+        # resumption with event_callback so streamed output is visible in chat.
+        await _resolve_hitl_internal(app, hitl_id, decision, comment, grant_scope=grant_scope, permission_pattern=permission_pattern, skip_resume=True)
 
     channel_manager._on_resolve = _on_resolve
 

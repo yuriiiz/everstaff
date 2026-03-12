@@ -33,6 +33,17 @@ from everstaff.schema.stream import (
 logger = logging.getLogger(__name__)
 
 _STOPPED = "[Stopped]"
+_TOOL_REPEAT_WINDOW = 6
+_TOOL_REPEAT_THRESHOLD = 3
+
+
+def _tool_call_signature(name: str, args: dict | str) -> str:
+    """Hashable signature from tool name + args."""
+    if isinstance(args, dict):
+        args_str = json.dumps(args, sort_keys=True)[:200]
+    else:
+        args_str = str(args)[:200]
+    return f"{name}:{args_str}"
 
 
 def _now() -> str:
@@ -370,6 +381,8 @@ class AgentRuntime:
             messages.append(Message(role="user", content=kickoff, created_at=datetime.now(timezone.utc).isoformat()))
 
         turns = 0
+        _empty_retried = False
+        _recent_tool_sigs: list[str] = []
         try:
             while True:
                 if await self._is_cancelled():
@@ -464,6 +477,8 @@ class AgentRuntime:
 
                 input_tokens = response.input_tokens
                 output_tokens = response.output_tokens
+                if hasattr(self._ctx.memory, 'update_actual_tokens'):
+                    self._ctx.memory.update_actual_tokens(input_tokens)
                 _model_id = getattr(self._llm, "model_id", None)
                 _model_id_str = _model_id if isinstance(_model_id, str) else ""
                 stats.record(TokenUsage(
@@ -605,6 +620,27 @@ class AgentRuntime:
                     continue
 
                 if response.is_final:
+                    # Retry once if LLM returned completely empty response
+                    if (not response.content or not response.content.strip()) and getattr(response, 'output_tokens', 1) == 0:
+                        if not _empty_retried:
+                            _empty_retried = True
+                            logger.warning(
+                                "LLM returned empty response (0 output tokens, finish_reason=%s) "
+                                "— retrying once session=%s",
+                                response.finish_reason, self._ctx.session_id[:8],
+                            )
+                            messages.append(Message(
+                                role="user",
+                                content="[SYSTEM] Your previous response was empty. Please provide a substantive response.",
+                                created_at=datetime.now(timezone.utc).isoformat(),
+                            ))
+                            turns += 1
+                            continue
+                        else:
+                            logger.warning(
+                                "LLM returned empty response after retry — ending session=%s",
+                                self._ctx.session_id[:8],
+                            )
                     # Framework fallback: if any child HITL requests remain unresolved, raise
                     if self._pending_child_hitls:
                         raise HumanApprovalRequired(self._pending_child_hitls)
@@ -649,6 +685,32 @@ class AgentRuntime:
                     return
 
                 turns += 1
+
+                # ── max_turns guard ──
+                if self._ctx.max_turns is not None and turns >= self._ctx.max_turns:
+                    logger.warning(
+                        "max_turns=%d reached — ending session session=%s",
+                        self._ctx.max_turns, self._ctx.session_id[:8],
+                    )
+                    final_msg = f"[Session ended: reached maximum of {self._ctx.max_turns} turns]"
+                    messages.append(Message(
+                        role="assistant",
+                        content=final_msg,
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    await self._save_session(
+                        self._ctx.session_id, messages,
+                        agent_name=self._ctx.agent_name,
+                        agent_uuid=self._ctx.agent_uuid,
+                        parent_session_id=self._ctx.parent_session_id,
+                        stats=stats,
+                        status="completed",
+                        system_prompt=self._build_system_prompt(),
+                        max_tokens=self._ctx.max_tokens,
+                    )
+                    yield SessionEnd(response=final_msg)
+                    return
+
                 # Yield thinking/text content before tool execution so callers
                 # (CLI, run()) see the assistant's words even on non-final turns.
                 if response.thinking and not _streamed_thinking:
@@ -776,6 +838,7 @@ class AgentRuntime:
                         stats.merge(result.child_stats)
                     yield ToolCallEnd(name=tool_call.name, result=result.content, is_error=result.is_error)
                     messages.append(Message(role="tool", content=result.content, tool_call_id=tool_call.id, created_at=datetime.now(timezone.utc).isoformat()))
+                    _recent_tool_sigs.append(_tool_call_signature(tool_call.name, tool_call.args))
                     # Track child HITL requests from delegate_task_to_subagent results
                     if hasattr(result, '_child_hitl_requests') and result._child_hitl_requests:
                         self._pending_child_hitls.extend(result._child_hitl_requests)
@@ -816,6 +879,27 @@ class AgentRuntime:
                         status="running",
                         max_tokens=self._ctx.max_tokens,
                     )
+
+                # Cross-turn tool call repetition detection
+                if len(_recent_tool_sigs) >= _TOOL_REPEAT_THRESHOLD:
+                    from collections import Counter
+                    window = _recent_tool_sigs[-_TOOL_REPEAT_WINDOW:]
+                    most_common_sig, count = Counter(window).most_common(1)[0]
+                    if count >= _TOOL_REPEAT_THRESHOLD:
+                        logger.warning(
+                            "Repetitive tool call detected: %s appeared %d/%d times session=%s",
+                            most_common_sig.split(":")[0], count, len(window), self._ctx.session_id[:8],
+                        )
+                        messages.append(Message(
+                            role="user",
+                            content=(
+                                "[SYSTEM] You are in a loop — the same tool call has been repeated "
+                                f"{count} times in the last {len(window)} calls. "
+                                "Stop repeating and either try a different approach or provide your final answer."
+                            ),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ))
+                        _recent_tool_sigs.clear()
 
 
         except HumanApprovalRequired as hitl_exc:

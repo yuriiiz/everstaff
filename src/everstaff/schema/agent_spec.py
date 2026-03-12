@@ -55,6 +55,7 @@ class SubAgentSpec(BaseModel):
             tools=self.tools or [],
             skills=self.skills,
             adviced_model_kind=self.adviced_model_kind,
+            max_turns=self.max_turns,
         )
 
 
@@ -92,6 +93,7 @@ class AgentSpec(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None          # context window override (for compression threshold)
     max_output_tokens: int | None = None   # per-response output token limit override
+    max_turns: int | None = None           # hard cap on conversation turns (None = unlimited)
     enable_bootstrap: bool = False
 
     # HITL — controls when the request_human_input tool is registered

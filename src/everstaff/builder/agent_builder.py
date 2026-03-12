@@ -290,6 +290,9 @@ class AgentBuilder:
             max_tokens=getattr(self._spec, "max_tokens", None) or mapping.max_tokens,
             max_output_tokens=getattr(self._spec, "max_output_tokens", None) or mapping.max_output_tokens,
 
+            # Hard cap on conversation turns
+            max_turns=getattr(self._spec, "max_turns", None),
+
             # Event that triggered this session (e.g. from scheduler)
             trigger=self._trigger,
         )

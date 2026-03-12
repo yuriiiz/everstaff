@@ -25,7 +25,7 @@ async def test_full_round_trip_compression_and_retrieval(tmp_path):
     file_store = LocalFileStore(str(tmp_path))
     mem_store = FileMemoryStore(file_store)
     strategy = Mem0ExtractionStrategy(
-        mock_mem0, user_id="u1", agent_id="agent-1", session_id="s1", keep_last=5,
+        mock_mem0, user_id="u1", agent_id="agent-1", session_id="s1", max_tokens=100,
     )
     store = CompressibleMemoryStore(mem_store, strategy, max_tokens=100, compression_ratio=0.1)
 
@@ -54,7 +54,7 @@ async def test_full_round_trip_compression_and_retrieval(tmp_path):
 
     # Verify stored messages are truncated
     loaded = await store.load("s1")
-    assert len(loaded) <= 5
+    assert len(loaded) < len(messages)
 
     # Now simulate retrieval for next turn
     provider = Mem0Provider(mock_mem0, user_id="u1", agent_id="agent-1")
@@ -76,7 +76,7 @@ async def test_mem0_disabled_uses_truncation(tmp_path):
 
     file_store = LocalFileStore(str(tmp_path))
     mem_store = FileMemoryStore(file_store)
-    strategy = TruncationStrategy(keep_last=3)
+    strategy = TruncationStrategy(max_tokens=100)
     store = CompressibleMemoryStore(mem_store, strategy, max_tokens=100, compression_ratio=0.1)
 
     messages = [
@@ -89,4 +89,4 @@ async def test_mem0_disabled_uses_truncation(tmp_path):
 
     await store.save("s1", messages, agent_name="test")
     loaded = await store.load("s1")
-    assert len(loaded) <= 3
+    assert len(loaded) < len(messages)

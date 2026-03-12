@@ -218,7 +218,9 @@ class LarkWsChannel:
             async with s.put(url, headers=headers, json=body) as r:
                 data = await r.json()
                 ok = data.get("code", -1) == 0
-                if not ok:
+                if ok:
+                    logger.info("cardkit_update ok card_id=%s seq=%d", card_id, sequence)
+                else:
                     logger.warning("cardkit_update failed card_id=%s seq=%d code=%s msg=%s",
                                    card_id, sequence, data.get("code"), data.get("msg"))
                 return ok
@@ -651,6 +653,8 @@ class LarkWsChannel:
                     try:
                         spec = load_yaml(f)
                         uid = spec.get("uuid", f.stem)
+                        if spec.get("source") == "builtin":
+                            continue
                         agents_by_uuid[uid] = spec
                     except Exception as exc:
                         logger.warning("skip user agent %s err=%s", f.name, exc)
@@ -1236,6 +1240,7 @@ class LarkWsChannel:
             # Create streaming card entity and send it
             token = await self._get_access_token()
             card_id = await self._cardkit_create(token, _build_card_json("Processing..." + web_footer))
+            logger.info("send_to_session card_id=%s session=%s", card_id, session_id[:8])
             if card_id:
                 card_mid = await self._send_card_id_message(token, chat_id, card_id)
 
@@ -1250,8 +1255,10 @@ class LarkWsChannel:
                 """Push accumulated text to the CardKit card."""
                 nonlocal sequence, last_update_time, accumulated_text, full_text_parts
                 if not card_id:
+                    logger.debug("_stream_update skip: no card_id")
                     return
                 if not accumulated_text and not final:
+                    logger.debug("_stream_update skip: no text and not final")
                     return
                 if accumulated_text:
                     full_text_parts.extend(accumulated_text)
@@ -1260,6 +1267,8 @@ class LarkWsChannel:
                 if not content.strip() and not final:
                     return
                 display = (content.strip() or "Processing...") + web_footer
+                logger.info("_stream_update calling cardkit_update card_id=%s seq=%d final=%s content_len=%d",
+                            card_id, sequence, final, len(content))
                 try:
                     tk = await self._get_access_token()
                     card_json = _build_card_json(display, template=template)
@@ -1291,6 +1300,7 @@ class LarkWsChannel:
 
             async def event_callback(event) -> None:
                 nonlocal accumulated_text, last_update_time, session_error
+                logger.info("event_callback card_id=%s event_type=%s", card_id[:8] if card_id else "none", type(event).__name__)
                 if isinstance(event, TextDelta):
                     accumulated_text.append(event.content)
                     # Throttled streaming update
@@ -1326,7 +1336,8 @@ class LarkWsChannel:
                 event_callback=event_callback,
             )
 
-            # HITL loop
+            # HITL loop — after each approval, create a new card and resume
+            # the session with event_callback so streamed output is visible.
             while True:
                 status = self._read_session_status(session_id)
                 if status != "waiting_for_human":
@@ -1344,11 +1355,39 @@ class LarkWsChannel:
                 finally:
                     self._session_hitl_events.pop(session_id, None)
 
-                for _ in range(60):
-                    await asyncio.sleep(1)
-                    s = self._read_session_status(session_id)
-                    if s != "running":
-                        break
+                # Brief wait for resolution to persist to session.json
+                await asyncio.sleep(1)
+
+                # Reset streaming state and create a NEW card for post-HITL output
+                accumulated_text.clear()
+                full_text_parts.clear()
+                sequence = 1
+                last_update_time = 0.0
+                session_error = None
+
+                try:
+                    token = await self._get_access_token()
+                    card_id = await self._cardkit_create(token, _build_card_json("Processing..." + web_footer))
+                    logger.info("send_to_session HITL resume new card_id=%s session=%s", card_id, session_id[:8])
+                    if card_id:
+                        card_mid = await self._send_card_id_message(token, chat_id, card_id)
+                except Exception as card_exc:
+                    logger.error("send_to_session HITL resume card creation failed err=%s", card_exc)
+
+                # Resume the session with event_callback for streaming
+                await _resume_session_task(
+                    session_id=session_id,
+                    agent_name=agent_name,
+                    decision_text="",
+                    config=self._config,
+                    channel_manager=self._channel_manager,
+                    agent_uuid=agent_uuid,
+                    mcp_pool=self._mcp_pool,
+                    session_index=self._session_index,
+                    user_id=sender_open_id or None,
+                    event_callback=event_callback,
+                )
+                # Loop back to check if session is waiting_for_human again
 
             # Check if session ended abnormally
             final_status = self._read_session_status(session_id)

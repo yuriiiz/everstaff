@@ -10,14 +10,101 @@ def make_messages(n: int) -> list[Message]:
     return msgs
 
 
+def _make_skill_messages() -> list[Message]:
+    """Create a message sequence containing a use_skill tool call and result."""
+    return [
+        Message(role="user", content="old user message " * 100),
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[{
+                "id": "call_skill_1",
+                "type": "function",
+                "function": {"name": "use_skill", "arguments": '{"skill_name": "sre-handbook"}'},
+            }],
+        ),
+        Message(
+            role="tool",
+            content="This is the skill content that must be preserved. " * 50,
+            tool_call_id="call_skill_1",
+            name="use_skill",
+        ),
+        Message(role="assistant", content="I've loaded the skill. " * 20),
+    ]
+
+
 @pytest.mark.asyncio
-async def test_truncation_strategy_keeps_last_n():
+async def test_truncation_strategy_compacts_to_target():
+    """Smart truncation keeps recent messages within ~40% of max_tokens."""
     from everstaff.memory.strategies import TruncationStrategy
-    strategy = TruncationStrategy(keep_last=4)
-    msgs = make_messages(5)  # 10 messages
+    # Use a very small max_tokens so our short messages still get compacted
+    strategy = TruncationStrategy(max_tokens=50)
+    msgs = make_messages(10)  # 20 messages
     result = await strategy.compress(msgs)
-    assert len(result) == 4
-    assert result == msgs[-4:]
+    # Should have fewer messages than the original 20
+    assert len(result) < len(msgs)
+    # Should keep the most recent messages
+    assert result[-1].content == msgs[-1].content
+
+
+@pytest.mark.asyncio
+async def test_truncation_strategy_preserves_skill_messages():
+    """Skill-related messages (use_skill tool calls + results) must survive compaction."""
+    from everstaff.memory.strategies import TruncationStrategy
+
+    # Put skill messages early, then lots of filler, so they'd normally be truncated
+    skill_msgs = _make_skill_messages()
+    filler = make_messages(20)  # 40 filler messages
+    all_msgs = skill_msgs + filler
+
+    # Small budget so filler alone fills it — skill messages are "old" but protected
+    strategy = TruncationStrategy(max_tokens=200)
+    result = await strategy.compress(all_msgs)
+
+    # The skill assistant message and its tool result must be present
+    skill_call_ids = {m.tool_call_id for m in result if m.role == "tool" and m.tool_call_id}
+    assert "call_skill_1" in skill_call_ids
+    # The assistant message with the tool_call should also be present
+    assistant_with_skill = [
+        m for m in result
+        if m.role == "assistant" and m.tool_calls
+        and any(
+            (tc.get("function", {}).get("name") if isinstance(tc, dict) else None) == "use_skill"
+            for tc in m.tool_calls
+        )
+    ]
+    assert len(assistant_with_skill) == 1
+
+
+@pytest.mark.asyncio
+async def test_truncation_strategy_ensures_complete_tool_groups():
+    """If an assistant tool_call is kept, all its tool results must also be kept."""
+    from everstaff.memory.strategies import TruncationStrategy
+
+    msgs = [
+        Message(role="user", content="hello"),
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}},
+                {"id": "call_2", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+            ],
+        ),
+        Message(role="tool", content="search result", tool_call_id="call_1", name="search"),
+        Message(role="tool", content="read result", tool_call_id="call_2", name="read"),
+        Message(role="assistant", content="Here is the answer."),
+    ]
+
+    strategy = TruncationStrategy(max_tokens=1000)
+    result = await strategy.compress(msgs)
+
+    # If the assistant with tool_calls is present, both tool results must be too
+    has_tc_assistant = any(m.role == "assistant" and m.tool_calls for m in result)
+    if has_tc_assistant:
+        tool_ids = {m.tool_call_id for m in result if m.role == "tool"}
+        assert "call_1" in tool_ids
+        assert "call_2" in tool_ids
 
 
 @pytest.mark.asyncio
@@ -31,7 +118,7 @@ async def test_compressible_store_triggers_on_token_threshold(tmp_path):
     # 4 pairs × 2 messages × ~3 tokens = ~24 tokens < 100 → no compression
     store = CompressibleMemoryStore(
         store=base,
-        strategy=TruncationStrategy(keep_last=4),
+        strategy=TruncationStrategy(max_tokens=100),
         max_tokens=100,
         compression_ratio=1.0,
     )
@@ -52,7 +139,7 @@ async def test_compressible_store_no_trigger_below_threshold(tmp_path):
     # Very high threshold — should never trigger
     store = CompressibleMemoryStore(
         store=base,
-        strategy=TruncationStrategy(keep_last=4),
+        strategy=TruncationStrategy(),
         max_tokens=999_999,
         compression_ratio=0.7,
     )
@@ -73,7 +160,7 @@ async def test_compressible_store_triggers_on_token_estimate(tmp_path):
     # max_tokens=10, ratio=1.0 → threshold=10; any real message content exceeds this
     store = CompressibleMemoryStore(
         store=base,
-        strategy=TruncationStrategy(keep_last=2),
+        strategy=TruncationStrategy(max_tokens=10),
         max_tokens=10,
         compression_ratio=1.0,
     )
@@ -81,7 +168,8 @@ async def test_compressible_store_triggers_on_token_estimate(tmp_path):
     msgs = make_messages(3)  # 6 messages with real content
     await store.save("s1", msgs)
     loaded = await store.load("s1")
-    assert len(loaded) == 2
+    # With smart compaction targeting 40% of 10 = 4 tokens, very few messages survive
+    assert len(loaded) < len(msgs)
 
 
 @pytest.mark.asyncio

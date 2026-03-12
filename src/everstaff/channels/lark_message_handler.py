@@ -158,6 +158,8 @@ class LarkMessageHandler:
                 try:
                     spec = load_yaml(str(f))
                     uid = spec.get("uuid", f.stem)
+                    if spec.get("source") == "builtin":
+                        continue
                     agents_by_uuid[uid] = {
                         "name": spec.get("agent_name", f.stem),
                         "uuid": uid,

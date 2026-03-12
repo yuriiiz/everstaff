@@ -40,6 +40,7 @@ class CompressibleMemoryStore:
         self._store = store
         self._strategy = strategy
         self._token_threshold = int(max_tokens * compression_ratio)
+        self._last_actual_tokens: int = 0
 
     def set_session_path(self, session_id: str, relpath: str) -> None:
         """Forward to inner store if it supports path overrides."""
@@ -55,5 +56,12 @@ class CompressibleMemoryStore:
             messages = await self._strategy.compress(messages)
         await self._store.save(session_id, messages, **kwargs)
 
+    def update_actual_tokens(self, token_count: int) -> None:
+        """Update with actual LLM input_tokens for accurate compression decisions."""
+        if token_count > 0:
+            self._last_actual_tokens = token_count
+
     def _should_compress(self, messages: list[Message]) -> bool:
+        if self._last_actual_tokens > 0:
+            return self._last_actual_tokens >= self._token_threshold
         return _estimate_tokens(messages) >= self._token_threshold

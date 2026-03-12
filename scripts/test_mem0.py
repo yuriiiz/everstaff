@@ -71,7 +71,7 @@ async def main():
         from everstaff.memory.strategies import Mem0ExtractionStrategy
 
         strategy = Mem0ExtractionStrategy(
-            client, user_id="test-user", agent_id="test-agent", session_id="test-session", keep_last=2,
+            client, user_id="test-user", agent_id="test-agent", session_id="test-session", max_tokens=50,
         )
         msgs = [
             Message(role="user", content="I'm building a new microservice with FastAPI"),

@@ -111,8 +111,14 @@ async def _save_session_json(store, session_id: str, session_data: dict, index=N
     await store.write(path, json.dumps(session_data, ensure_ascii=False, indent=2).encode())
 
 
-async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None, broadcast_fn=None) -> None:
-    """Resolve a HITL request — shared by REST endpoint and WS handler."""
+async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None, grant_scope=None, permission_pattern=None, broadcast_fn=None, skip_resume=False) -> None:
+    """Resolve a HITL request — shared by REST endpoint and WS handler.
+
+    When *skip_resume* is True the function persists the resolution and pushes
+    it to sandboxes but does **not** call ``_resume_session_task``.  This is
+    used by the Lark channel path where the caller's own HITL loop handles
+    resumption with an ``event_callback`` so that streaming output is visible.
+    """
     logger = logging.getLogger(__name__)
     logger.info("_resolve_hitl_internal hitl_id=%s decision=%r grant_scope=%s", hitl_id, decision, grant_scope)
 
@@ -181,6 +187,10 @@ async def _resolve_hitl_internal(app, hitl_id: str, decision: str, comment=None,
 
     if not all_hitls_settled(session_data):
         logger.info("_resolve_hitl_internal hitl_id=%s not all settled yet, waiting", hitl_id)
+        return
+
+    if skip_resume:
+        logger.info("_resolve_hitl_internal all HITLs settled, skip_resume=True — caller will resume session=%s", session_id)
         return
 
     logger.info("_resolve_hitl_internal all HITLs settled, resuming session=%s", session_id)
