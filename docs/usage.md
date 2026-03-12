@@ -3,12 +3,12 @@
 ## Installation
 
 ```bash
-pip install everstaff-0.1.7-py3-none-any.whl
+pip install everstaff-0.1.10-py3-none-any.whl
 
 # With optional extras:
-pip install "everstaff-0.1.7-py3-none-any.whl[lark]"    # Lark channel support
-pip install "everstaff-0.1.7-py3-none-any.whl[otel]"    # OpenTelemetry tracing
-pip install "everstaff-0.1.7-py3-none-any.whl[all]"     # Everything
+pip install "everstaff-0.1.10-py3-none-any.whl[lark]"    # Lark channel support
+pip install "everstaff-0.1.10-py3-none-any.whl[otel]"    # OpenTelemetry tracing
+pip install "everstaff-0.1.10-py3-none-any.whl[all]"     # Everything
 ```
 
 ---
